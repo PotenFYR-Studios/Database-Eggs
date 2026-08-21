@@ -1,0 +1,84 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "MinIO S3 Object Storage",
+    "author": "potenfyr@potenfyr.com",
+    "description": "High-Performance S3 Compatible Object Storage server with Web Console and automated secret key generation.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "MinIO": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"MinIO Object Storage\",\"API:\",\"Console:\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/logs\nARCH=$(uname -m)\ncase \"${ARCH}\" in x86_64|amd64) ARCH_TYPE=\"amd64\" ;; aarch64|arm64) ARCH_TYPE=\"arm64\" ;; esac\ncurl -fsSL -o /mnt/server/minio \"https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio\"\nchmod +x /mnt/server/minio\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "minio",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Root User / Access Key",
+            "description": "MinIO Root User / Access Key.",
+            "env_variable": "MINIO_ROOT_USER",
+            "default_value": "minioadmin",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Password / Secret Key",
+            "description": "MinIO Root Password / Secret Key (auto = ultra-strong random).",
+            "env_variable": "MINIO_ROOT_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|min:8|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Console Port",
+            "description": "Web Console UI port (recommended: allocate second port).",
+            "env_variable": "CONSOLE_PORT",
+            "default_value": "9001",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1024,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic secret key.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

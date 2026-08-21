@@ -1,0 +1,75 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Meilisearch Engine",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Lightning-fast, typo-tolerant full-text search engine with RESTful API and automated strong Master Key generation.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Meilisearch": "ghcr.io/potenfyr-studios/database-eggs:search",
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Meilisearch is listening\",\"Server listening on\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/logs\ncurl -fsSL https://get.meilisearch.com | sh\nchmod +x /mnt/server/meilisearch 2>/dev/null || true\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "meilisearch",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Master Key",
+            "description": "Master Key for full administrative API access (auto = ultra-strong 32+ char random).",
+            "env_variable": "MASTER_KEY",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|min:16|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Environment",
+            "description": "Environment mode (production or development).",
+            "env_variable": "MEILI_ENV",
+            "default_value": "production",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:production,development",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic master key.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

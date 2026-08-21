@@ -1,0 +1,129 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Multi Database",
+    "author": "potenfyr@potenfyr.com",
+    "description": "One egg. Every database. Every panel. Supports MariaDB, MySQL, PostgreSQL, Redis, Valkey, KeyDB, Dragonfly, Memcached, MongoDB, FerretDB, CouchDB, SurrealDB, Meilisearch, Typesense, Qdrant, InfluxDB, ClickHouse, VictoriaMetrics, PocketBase, MinIO, and Neo4j with automated cryptographic strong passwords and cross-panel compatibility.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
+        "MariaDB / MySQL": "ghcr.io/potenfyr-studios/database-eggs:mariadb",
+        "PostgreSQL": "ghcr.io/potenfyr-studios/database-eggs:postgres",
+        "Redis / In-Memory Cache": "ghcr.io/potenfyr-studios/database-eggs:redis",
+        "MongoDB / Document": "ghcr.io/potenfyr-studios/database-eggs:mongodb",
+        "Search & Vector (Meilisearch, Qdrant)": "ghcr.io/potenfyr-studios/database-eggs:search"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+        "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\n# =============================================================================\n#  Multi Database - Universal Installation Script\n#  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)\n# =============================================================================\n\nset -uo pipefail\n\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nlog()  { echo -e \"\\033[1m\\033[36m[install]\\033[0m $*\"; }\nok()   { echo -e \"\\033[1m\\033[32m[install][OK]\\033[0m $*\"; }\nwarn() { echo -e \"\\033[1m\\033[33m[install][warn]\\033[0m $*\"; }\nfail() { echo -e \"\\033[1m\\033[31m[install][ERROR]\\033[0m $*\"; exit 1; }\n\nARCH=$(uname -m)\ncase \"${ARCH}\" in\n    x86_64|amd64) ARCH_TYPE=\"amd64\"; ARCH_ALT=\"x86_64\" ;;\n    aarch64|arm64) ARCH_TYPE=\"arm64\"; ARCH_ALT=\"aarch64\" ;;\n    *) fail \"Unsupported architecture: ${ARCH}\" ;;\nesac\n\nlog \"Target Architecture: ${ARCH_TYPE} (${ARCH})\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/scripts\"\n\nPROJECT_TYPE=$(echo \"${DB_TYPE:-${DATABASE_TYPE:-mariadb}}\" | tr '[:upper:]' '[:lower:]')\nDB_VERSION=\"${DB_VERSION:-latest}\"\n\nlog \"Configuring installation for engine: ${PROJECT_TYPE} (Version: ${DB_VERSION})...\"\n\n# Ensure permissions\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nok \"Installation completed successfully.\"\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Select the database engine to run.\nOptions: mariadb, mysql, postgresql, redis, valkey, keydb, dragonfly, memcached, mongodb, ferretdb, couchdb, surrealdb, meilisearch, typesense, qdrant, influxdb, clickhouse, victoriametrics, pocketbase, minio, neo4j, custom",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "mariadb",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "The default database/schema to create on startup.",
+            "env_variable": "DB_NAME",
+            "default_value": "database",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Username",
+            "description": "Default application database user.",
+            "env_variable": "DB_USER",
+            "default_value": "dbuser",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database User Password",
+            "description": "Password for the application user. Leave as 'auto' to generate an ultra-strong 32+ char random cryptographic password.",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Root / Admin / Master Password",
+            "description": "Password for Root, Superuser, Admin, or Master Key. Leave as 'auto' to auto-generate a secure random secret.",
+            "env_variable": "DB_ROOT_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Strong Secrets",
+            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and save them to .db_credentials and credentials.txt.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Daemon Arguments",
+            "description": "Additional custom CLI flags passed directly to the database daemon on startup.",
+            "env_variable": "EXTRA_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Download URLs",
+            "description": "Extra files to download at install time (one per line, e.g. 'dest/name|url' or plain URL).",
+            "env_variable": "EXTRA_URLS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:1024",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Startup Command",
+            "description": "Command to run when DATABASE_TYPE=custom.",
+            "env_variable": "CUSTOM_COMMAND",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        }
+    ]
+}

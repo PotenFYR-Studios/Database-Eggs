@@ -1,0 +1,84 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "SurrealDB Multi-Model Database",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Multi-model database (document, graph, relational, real-time) with SurrealQL, WebSocket support, and automated strong authentication.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "SurrealDB": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"SurrealDB started\",\"Started web server on\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/logs\ncurl -fsSL https://install.surrealdb.com | sh\n[ -f /root/.surrealdb/surreal ] && cp /root/.surrealdb/surreal /mnt/server/surreal\nchmod +x /mnt/server/surreal 2>/dev/null || true\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "surrealdb",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Username",
+            "description": "SurrealDB root superuser username.",
+            "env_variable": "DB_USER",
+            "default_value": "root",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Password",
+            "description": "SurrealDB root superuser password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Storage Engine",
+            "description": "Backend storage engine (e.g. file://data/surreal.db, memory, rocksdb://data/rocks.db).",
+            "env_variable": "SURREAL_STORAGE",
+            "default_value": "file://data/surreal.db",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic credentials.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

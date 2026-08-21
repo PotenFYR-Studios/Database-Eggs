@@ -1,0 +1,115 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "MariaDB / MySQL Server",
+    "author": "potenfyr@potenfyr.com",
+    "description": "High-performance MariaDB/MySQL relational database server with automated strong passwords, custom my.cnf support, and instant panel deployment.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "MariaDB / MySQL": "ghcr.io/potenfyr-studios/database-eggs:mariadb",
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}}}",
+        "startup": "{\"done\":[\"ready for connections\",\"mysqld: ready for connections\",\"mariadbd: ready for connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/config /mnt/server/logs\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type (mariadb or mysql).",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "mariadb",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:mariadb,mysql",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "Default database schema to create.",
+            "env_variable": "DB_NAME",
+            "default_value": "database",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database User",
+            "description": "Application user to create.",
+            "env_variable": "DB_USER",
+            "default_value": "dbuser",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Password",
+            "description": "Application user password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Password",
+            "description": "MySQL/MariaDB root superuser password (auto = ultra-strong random).",
+            "env_variable": "DB_ROOT_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic passwords on first launch.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Connections",
+            "description": "Maximum concurrent client connections.",
+            "env_variable": "MAX_CONNECTIONS",
+            "default_value": "150",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|min:10|max:10000",
+            "field_type": "text"
+        },
+        {
+            "name": "InnoDB Buffer Pool Size",
+            "description": "Memory allocated for InnoDB cache pool (e.g. 128M, 512M, 1G).",
+            "env_variable": "INNODB_BUFFER_POOL",
+            "default_value": "128M",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:16",
+            "field_type": "text"
+        }
+    ]
+}

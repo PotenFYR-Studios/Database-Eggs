@@ -1,0 +1,20 @@
+# Data and local storage
+data/
+logs/
+socket/
+*.sock
+*.pid
+*.log
+.db_credentials
+credentials.txt
+.env
+.multi-db.conf
+*.old
+*.tar.gz
+*.zip
+
+# OS & Editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

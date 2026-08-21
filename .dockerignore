@@ -1,0 +1,14 @@
+.git
+.github
+.gitignore
+.gitattributes
+README.md
+LICENSE
+eggs/
+data/
+logs/
+socket/
+*.log
+.db_credentials
+credentials.txt
+.env
