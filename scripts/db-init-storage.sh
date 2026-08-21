@@ -8,6 +8,7 @@ set -euo pipefail
 init_storage_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     mkdir -p "${data_dir}" "${SERVER_DIR}/logs"
+    chmod 700 "${data_dir}" 2>/dev/null || true
 }
 
 start_storage_family() {
@@ -15,9 +16,11 @@ start_storage_family() {
 
     case "${PROJECT_TYPE}" in
         pocketbase)
+            local pb_bin="pocketbase"
+            [ -x "${SERVER_DIR}/bin/pocketbase" ] && pb_bin="${SERVER_DIR}/bin/pocketbase"
+            [ -x "${SERVER_DIR}/pocketbase" ] && pb_bin="${SERVER_DIR}/pocketbase"
+
             log "Starting PocketBase on 0.0.0.0:${SERVER_PORT}..."
-            local pb_bin="./pocketbase"
-            command -v pocketbase >/dev/null 2>&1 && pb_bin="pocketbase"
             exec "${pb_bin}" serve --http="0.0.0.0:${SERVER_PORT}" --dir="${data_dir}/pb_data" ${EXTRA_ARGS:-}
             ;;
         minio)
@@ -27,8 +30,12 @@ start_storage_family() {
             export MINIO_ROOT_PASSWORD="${root_pass}"
             local console_port="${CONSOLE_PORT:-$((SERVER_PORT + 1))}"
 
+            local minio_bin="minio"
+            [ -x "${SERVER_DIR}/bin/minio" ] && minio_bin="${SERVER_DIR}/bin/minio"
+            [ -x "${SERVER_DIR}/minio" ] && minio_bin="${SERVER_DIR}/minio"
+
             log "Starting MinIO S3 Object Storage on 0.0.0.0:${SERVER_PORT} (Console: :${console_port})..."
-            exec minio server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" --console-address "0.0.0.0:${console_port}" ${EXTRA_ARGS:-}
+            exec "${minio_bin}" server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" --console-address "0.0.0.0:${console_port}" ${EXTRA_ARGS:-}
             ;;
         influxdb)
             log "Starting InfluxDB on 0.0.0.0:${SERVER_PORT}..."
@@ -42,8 +49,12 @@ start_storage_family() {
             exec clickhouse-server --config-file="${SERVER_DIR}/config/clickhouse.xml" ${EXTRA_ARGS:-}
             ;;
         victoriametrics)
+            local vm_bin="victoriametrics"
+            [ -x "${SERVER_DIR}/bin/victoriametrics" ] && vm_bin="${SERVER_DIR}/bin/victoriametrics"
+            [ -x "${SERVER_DIR}/bin/victoria-metrics-prod" ] && vm_bin="${SERVER_DIR}/bin/victoria-metrics-prod"
+
             log "Starting VictoriaMetrics on 0.0.0.0:${SERVER_PORT}..."
-            exec victoriametrics -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-}
+            exec "${vm_bin}" -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-}
             ;;
         couchdb)
             log "Starting Apache CouchDB on 0.0.0.0:${SERVER_PORT}..."

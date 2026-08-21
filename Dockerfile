@@ -3,7 +3,8 @@
 #  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)
 #
 #  Ships MariaDB, PostgreSQL, Redis, Memcached, SQLite, Meilisearch,
-#  SurrealDB, PocketBase, MinIO, Qdrant and tooling in a single universal image.
+#  SurrealDB, PocketBase, MinIO, Qdrant, performance auto-tuners, and version
+#  downloaders in a single universal image.
 # =============================================================================
 
 FROM ubuntu:22.04
@@ -16,7 +17,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     USER=container \
     HOME=/home/container
 
-# Install base dependencies and core database servers
+# Install base dependencies, core database servers, client tools, and utilities
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
         curl \
@@ -47,39 +48,33 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/mysql \
     && rm -rf /var/lib/postgresql/*
 
-# Download and install single-binary database engines (PocketBase, SurrealDB, Meilisearch, MinIO, Qdrant)
+# Download pre-built standalone database binaries
 RUN case "${TARGETARCH}" in \
         "amd64") \
-            # SurrealDB \
             curl -fsSL https://install.surrealdb.com | sh \
             && mv /root/.surrealdb/surreal /usr/local/bin/surreal || true; \
-            # Meilisearch \
             curl -fsSL https://get.meilisearch.com | sh \
             && mv meilisearch /usr/local/bin/meilisearch || true; \
-            # MinIO \
             curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio \
             && chmod +x /usr/local/bin/minio || true; \
             ;; \
         "arm64") \
-            # SurrealDB \
             curl -fsSL https://install.surrealdb.com | sh \
             && mv /root/.surrealdb/surreal /usr/local/bin/surreal || true; \
-            # Meilisearch \
             curl -fsSL https://get.meilisearch.com | sh \
             && mv meilisearch /usr/local/bin/meilisearch || true; \
-            # MinIO \
             curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-arm64/minio \
             && chmod +x /usr/local/bin/minio || true; \
             ;; \
     esac
 
-# Create container user
+# Create container user (UID 988, GID 988)
 RUN groupadd -g 988 container \
     && useradd -m -u 988 -g container -s /bin/bash container \
     && mkdir -p /home/container /mnt/server \
     && chown -R container:container /home/container /mnt/server
 
-# Copy scripts
+# Copy entrypoint, launcher, installer, and scripts
 COPY entrypoint.sh /entrypoint.sh
 COPY run.sh /usr/local/bin/run.sh
 COPY install.sh /usr/local/bin/install.sh

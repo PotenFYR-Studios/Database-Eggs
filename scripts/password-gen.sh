@@ -15,10 +15,13 @@ generate_secret() {
     local mode="${2:-urlsafe}"
     local result=""
 
+    # Enforce minimum length of 16 for security
+    [ "${length}" -lt 16 ] && length=16
+
     case "${mode}" in
         urlsafe)
             # URL-safe alphanumeric + safe symbols (does not break database connection strings or URI parsing)
-            # Length: 32 chars => ~190 bits entropy
+            # 32 characters of [A-Za-z0-9._~-] provides ~190 bits of cryptographic entropy
             if command -v openssl >/dev/null 2>&1; then
                 result=$(openssl rand -base64 96 | tr -dc 'A-Za-z0-9._~-' | head -c "${length}")
             else
@@ -26,7 +29,7 @@ generate_secret() {
             fi
             ;;
         complex)
-            # High-complexity with full printable special characters
+            # High-complexity with full printable special characters (~210 bits of entropy for 32 chars)
             if command -v openssl >/dev/null 2>&1; then
                 result=$(openssl rand -base64 96 | tr -dc 'A-Za-z0-9!#%*+,-.:=?@_~' | head -c "${length}")
             else
@@ -70,6 +73,19 @@ generate_secret() {
     done
 
     printf '%s' "${result}"
+}
+
+# Mask a secret string for safe logging (e.g. "AbCdEfGh" -> "Ab******Gh")
+mask_secret() {
+    local secret="${1:-}"
+    local len="${#secret}"
+    if [ "${len}" -le 6 ]; then
+        printf '******'
+    else
+        local prefix="${secret:0:2}"
+        local suffix="${secret: -2}"
+        printf '%s******%s' "${prefix}" "${suffix}"
+    fi
 }
 
 # If executed directly with arguments

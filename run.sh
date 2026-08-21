@@ -3,7 +3,7 @@
 #  Multi Database - Universal Server Launcher
 #  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)
 #
-#  Supported Database Engines:
+#  Supported Database Engines (All Versions):
 #    mariadb | mysql | postgresql | redis | valkey | keydb | dragonfly |
 #    memcached | mongodb | ferretdb | couchdb | surrealdb | meilisearch |
 #    typesense | qdrant | influxdb | clickhouse | victoriametrics |
@@ -39,20 +39,29 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-# Source all modular initialization handlers
-for script in "${SERVER_DIR}/scripts"/db-init-*.sh /usr/local/bin/db-init-*.sh; do
+export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+
+# Source all modular initialization handlers & performance tuning
+for script in "${SERVER_DIR}/scripts"/db-init-*.sh "${SERVER_DIR}/scripts"/performance-*.sh /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh; do
     [ -f "${script}" ] && source "${script}"
 done
 
-# Ensure valid database type
 PROJECT_TYPE=$(echo "${DB_TYPE:-${DATABASE_TYPE:-mariadb}}" | tr '[:upper:]' '[:lower:]')
+DB_VERSION="${DB_VERSION:-latest}"
 
-# --- Connection Summary Helper ----------------------------------------------
+# Dynamic version installer check (if specific version requested and not locally cached)
+if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
+    log "Checking version binary for ${PROJECT_TYPE} (v${DB_VERSION})..."
+    "${SERVER_DIR}/scripts/install-db-version.sh" "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_DIR}/bin" >/dev/null 2>&1 || true
+fi
+
+# --- Connection & Performance Summary ---------------------------------------
 print_connection_guide() {
     printf "\n${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}\n"
-    printf " ${C_BOLD}${C_GREEN}✓  DATABASE READY - CONNECTION DETAILS${C_RESET}\n"
+    printf " ${C_BOLD}${C_GREEN}✓  DATABASE READY - SECURE CONNECTION DETAILS${C_RESET}\n"
     printf "${C_BOLD}${C_GREEN}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${C_RESET}\n"
-    printf " ${C_BOLD}%-16s:${C_RESET} %s\n" "Host" "${INTERNAL_IP} (or 127.0.0.1 locally)"
+    printf " ${C_BOLD}%-16s:${C_RESET} %s (v%s)\n" "Engine" "${PROJECT_TYPE^^}" "${DB_VERSION}"
+    printf " ${C_BOLD}%-16s:${C_RESET} %s\n" "Host (Internal)" "${INTERNAL_IP}"
     printf " ${C_BOLD}%-16s:${C_RESET} %s\n" "Port" "${SERVER_PORT}"
     printf " ${C_BOLD}%-16s:${C_RESET} %s\n" "Database" "${DB_NAME:-database}"
     printf " ${C_BOLD}%-16s:${C_RESET} %s\n" "Username" "${DB_USER:-dbuser}"
