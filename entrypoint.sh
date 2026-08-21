@@ -2,19 +2,9 @@
 # =============================================================================
 #  Multi Database - Universal Container Entrypoint
 #  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)
-#
-#  Responsibilities:
-#    1. Load persisted configuration (.multi-db.conf and .db_credentials).
-#    2. Cross-panel variable normalization (Pterodactyl, Pelican, Feather, Wisp, Jexactyl, etc.).
-#    3. Automatic cryptographic generation of ultra-strong passwords & secrets.
-#    4. Dynamic performance auto-tuning & security policy enforcement.
-#    5. Terminal banner & live connection info display with masked debug logging.
-#    6. Dispatch to universal launcher (run.sh).
 # =============================================================================
 
-set -uo pipefail
-
-# --- Colors -----------------------------------------------------------------
+# Colors
 C_RESET='\033[0m'
 C_BOLD='\033[1m'
 C_CYAN='\033[36m'
@@ -45,14 +35,19 @@ SERVER_DIR="$(pwd)"
 
 export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
 
-# Source performance and version helpers if present
-[ -f "${SERVER_DIR}/scripts/performance-tuning.sh" ] && source "${SERVER_DIR}/scripts/performance-tuning.sh"
-[ -f /usr/local/bin/performance-tuning.sh ] && source /usr/local/bin/performance-tuning.sh
-[ -f "${SERVER_DIR}/scripts/password-gen.sh" ] && source "${SERVER_DIR}/scripts/password-gen.sh"
-[ -f /usr/local/bin/password-gen.sh ] && source /usr/local/bin/password-gen.sh
+# Ensure run.sh is present locally in server dir
+if [ ! -f ./run.sh ] && [ -f /usr/local/bin/run.sh ]; then
+    cp -f /usr/local/bin/run.sh ./run.sh 2>/dev/null || ln -sf /usr/local/bin/run.sh ./run.sh 2>/dev/null || true
+fi
+
+# Source performance and helper scripts if present
+[ -f "${SERVER_DIR}/scripts/performance-tuning.sh" ] && source "${SERVER_DIR}/scripts/performance-tuning.sh" 2>/dev/null || true
+[ -f /usr/local/bin/performance-tuning.sh ] && source /usr/local/bin/performance-tuning.sh 2>/dev/null || true
+[ -f "${SERVER_DIR}/scripts/password-gen.sh" ] && source "${SERVER_DIR}/scripts/password-gen.sh" 2>/dev/null || true
+[ -f /usr/local/bin/password-gen.sh ] && source /usr/local/bin/password-gen.sh 2>/dev/null || true
 
 # Default Timezone
-TZ=${TZ:-UTC}
+TZ="${TZ:-UTC}"
 export TZ
 
 # Cross-panel variable normalization
@@ -63,7 +58,7 @@ export SERVER_MEMORY
 SERVER_IP="${SERVER_IP:-${IP:-${P_SERVER_IP:-0.0.0.0}}}"
 export SERVER_IP
 
-INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2);exit}' || echo "${SERVER_IP}")
+INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2);exit}' 2>/dev/null || echo "${SERVER_IP}")
 export INTERNAL_IP
 
 # --- Persisted Settings & Credentials ----------------------------------------
@@ -96,7 +91,6 @@ for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT
 done
 unset _key
 
-# Database type resolution
 DB_TYPE="${DATABASE_TYPE:-${DB_TYPE:-mariadb}}"
 PROJECT_TYPE=$(echo "${DB_TYPE}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"
@@ -112,11 +106,11 @@ gen_rand() {
     elif command -v openssl >/dev/null 2>&1; then
         openssl rand -base64 96 | tr -dc 'A-Za-z0-9._~-' | head -c "${len}"
     else
-        head -c 128 /dev/urandom | tr -dc 'A-Za-z0-9._~-' | head -c "${len}"
+        head -c 128 /dev/urandom 2>/dev/null | tr -dc 'A-Za-z0-9._~-' | head -c "${len}" || echo "SecuredSecret_$(date +%s)_PotenFYR"
     fi
 }
 
-# Auto-generate DB_ROOT_PASSWORD & DB_PASSWORD if empty or set to auto
+# Auto-generate credentials if empty or auto
 if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_ROOT_PASSWORD:-}" ] || [ "${DB_ROOT_PASSWORD}" = "auto" ] || [ "${DB_ROOT_PASSWORD}" = "generate" ]; then
         DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
@@ -128,7 +122,6 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         export DB_PASSWORD
     fi
 
-    # Persist credentials with strict file permissions (chmod 600)
     {
         printf '# Auto-Generated Database Credentials (DO NOT SHARE)\n'
         printf 'DB_ROOT_PASSWORD=%s\n' "${DB_ROOT_PASSWORD}"
@@ -138,10 +131,9 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         printf 'PROJECT_TYPE=%s\n' "${PROJECT_TYPE}"
         printf 'DB_VERSION=%s\n' "${DB_VERSION}"
         printf 'GENERATED_AT=%s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-    } > "${CRED_FILE}"
+    } > "${CRED_FILE}" 2>/dev/null || true
     chmod 600 "${CRED_FILE}" 2>/dev/null || true
 
-    # Formatted credentials overview
     {
         printf '=====================================================\n'
         printf '       POTENFYR STUDIOS - DATABASE CREDENTIALS       \n'
@@ -156,10 +148,9 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         printf 'Root/Admin:    root / admin / postgres\n'
         printf 'Root Password: %s\n' "${DB_ROOT_PASSWORD}"
         printf '=====================================================\n'
-    } > "${SERVER_DIR}/credentials.txt"
+    } > "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
     chmod 600 "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
 
-    # .env format for application integration
     if [ ! -f "${SERVER_DIR}/.env" ]; then
         {
             printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
@@ -169,23 +160,9 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
             printf 'DB_USERNAME=%s\n' "${DB_USER:-dbuser}"
             printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
             printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
-        } > "${SERVER_DIR}/.env"
+        } > "${SERVER_DIR}/.env" 2>/dev/null || true
         chmod 600 "${SERVER_DIR}/.env" 2>/dev/null || true
     fi
-fi
-
-# Masked Debug Log Helper
-if [ "${DEBUG:-0}" = "1" ]; then
-    warn "DEBUG mode active. Resolved environment (secrets securely masked):"
-    env | grep -E '^(DATABASE_|DB_|SERVER_|MEM_|CPU_|TUNED_|TZ|INTERNAL_IP)' | while read -r line; do
-        k="${line%%=*}"
-        v="${line#*=}"
-        if [[ "${k}" =~ (PASS|SECRET|KEY|TOKEN) ]]; then
-            echo "${k}=******"
-        else
-            echo "${k}=${v}"
-        fi
-    done | sort
 fi
 
 # --- ASCII Banner -----------------------------------------------------------
@@ -222,7 +199,21 @@ elif [ -f "${SERVER_DIR}/run.sh" ]; then
 elif [ -f /usr/local/bin/run.sh ]; then
     exec /usr/local/bin/run.sh "$@"
 else
-    STARTUP="${STARTUP:-bash run.sh}"
-    STARTUP_EVAL=$(eval echo $(echo "${STARTUP}" | sed -e 's/{{/${/g' -e 's/}}/}/g'))
-    exec ${STARTUP_EVAL}
+    # Auto-generate local run.sh if completely missing
+    log "run.sh not found locally. Starting server dispatcher directly..."
+    if [ -f "${SERVER_DIR}/scripts/db-init-mariadb.sh" ] || [ -f /usr/local/bin/db-init-mariadb.sh ]; then
+        for script in "${SERVER_DIR}/scripts"/db-init-*.sh /usr/local/bin/db-init-*.sh; do
+            [ -f "${script}" ] && source "${script}" 2>/dev/null || true
+        done
+    fi
+    case "${PROJECT_TYPE}" in
+        mariadb|mysql) init_mariadb_mysql; start_mariadb_mysql ;;
+        postgresql|postgres) init_postgres; start_postgres ;;
+        redis|valkey|keydb|dragonfly|memcached) init_redis_family; start_redis_family ;;
+        mongodb|ferretdb) init_mongo_family; start_mongo_family ;;
+        surrealdb) init_surreal_family; start_surreal_family ;;
+        meilisearch|typesense|qdrant) init_search_family; start_search_family ;;
+        pocketbase|minio|influxdb|clickhouse|victoriametrics) init_storage_family; start_storage_family ;;
+        *) exec "$@" ;;
+    esac
 fi
