@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  PotenFYR Studios - MongoDB & FerretDB Engine Handler
+#  Includes WiredTiger Cache Optimization and Authentication Security
 # =============================================================================
 
 set -euo pipefail
@@ -11,19 +12,28 @@ init_mongo_family() {
     local mongod_conf="${conf_dir}/mongod.conf"
 
     mkdir -p "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
+    chmod 700 "${data_dir}" 2>/dev/null || true
 
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
         return 0
     fi
 
+    # Dynamic performance tuning for WiredTiger
+    if command -v tune_mongodb >/dev/null 2>&1; then
+        tune_mongodb
+    else
+        export TUNED_MONGO_CACHE_GB="0.5"
+    fi
+
     # Generate mongod.conf if missing
     if [ ! -f "${mongod_conf}" ]; then
-        log "Generating mongod.conf configuration..."
+        log "Generating performance-tuned mongod.conf configuration..."
         cat <<EOF > "${mongod_conf}"
 # PotenFYR Studios - MongoDB Configuration
 net:
   port: ${SERVER_PORT}
   bindIp: 0.0.0.0
+  maxIncomingConnections: 1000
 
 storage:
   dbPath: ${data_dir}
@@ -31,7 +41,12 @@ storage:
     enabled: true
   wiredTiger:
     engineConfig:
-      cacheSizeGB: ${MONGO_CACHE_GB:-0.5}
+      cacheSizeGB: ${TUNED_MONGO_CACHE_GB}
+      directoryForIndexes: true
+    collectionConfig:
+      blockCompressor: snappy
+    indexConfig:
+      prefixCompression: true
 
 systemLog:
   destination: file
@@ -40,8 +55,9 @@ systemLog:
 
 security:
   authorization: enabled
+  javascriptEnabled: true
 EOF
-        ok "Created ${mongod_conf}"
+        ok "Created performance-tuned ${mongod_conf}"
     else
         sed -i "s/port: .*/port: ${SERVER_PORT}/g" "${mongod_conf}" 2>/dev/null || true
     fi
@@ -52,7 +68,7 @@ EOF
         first_run=1
         log "First run detected. Initializing MongoDB authentication..."
 
-        # Start temporary mongod without auth
+        # Start temporary mongod without auth bound strictly to local loopback
         mongod --port "${SERVER_PORT}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --logpath "${SERVER_DIR}/logs/mongod_init.log" --fork
 
         local retries=30
@@ -61,7 +77,7 @@ EOF
             retries=$((retries - 1))
         done
 
-        log "Creating admin user..."
+        log "Creating admin superuser..."
         mongosh --port "${SERVER_PORT}" admin <<EOSCRIPT
 db.createUser({
   user: "root",
@@ -97,12 +113,11 @@ start_mongo_family() {
 
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
         log "Starting FerretDB on 0.0.0.0:${SERVER_PORT}..."
-        local backend_uri="${FERRETDB_POSTGRESQL_URL:-sqlite://${data_dir}/ferretdb.sqlite}"
         exec ferretdb --listen-addr="0.0.0.0:${SERVER_PORT}" \
                       --handler="${FERRETDB_HANDLER:-sqlite}" \
                       --sqlite-url="${data_dir}/" ${EXTRA_ARGS:-}
     else
-        log "Starting MongoDB on 0.0.0.0:${SERVER_PORT}..."
+        log "Starting MongoDB on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
         exec mongod --config "${mongod_conf}" ${EXTRA_ARGS:-}
     fi
 }

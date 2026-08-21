@@ -20,7 +20,6 @@ ok()   { echo -e "\033[1m\033[32m[install][OK]\033[0m $*"; }
 warn() { echo -e "\033[1m\033[33m[install][warn]\033[0m $*"; }
 fail() { echo -e "\033[1m\033[31m[install][ERROR]\033[0m $*"; exit 1; }
 
-# Detect Architecture
 ARCH=$(uname -m)
 case "${ARCH}" in
     x86_64|amd64) ARCH_TYPE="amd64"; ARCH_ALT="x86_64" ;;
@@ -40,65 +39,19 @@ if ! command -v curl >/dev/null 2>&1 || ! command -v jq >/dev/null 2>&1 || ! com
     fi
 fi
 
-mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/scripts"
+mkdir -p "${SERVER_DIR}/bin" "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/scripts"
 
 PROJECT_TYPE=$(echo "${DB_TYPE:-${DATABASE_TYPE:-mariadb}}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"
 
 log "Configuring installation for engine: ${PROJECT_TYPE} (Version: ${DB_VERSION})..."
 
-# Download single-binary engines if needed
-case "${PROJECT_TYPE}" in
-    pocketbase)
-        if ! command -v pocketbase >/dev/null 2>&1 && [ ! -f "${SERVER_DIR}/pocketbase" ]; then
-            log "Fetching PocketBase binary..."
-            PB_TAG="${DB_VERSION}"
-            if [ "${PB_TAG}" = "latest" ]; then
-                PB_TAG=$(curl -fsSL https://api.github.com/repos/pocketbase/pocketbase/releases/latest | jq -r '.tag_name' | sed 's/^v//')
-            fi
-            PB_URL="https://github.com/pocketbase/pocketbase/releases/download/v${PB_TAG}/pocketbase_${PB_TAG}_linux_${ARCH_TYPE}.zip"
-            curl -fsSL -o pb.zip "${PB_URL}"
-            unzip -q pb.zip -d "${SERVER_DIR}/"
-            rm -f pb.zip
-            chmod +x "${SERVER_DIR}/pocketbase"
-            ok "PocketBase v${PB_TAG} installed."
-        fi
-        ;;
-    surrealdb)
-        if ! command -v surreal >/dev/null 2>&1 && [ ! -f "${SERVER_DIR}/surreal" ]; then
-            log "Fetching SurrealDB binary..."
-            curl -fsSL https://install.surrealdb.com | sh
-            [ -f /root/.surrealdb/surreal ] && cp /root/.surrealdb/surreal "${SERVER_DIR}/surreal"
-            chmod +x "${SERVER_DIR}/surreal" 2>/dev/null || true
-            ok "SurrealDB installed."
-        fi
-        ;;
-    meilisearch)
-        if ! command -v meilisearch >/dev/null 2>&1 && [ ! -f "${SERVER_DIR}/meilisearch" ]; then
-            log "Fetching Meilisearch binary..."
-            curl -fsSL https://get.meilisearch.com | sh
-            chmod +x "${SERVER_DIR}/meilisearch"
-            ok "Meilisearch installed."
-        fi
-        ;;
-    minio)
-        if ! command -v minio >/dev/null 2>&1 && [ ! -f "${SERVER_DIR}/minio" ]; then
-            log "Fetching MinIO server binary..."
-            curl -fsSL -o "${SERVER_DIR}/minio" "https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio"
-            chmod +x "${SERVER_DIR}/minio"
-            ok "MinIO installed."
-        fi
-        ;;
-    qdrant)
-        if ! command -v qdrant >/dev/null 2>&1 && [ ! -f "${SERVER_DIR}/qdrant" ]; then
-            log "Fetching Qdrant vector database..."
-            QD_URL="https://github.com/qdrant/qdrant/releases/latest/download/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
-            curl -fsSL "${QD_URL}" | tar -xz -C "${SERVER_DIR}/"
-            chmod +x "${SERVER_DIR}/qdrant"
-            ok "Qdrant installed."
-        fi
-        ;;
-esac
+# Invoke universal version installer if present
+if [ -f /usr/local/bin/install-db-version.sh ]; then
+    /usr/local/bin/install-db-version.sh "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
+elif [ -f "${SERVER_DIR}/scripts/install-db-version.sh" ]; then
+    bash "${SERVER_DIR}/scripts/install-db-version.sh" "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
+fi
 
 # Handle EXTRA_URLS
 if [ -n "${EXTRA_URLS:-}" ]; then
@@ -120,7 +73,7 @@ fi
 
 # Ensure permissions
 chown -R 988:988 "${SERVER_DIR}" 2>/dev/null || true
-chmod -R 755 "${SERVER_DIR}/scripts" 2>/dev/null || true
+chmod -R 755 "${SERVER_DIR}/scripts" "${SERVER_DIR}/bin" 2>/dev/null || true
 [ -f "${SERVER_DIR}/run.sh" ] && chmod +x "${SERVER_DIR}/run.sh"
 [ -f "${SERVER_DIR}/entrypoint.sh" ] && chmod +x "${SERVER_DIR}/entrypoint.sh"
 

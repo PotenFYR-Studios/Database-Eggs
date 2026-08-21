@@ -7,8 +7,9 @@
 #    1. Load persisted configuration (.multi-db.conf and .db_credentials).
 #    2. Cross-panel variable normalization (Pterodactyl, Pelican, Feather, Wisp, Jexactyl, etc.).
 #    3. Automatic cryptographic generation of ultra-strong passwords & secrets.
-#    4. Terminal banner & live connection info display.
-#    5. Dispatch to universal launcher (run.sh).
+#    4. Dynamic performance auto-tuning & security policy enforcement.
+#    5. Terminal banner & live connection info display with masked debug logging.
+#    6. Dispatch to universal launcher (run.sh).
 # =============================================================================
 
 set -uo pipefail
@@ -42,7 +43,13 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-export PATH="${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+
+# Source performance and version helpers if present
+[ -f "${SERVER_DIR}/scripts/performance-tuning.sh" ] && source "${SERVER_DIR}/scripts/performance-tuning.sh"
+[ -f /usr/local/bin/performance-tuning.sh ] && source /usr/local/bin/performance-tuning.sh
+[ -f "${SERVER_DIR}/scripts/password-gen.sh" ] && source "${SERVER_DIR}/scripts/password-gen.sh"
+[ -f /usr/local/bin/password-gen.sh ] && source /usr/local/bin/password-gen.sh
 
 # Default Timezone
 TZ=${TZ:-UTC}
@@ -82,7 +89,8 @@ apply_persisted() {
 }
 
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
-            AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP; do
+            AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
+            PERFORMANCE_TUNING SECURITY_HARDENING; do
     apply_persisted "${_key}" "${CONF_FILE}"
     apply_persisted "${_key}" "${CRED_FILE}"
 done
@@ -91,18 +99,16 @@ unset _key
 # Database type resolution
 DB_TYPE="${DATABASE_TYPE:-${DB_TYPE:-mariadb}}"
 PROJECT_TYPE=$(echo "${DB_TYPE}" | tr '[:upper:]' '[:lower:]')
-export PROJECT_TYPE
+DB_VERSION="${DB_VERSION:-latest}"
+export PROJECT_TYPE DB_VERSION
 
 AUTO_GENERATE_CREDENTIALS="${AUTO_GENERATE_CREDENTIALS:-1}"
 
 # --- Strong Random Password & Secret Generation -------------------------------
-GEN_SCRIPT="${SERVER_DIR}/scripts/password-gen.sh"
-[ ! -f "${GEN_SCRIPT}" ] && GEN_SCRIPT="/usr/local/bin/password-gen.sh"
-
 gen_rand() {
     local len="${1:-32}" mode="${2:-urlsafe}"
-    if [ -x "${GEN_SCRIPT}" ]; then
-        "${GEN_SCRIPT}" "${len}" "${mode}"
+    if command -v generate_secret >/dev/null 2>&1; then
+        generate_secret "${len}" "${mode}"
     elif command -v openssl >/dev/null 2>&1; then
         openssl rand -base64 96 | tr -dc 'A-Za-z0-9._~-' | head -c "${len}"
     else
@@ -110,7 +116,7 @@ gen_rand() {
     fi
 }
 
-# Auto-generate DB_ROOT_PASSWORD if empty or set to auto
+# Auto-generate DB_ROOT_PASSWORD & DB_PASSWORD if empty or set to auto
 if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_ROOT_PASSWORD:-}" ] || [ "${DB_ROOT_PASSWORD}" = "auto" ] || [ "${DB_ROOT_PASSWORD}" = "generate" ]; then
         DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
@@ -122,7 +128,7 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         export DB_PASSWORD
     fi
 
-    # Persist generated credentials with restricted permissions (chmod 600)
+    # Persist credentials with strict file permissions (chmod 600)
     {
         printf '# Auto-Generated Database Credentials (DO NOT SHARE)\n'
         printf 'DB_ROOT_PASSWORD=%s\n' "${DB_ROOT_PASSWORD}"
@@ -130,28 +136,30 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         printf 'DB_USER=%s\n' "${DB_USER:-dbuser}"
         printf 'DB_NAME=%s\n' "${DB_NAME:-database}"
         printf 'PROJECT_TYPE=%s\n' "${PROJECT_TYPE}"
+        printf 'DB_VERSION=%s\n' "${DB_VERSION}"
         printf 'GENERATED_AT=%s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
     } > "${CRED_FILE}"
     chmod 600 "${CRED_FILE}" 2>/dev/null || true
 
-    # Also output to human-friendly credentials.txt and .env if they don't exist
+    # Formatted credentials overview
     {
         printf '=====================================================\n'
         printf '       POTENFYR STUDIOS - DATABASE CREDENTIALS       \n'
         printf '=====================================================\n'
-        printf 'Engine:        %s\n' "${PROJECT_TYPE}"
+        printf 'Engine:        %s (v%s)\n' "${PROJECT_TYPE}" "${DB_VERSION}"
         printf 'Host (Local):  127.0.0.1\n'
         printf 'Host (Docker): %s\n' "${INTERNAL_IP}"
         printf 'Port:          %s\n' "${SERVER_PORT}"
         printf 'Database Name: %s\n' "${DB_NAME:-database}"
         printf 'User:          %s\n' "${DB_USER:-dbuser}"
         printf 'User Password: %s\n' "${DB_PASSWORD}"
-        printf 'Root/Admin:    root\n'
+        printf 'Root/Admin:    root / admin / postgres\n'
         printf 'Root Password: %s\n' "${DB_ROOT_PASSWORD}"
         printf '=====================================================\n'
     } > "${SERVER_DIR}/credentials.txt"
     chmod 600 "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
 
+    # .env format for application integration
     if [ ! -f "${SERVER_DIR}/.env" ]; then
         {
             printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
@@ -164,6 +172,20 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         } > "${SERVER_DIR}/.env"
         chmod 600 "${SERVER_DIR}/.env" 2>/dev/null || true
     fi
+fi
+
+# Masked Debug Log Helper
+if [ "${DEBUG:-0}" = "1" ]; then
+    warn "DEBUG mode active. Resolved environment (secrets securely masked):"
+    env | grep -E '^(DATABASE_|DB_|SERVER_|MEM_|CPU_|TUNED_|TZ|INTERNAL_IP)' | while read -r line; do
+        k="${line%%=*}"
+        v="${line#*=}"
+        if [[ "${k}" =~ (PASS|SECRET|KEY|TOKEN) ]]; then
+            echo "${k}=******"
+        else
+            echo "${k}=${v}"
+        fi
+    done | sort
 fi
 
 # --- ASCII Banner -----------------------------------------------------------
@@ -180,16 +202,16 @@ printf "${C_RESET}"
 printf "${C_YELLOW}${C_BOLD}   :: PotenFYR Studios Universal Database Platform ::${C_RESET}\n\n"
 
 printf "${C_BOLD} ┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
-printf "${C_BOLD} │ %-18s: ${C_GREEN}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^}"
+printf "${C_BOLD} │ %-18s: ${C_GREEN}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
 printf "${C_BOLD} │ %-18s: ${C_CYAN}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Listen Address" "0.0.0.0:${SERVER_PORT}"
 printf "${C_BOLD} │ %-18s: ${C_MAGENTA}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
-printf "${C_BOLD} │ %-18s: ${C_BLUE}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database / Name" "${DB_NAME:-default}"
-printf "${C_BOLD} │ %-18s: ${C_YELLOW}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "App User" "${DB_USER:-dbuser}"
+printf "${C_BOLD} │ %-18s: ${C_BLUE}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
+printf "${C_BOLD} │ %-18s: ${C_YELLOW}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
 printf "${C_BOLD} └─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
 
 log "Executing startup launcher..."
 
-# Execute run.sh or custom command
+# Execute run.sh or custom launcher
 if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     log "Custom launcher detected (run.custom.sh). Executing..."
     chmod +x "${SERVER_DIR}/run.custom.sh"
@@ -200,7 +222,6 @@ elif [ -f "${SERVER_DIR}/run.sh" ]; then
 elif [ -f /usr/local/bin/run.sh ]; then
     exec /usr/local/bin/run.sh "$@"
 else
-    # Fallback to STARTUP evaluation (standard pterodactyl contract)
     STARTUP="${STARTUP:-bash run.sh}"
     STARTUP_EVAL=$(eval echo $(echo "${STARTUP}" | sed -e 's/{{/${/g' -e 's/}}/}/g'))
     exec ${STARTUP_EVAL}

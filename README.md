@@ -1,6 +1,6 @@
 # Database Eggs
 
-One egg. Every database. Every panel. Installs, configures, secures, and runs **20+ database engines** — SQL, In-Memory Caching, Document NoSQL, Multi-Model, Search, AI Vector stores, and S3-compatible Object Storage — with cryptographically strong automated secrets, cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Jexactyl, PufferPanel**, and standalone Docker.
+One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **20+ database engines** across all versions — SQL, In-Memory Caching, Document NoSQL, Multi-Model, Search, AI Vector stores, and S3-compatible Object Storage — with cryptographically strong automated secrets, dynamic performance auto-tuning, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Jexactyl, PufferPanel**, and native Docker.
 
 ```
   ____        _        _                    _____                  
@@ -21,56 +21,58 @@ One egg. Every database. Every panel. Installs, configures, secures, and runs **
 ## Table of Contents
 
 1. [Features](#features)
-2. [Supported Database Engines](#supported-database-engines)
+2. [Supported Engines & All-Version Matrix](#supported-engines--all-version-matrix)
 3. [Cryptographic Strong Password System](#cryptographic-strong-password-system)
-4. [Quickstart & Setup](#quickstart--setup)
-5. [Connecting to Your Database](#connecting-to-your-database)
-6. [Egg Variables Reference](#egg-variables-reference)
-7. [Repository Layout](#repository-layout)
-8. [Docker Images (GHCR)](#docker-images-ghcr)
-9. [Troubleshooting & FAQ](#troubleshooting--faq)
-10. [License](#license)
+4. [Dynamic Performance Auto-Tuning](#dynamic-performance-auto-tuning)
+5. [Production Security Hardening](#production-security-hardening)
+6. [Quickstart & Setup](#quickstart--setup)
+7. [Connecting to Your Database](#connecting-to-your-database)
+8. [Egg Variables Reference](#egg-variables-reference)
+9. [Repository Layout](#repository-layout)
+10. [Docker Images (GHCR)](#docker-images-ghcr)
+11. [Troubleshooting & FAQ](#troubleshooting--faq)
+12. [License](#license)
 
 ---
 
 ## Features
 
 - ⚡ **Universal Single Egg (`egg-database-multi.json`)**: Switch between MariaDB, PostgreSQL, Redis, MongoDB, SurrealDB, Meilisearch, PocketBase, and 15+ other databases simply by changing one variable.
-- 🔐 **Cryptographically Strong Automated Secrets**: Whenever passwords/secrets are left blank or set to `auto`, the system automatically generates high-entropy, 32+ character random credentials using `/dev/urandom` and `openssl`.
-- 📁 **Protected Credential Persistence**: Generated secrets and connection info are saved in `.db_credentials`, `credentials.txt`, and `.env` with strict `chmod 600` permissions and printed directly on the console with ready-to-copy connection strings.
+- 📦 **All-Version Support (`DB_VERSION`)**: Deploy any version tag (e.g. `10.11`, `16`, `7.2`, `v2.0.4`, `0.25.0`, `latest`) or direct custom binary download URLs.
+- 🔐 **Cryptographically Strong Automated Secrets**: Whenever passwords/secrets are left blank or set to `auto`, the system automatically generates high-entropy, 32+ character random credentials using `/dev/urandom` and OpenSSL (~190 bits of entropy).
+- 🚀 **Dynamic Performance Auto-Tuning**: Automatically calculates optimal buffer pool sizes, cache limits, worker threads, and connection limits based on allocated server memory (`SERVER_MEMORY`) and CPU cores.
+- 🛡️ **Production Security Hardening**: Enforces SCRAM-SHA-256 password hashing for PostgreSQL, removes anonymous/test accounts for MySQL/MariaDB, disables dangerous debug commands in Redis, and locks down permissions to `chmod 600` / `700`.
+- 📁 **Protected Credential Persistence**: Generated secrets and connection info are saved in `.db_credentials`, `credentials.txt`, and `.env` and printed directly on the console with ready-to-copy connection strings.
 - 🌐 **True Cross-Panel Universal Compatibility**: First-class support for **Pterodactyl (0.7, 1.x)**, **Pelican Panel**, **Feather Panel**, **Wisp**, **Jexactyl**, **PufferPanel**, and native Docker.
-- 🛠️ **Full Data & Config Persistence**: User editable configuration files (`my.cnf`, `postgresql.conf`, `redis.conf`, `mongod.conf`) stored in `./config` and persistent database storage in `./data`.
-- 🚀 **Built-in Web UIs & Consoles**: Instant access to web dashboards for MinIO (S3 Console), PocketBase (Admin UI), Qdrant (Dashboard), and SurrealDB.
-- 🛡️ **Graceful Shutdown & Signal Handling**: Proper `SIGTERM` / `SIGINT` handling ensures database engines flush caches and shut down cleanly without table corruption.
 
 ---
 
-## Supported Database Engines
+## Supported Engines & All-Version Matrix
 
-| Engine | Type / Family | `DATABASE_TYPE` | Default Port | Storage & Key Features |
+| Engine | `DATABASE_TYPE` | Version Options (`DB_VERSION`) | Default Port | Key Capabilities |
 | :--- | :--- | :--- | :--- | :--- |
-| **MariaDB** | SQL / Relational | `mariadb` | `3306` | InnoDB, UTF8MB4, auto-provisioned user/database, custom `my.cnf`. |
-| **MySQL** | SQL / Relational | `mysql` | `3306` | Oracle MySQL compatible relational engine with remote root grants. |
-| **PostgreSQL** | SQL / Relational | `postgresql` | `5432` | Enterprise SQL with SCRAM-SHA-256 auth, `uuid-ossp`, `pg_trgm`, `vector`. |
-| **Redis** | In-Memory / Cache | `redis` | `6379` | High-speed cache/broker with RDB + AOF persistence & `requirepass`. |
-| **Valkey** | In-Memory / Cache | `valkey` | `6379` | High-performance open source Linux Foundation Redis alternative. |
-| **KeyDB** | In-Memory / Cache | `keydb` | `6379` | Multi-threaded Redis superset with high throughput. |
-| **Dragonfly** | In-Memory / Cache | `dragonfly` | `6379` | Next-generation ultra-fast in-memory datastore. |
-| **Memcached** | In-Memory / Cache | `memcached` | `11211` | Pure in-memory key-value caching system. |
-| **MongoDB** | Document NoSQL | `mongodb` | `27017` | Document database with WiredTiger engine and auto-configured admin auth. |
-| **FerretDB** | Document NoSQL | `ferretdb` | `27017` | MongoDB-compatible engine backed by SQLite or PostgreSQL. |
-| **SurrealDB** | Multi-Model | `surrealdb` | `8000` | Document, Graph, Relational, and real-time WebSocket database with SurrealQL. |
-| **Meilisearch** | Search Engine | `meilisearch` | `7700` | Ultra-fast typo-tolerant full-text search engine with REST API. |
-| **Typesense** | Search Engine | `typesense` | `8108` | Typo-tolerant fast search engine with CORS support. |
-| **Qdrant** | Vector AI DB | `qdrant` | `6333` | Vector similarity search engine for AI embeddings & semantic search. |
-| **PocketBase** | Backend & SQLite | `pocketbase` | `8090` | Single-binary realtime backend with embedded SQLite & Admin UI. |
-| **MinIO** | S3 Object Store | `minio` | `9000` | S3-compatible high-performance object storage with Web Console (`9001`). |
-| **ClickHouse** | Columnar OLAP | `clickhouse` | `8123` | High-performance columnar database for real-time analytics & big data. |
-| **InfluxDB** | Time-Series (TSDB)| `influxdb` | `8086` | Time-series database for metrics, events, and IoT monitoring. |
-| **VictoriaMetrics** | Time-Series (TSDB)| `victoriametrics` | `8428` | High-efficiency Prometheus-compatible time-series database. |
-| **Neo4j** | Graph Database | `neo4j` | `7474` | Leading Graph database with Cypher query language and Browser UI. |
-| **Apache CouchDB** | Document NoSQL | `couchdb` | `5984` | JSON document database with HTTP/REST API and Fauxton dashboard. |
-| **Custom** | Any Command | `custom` | Any | Execute any custom database daemon via `CUSTOM_COMMAND`. |
+| **MariaDB** | `mariadb` | `latest`, `10.5`, `10.6`, `10.11`, `11.0`, `11.4` | `3306` | InnoDB auto-tuned pool, UTF8MB4, auto-provisioned user/database, custom `my.cnf`. |
+| **MySQL** | `mysql` | `latest`, `5.7`, `8.0`, `8.4`, `9.0` | `3306` | Oracle MySQL compatible relational engine with remote root grants and security hardening. |
+| **PostgreSQL** | `postgresql` | `latest`, `12`, `13`, `14`, `15`, `16`, `17` | `5432` | Enterprise SQL with SCRAM-SHA-256 auth, `uuid-ossp`, `pg_trgm`, `vector`. |
+| **Redis** | `redis` | `latest`, `6.0`, `6.2`, `7.0`, `7.2`, `7.4`, `8.0` | `6379` | High-speed cache/broker with RDB + AOF persistence, multi-threading, & `requirepass`. |
+| **Valkey** | `valkey` | `latest`, `7.2`, `8.0` | `6379` | High-performance open source Linux Foundation Redis alternative. |
+| **KeyDB** | `keydb` | `latest`, `6.3` | `6379` | Multi-threaded Redis superset with high throughput. |
+| **Dragonfly** | `dragonfly` | `latest`, `v1.x` | `6379` | Next-generation ultra-fast in-memory datastore. |
+| **Memcached** | `memcached` | `latest`, `1.6.x` | `11211` | Pure in-memory key-value caching system. |
+| **MongoDB** | `mongodb` | `latest`, `4.4`, `5.0`, `6.0`, `7.0`, `8.0` | `27017` | Document database with WiredTiger engine and auto-configured admin auth. |
+| **FerretDB** | `ferretdb` | `latest`, `v1.x`, `v2.x` | `27017` | MongoDB-compatible engine backed by SQLite or PostgreSQL. |
+| **SurrealDB** | `surrealdb` | `latest`, `v1.0.0` → `v2.x` | `8000` | Document, Graph, Relational, and real-time WebSocket database with SurrealQL. |
+| **Meilisearch** | `meilisearch` | `latest`, `v1.0.0` → `v1.12.x` | `7700` | Ultra-fast typo-tolerant full-text search engine with REST API. |
+| **Typesense** | `typesense` | `latest`, `0.25.0`, `26.0`, `27.0` | `8108` | Typo-tolerant fast search engine with CORS support. |
+| **Qdrant** | `qdrant` | `latest`, `v1.8.0` → `v1.12.x` | `6333` | Vector similarity search engine for AI embeddings & semantic search with Web UI. |
+| **PocketBase** | `pocketbase` | `latest`, `0.20.0` → `0.25.x` | `8090` | Single-binary realtime backend with embedded SQLite & Admin UI. |
+| **MinIO** | `minio` | `latest`, `RELEASE.YYYY-MM-DD...` | `9000` | S3-compatible high-performance object storage with Web Console (`9001`). |
+| **ClickHouse** | `clickhouse` | `latest`, `24.x` | `8123` | High-performance columnar database for real-time analytics & big data. |
+| **InfluxDB** | `influxdb` | `latest`, `1.8`, `2.7`, `3.0` | `8086` | Time-series database for metrics, events, and IoT monitoring. |
+| **VictoriaMetrics** | `victoriametrics` | `latest`, `v1.90` → `v1.108.x` | `8428` | High-efficiency Prometheus-compatible time-series database. |
+| **Neo4j** | `neo4j` | `latest`, `5.x` | `7474` | Leading Graph database with Cypher query language and Browser UI. |
+| **Apache CouchDB** | `couchdb` | `latest`, `3.3.x` | `5984` | JSON document database with HTTP/REST API and Fauxton dashboard. |
+| **Custom** | `custom` | Custom direct download URL | Any | Execute any custom database daemon via `CUSTOM_COMMAND`. |
 
 ---
 
@@ -86,21 +88,44 @@ Database security requires non-guessable, high-entropy secrets. By default (`AUT
    - `.env`: Ready-to-use environment variables for your application.
    - File permissions are locked to `chmod 600` (read/write only by the server container).
 
-```text
-=====================================================
-       POTENFYR STUDIOS - DATABASE CREDENTIALS       
-=====================================================
-Engine:        mariadb
-Host (Local):  127.0.0.1
-Host (Docker): 172.18.0.4
-Port:          3306
-Database Name: production
-User:          dbuser
-User Password: jK8!mQ9$xL2#vP4^wR7*tY1@zN6~bC3_
-Root/Admin:    root
-Root Password: Wq9*xT4#mK2!vL7$zR1^tY6@bC8~jP3_
-=====================================================
-```
+---
+
+## Dynamic Performance Auto-Tuning
+
+When `PERFORMANCE_TUNING=1` (default), the egg dynamically configures database engines based on allocated RAM (`SERVER_MEMORY`) and CPU cores:
+
+- **MariaDB / MySQL**:
+  - `innodb_buffer_pool_size` set to **60% of container RAM** (e.g. 614MB on 1GB, 2.4GB on 4GB).
+  - `innodb_log_file_size` set to **25% of buffer pool**.
+  - `innodb_flush_log_at_trx_commit = 2` for maximum game server / web throughput with ACID compliance.
+  - `innodb_flush_method = O_DIRECT` to eliminate OS double-buffering.
+  - `max_connections` and `thread_cache_size` auto-scaled to prevent out-of-memory OOM crashes.
+- **PostgreSQL**:
+  - `shared_buffers` set to **25% of container RAM**.
+  - `effective_cache_size` set to **75% of container RAM**.
+  - `maintenance_work_mem` set to **10% of RAM** (capped at 512MB).
+  - `work_mem` calculated dynamically to allow complex queries without exhausting RAM.
+  - `random_page_cost = 1.1` optimized for NVMe/SSD storage.
+- **Redis / Valkey / KeyDB**:
+  - `maxmemory` set to **85% of container RAM** (reserving 15% for background saves and replication).
+  - `io-threads` and `io-threads-do-reads` enabled and scaled to CPU core count.
+  - `lazyfree-lazy-eviction` and non-blocking background memory reclamation enabled.
+- **MongoDB**:
+  - `wiredTiger.engineConfig.cacheSizeGB` calculated based on container RAM.
+  - Snappy block compression and index prefix compression enabled.
+
+---
+
+## Production Security Hardening
+
+When `SECURITY_HARDENING=1` (default), the egg applies production-grade isolation policies:
+
+1. **PostgreSQL**: Strict `SCRAM-SHA-256` password encryption enforced for all remote network connections.
+2. **MariaDB / MySQL**: Anonymous user accounts and test databases are purged on first startup; local infile and symbolic link exploits are disabled.
+3. **Redis**: Dangerous administrative commands (`DEBUG`) are removed from public access in production.
+4. **MongoDB**: Strict role-based authorization enabled (`security.authorization: enabled`).
+5. **Permissions**: Sockets and data directories are restricted to `chmod 700` and credential files to `chmod 600`.
+6. **Masked Logs**: Passwords and secret tokens are automatically masked in debug logs.
 
 ---
 
@@ -113,24 +138,22 @@ Root Password: Wq9*xT4#mK2!vL7$zR1^tY6@bC8~jP3_
    - **Pelican Panel**: Go to **Admin → Eggs → Import** and select `egg-database-multi.json`.
 
 ### 2. Create a Server
-- **Server Name**: `Production MariaDB` (or any desired name)
+- **Server Name**: `Production Database`
 - **Egg**: `Multi Database`
 - **Docker Image**: `ghcr.io/potenfyr-studios/database-eggs:latest`
-- **Port Allocation**: Assign a port (e.g., `3306` for MySQL/MariaDB, `5432` for Postgres, `6379` for Redis, `27017` for Mongo, `9000` for MinIO).
+- **Port Allocation**: Assign a port (e.g. `3306` for MariaDB/MySQL, `5432` for Postgres, `6379` for Redis, `27017` for Mongo, `9000` for MinIO).
 
 ### 3. Configure Variables
 - Set `DATABASE_TYPE` (e.g. `mariadb`, `postgresql`, `redis`, `mongodb`, `surrealdb`, `pocketbase`, `meilisearch`, `minio`).
-- Set `DB_NAME` and `DB_USER`.
-- Leave `DB_PASSWORD` and `DB_ROOT_PASSWORD` as `auto` to generate unbreakable random credentials.
+- Set `DB_VERSION` (e.g. `latest`, `16`, `10.11`, `7.2`, `v2.0.4`).
+- Leave passwords as `auto` to generate unbreakable random credentials.
 
 ### 4. Start the Server
-Click **Start**. The console will print the banner, provision the database, output connection details, and begin serving queries.
+Click **Start**. The console will display the banner, auto-tune performance parameters, output connection details, and start the engine.
 
 ---
 
 ## Connecting to Your Database
-
-### Command-Line (CLI)
 
 ```bash
 # MariaDB / MySQL
@@ -149,26 +172,6 @@ mongosh "mongodb://<DB_USER>:<DB_PASSWORD>@<SERVER_IP>:<PORT>/<DB_NAME>?authSour
 surreal sql --endpoint http://<SERVER_IP>:<PORT> --user <DB_USER> --pass '<DB_PASSWORD>'
 ```
 
-### Connection URIs for Applications (.env)
-
-```dotenv
-# MySQL / MariaDB
-DATABASE_URL=mysql://dbuser:PASSWORD@127.0.0.1:3306/database
-
-# PostgreSQL
-DATABASE_URL=postgresql://dbuser:PASSWORD@127.0.0.1:5432/database?sslmode=disable
-
-# Redis
-REDIS_URL=redis://:PASSWORD@127.0.0.1:6379/0
-
-# MongoDB
-MONGODB_URI=mongodb://dbuser:PASSWORD@127.0.0.1:27017/database?authSource=admin
-
-# Meilisearch
-MEILISEARCH_HOST=http://127.0.0.1:7700
-MEILISEARCH_KEY=MASTER_KEY
-```
-
 ---
 
 ## Egg Variables Reference
@@ -176,11 +179,14 @@ MEILISEARCH_KEY=MASTER_KEY
 | Variable | Default | Description |
 | :--- | :--- | :--- |
 | `DATABASE_TYPE` | `mariadb` | Database engine to execute (`mariadb`, `mysql`, `postgresql`, `redis`, `valkey`, `mongodb`, `surrealdb`, `meilisearch`, `pocketbase`, `minio`, `qdrant`, etc.). |
+| `DB_VERSION` | `latest` | Target version tag or release (e.g. `10.11`, `16`, `7.2`, `v2.0.4`, `0.25.0`, or direct URL). |
 | `DB_NAME` | `database` | Name of the primary database or schema created on first initialization. |
 | `DB_USER` | `dbuser` | Application user created with full database privileges. |
 | `DB_PASSWORD` | `auto` | Application user password. `auto` generates a high-entropy 32+ char secret. |
 | `DB_ROOT_PASSWORD`| `auto` | Root, Superuser, Admin, or Master Key. `auto` generates an ultra-strong secret. |
 | `AUTO_GENERATE_CREDENTIALS` | `1` | `1` = automatically generate and persist strong credentials on startup. |
+| `PERFORMANCE_TUNING` | `1` | `1` = dynamically calculate buffer pools, memory caches, and IO threads. |
+| `SECURITY_HARDENING` | `1` | `1` = enforce SCRAM-SHA-256, purge default accounts, and lock permissions. |
 | `EXTRA_ARGS` | `""` | Custom command-line arguments passed directly to the database daemon. |
 | `EXTRA_URLS` | `""` | Extra files to download during installation (format: `dest/file\|url`). |
 | `CUSTOM_COMMAND`| `""` | Custom shell command executed when `DATABASE_TYPE=custom`. |
@@ -192,7 +198,7 @@ MEILISEARCH_KEY=MASTER_KEY
 ```
 Database-Eggs/
 ├── egg-database-multi.json         # Universal multi-database egg (import into panel)
-├── eggs/                           # Individual dedicated standalone eggs
+├── eggs/                           # Dedicated standalone eggs
 │   ├── egg-mariadb.json
 │   ├── egg-postgresql.json
 │   ├── egg-redis.json
@@ -202,16 +208,18 @@ Database-Eggs/
 │   ├── egg-pocketbase.json
 │   ├── egg-minio.json
 │   └── egg-qdrant.json
-├── Dockerfile                      # Universal runtime container image
+├── Dockerfile                      # Multi-arch universal container image
 ├── entrypoint.sh                   # Container entrypoint & credential generator
 ├── run.sh                          # Universal database launcher & dispatcher
 ├── install.sh                      # Universal installation script
-├── scripts/                        # Modular engine initialization handlers
+├── scripts/                        # Modular engine & tuning handlers
 │   ├── password-gen.sh             # Cryptographic secret & password generator
-│   ├── db-init-mariadb.sh          # MariaDB & MySQL initialization handler
-│   ├── db-init-postgres.sh         # PostgreSQL cluster initialization handler
+│   ├── performance-tuning.sh       # Dynamic RAM & CPU performance auto-tuner
+│   ├── install-db-version.sh       # Multi-version downloader & installer
+│   ├── db-init-mariadb.sh          # MariaDB & MySQL handler
+│   ├── db-init-postgres.sh         # PostgreSQL handler
 │   ├── db-init-redis.sh            # Redis, Valkey, KeyDB, Dragonfly handler
-│   ├── db-init-mongo.sh            # MongoDB & FerretDB auth handler
+│   ├── db-init-mongo.sh            # MongoDB & FerretDB handler
 │   ├── db-init-surreal.sh          # SurrealDB handler
 │   ├── db-init-search.sh           # Meilisearch, Typesense, Qdrant handler
 │   └── db-init-storage.sh          # PocketBase, MinIO, InfluxDB handler
@@ -221,56 +229,6 @@ Database-Eggs/
 ├── LICENSE                         # MIT License
 └── README.md                       # Documentation
 ```
-
----
-
-## Docker Images (GHCR)
-
-Pre-built multi-architecture Docker images (`linux/amd64` and `linux/arm64`) are continuously built and published to GitHub Container Registry:
-
-- **Universal (All Engines)**: `ghcr.io/potenfyr-studios/database-eggs:latest`
-- **MariaDB / MySQL**: `ghcr.io/potenfyr-studios/database-eggs:mariadb`
-- **PostgreSQL**: `ghcr.io/potenfyr-studios/database-eggs:postgres`
-- **Redis / Valkey**: `ghcr.io/potenfyr-studios/database-eggs:redis`
-- **MongoDB**: `ghcr.io/potenfyr-studios/database-eggs:mongodb`
-- **Search & Vector**: `ghcr.io/potenfyr-studios/database-eggs:search`
-
----
-
-## Troubleshooting & FAQ
-
-<details>
-<summary><b>Where are my auto-generated credentials saved?</b></summary>
-
-Credentials are saved in the root of your server files in three places:
-1. `credentials.txt` (formatted overview)
-2. `.env` (ready for application use)
-3. `.db_credentials` (internal persistence store)
-
-You can view them directly from the panel **File Manager**.
-</details>
-
-<details>
-<summary><b>How do I change or reset my database password?</b></summary>
-
-You can set your own custom password in the panel **Startup** tab under `DB_PASSWORD` or `DB_ROOT_PASSWORD`, or edit `.db_credentials` and restart your server.
-</details>
-
-<details>
-<summary><b>How do I connect external applications (like a Discord bot or website)?</b></summary>
-
-Ensure your server node's firewall allows incoming connections on the assigned database port, or use the container's internal Docker IP (`INTERNAL_IP`) if the application is hosted on the same node.
-</details>
-
-<details>
-<summary><b>How do I backup my database?</b></summary>
-
-You can create panel backups (which archive the `./data` directory) or use standard CLI dump tools:
-- MariaDB/MySQL: `mysqldump -u root -p database > backup.sql`
-- PostgreSQL: `pg_dump -U postgres database > backup.sql`
-- MongoDB: `mongodump --out=./backup/`
-- Redis: `redis-cli bgsave` (creates `dump.rdb`)
-</details>
 
 ---
 

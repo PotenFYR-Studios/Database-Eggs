@@ -7,7 +7,7 @@
     "exported_at": "2026-08-22T04:00:00+00:00",
     "name": "Multi Database",
     "author": "potenfyr@potenfyr.com",
-    "description": "One egg. Every database. Every panel. Supports MariaDB, MySQL, PostgreSQL, Redis, Valkey, KeyDB, Dragonfly, Memcached, MongoDB, FerretDB, CouchDB, SurrealDB, Meilisearch, Typesense, Qdrant, InfluxDB, ClickHouse, VictoriaMetrics, PocketBase, MinIO, and Neo4j with automated cryptographic strong passwords and cross-panel compatibility.",
+    "description": "One egg. Every database. Every version. Every panel. Supports 20+ SQL, NoSQL, In-Memory, Vector, Time-Series, and Search databases with automated cryptographic strong passwords, dynamic performance auto-tuning, and instant cross-panel deployment.",
     "features": [
         "pid_limit"
     ],
@@ -29,7 +29,7 @@
     },
     "scripts": {
         "installation": {
-            "script": "#!/bin/bash\n# =============================================================================\n#  Multi Database - Universal Installation Script\n#  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)\n# =============================================================================\n\nset -uo pipefail\n\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nlog()  { echo -e \"\\033[1m\\033[36m[install]\\033[0m $*\"; }\nok()   { echo -e \"\\033[1m\\033[32m[install][OK]\\033[0m $*\"; }\nwarn() { echo -e \"\\033[1m\\033[33m[install][warn]\\033[0m $*\"; }\nfail() { echo -e \"\\033[1m\\033[31m[install][ERROR]\\033[0m $*\"; exit 1; }\n\nARCH=$(uname -m)\ncase \"${ARCH}\" in\n    x86_64|amd64) ARCH_TYPE=\"amd64\"; ARCH_ALT=\"x86_64\" ;;\n    aarch64|arm64) ARCH_TYPE=\"arm64\"; ARCH_ALT=\"aarch64\" ;;\n    *) fail \"Unsupported architecture: ${ARCH}\" ;;\nesac\n\nlog \"Target Architecture: ${ARCH_TYPE} (${ARCH})\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/scripts\"\n\nPROJECT_TYPE=$(echo \"${DB_TYPE:-${DATABASE_TYPE:-mariadb}}\" | tr '[:upper:]' '[:lower:]')\nDB_VERSION=\"${DB_VERSION:-latest}\"\n\nlog \"Configuring installation for engine: ${PROJECT_TYPE} (Version: ${DB_VERSION})...\"\n\n# Ensure permissions\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nok \"Installation completed successfully.\"\n",
+            "script": "#!/bin/bash\n# =============================================================================\n#  Multi Database - Universal Installation Script\n#  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)\n# =============================================================================\n\nset -uo pipefail\n\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nlog()  { echo -e \"\\033[1m\\033[36m[install]\\033[0m $*\"; }\nok()   { echo -e \"\\033[1m\\033[32m[install][OK]\\033[0m $*\"; }\nwarn() { echo -e \"\\033[1m\\033[33m[install][warn]\\033[0m $*\"; }\nfail() { echo -e \"\\033[1m\\033[31m[install][ERROR]\\033[0m $*\"; exit 1; }\n\nARCH=$(uname -m)\ncase \"${ARCH}\" in\n    x86_64|amd64) ARCH_TYPE=\"amd64\"; ARCH_ALT=\"x86_64\" ;;\n    aarch64|arm64) ARCH_TYPE=\"arm64\"; ARCH_ALT=\"aarch64\" ;;\n    *) fail \"Unsupported architecture: ${ARCH}\" ;;\nesac\n\nlog \"Target Architecture: ${ARCH_TYPE} (${ARCH})\"\n\nmkdir -p \"${SERVER_DIR}/bin\" \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/scripts\"\n\nPROJECT_TYPE=$(echo \"${DB_TYPE:-${DATABASE_TYPE:-mariadb}}\" | tr '[:upper:]' '[:lower:]')\nDB_VERSION=\"${DB_VERSION:-latest}\"\n\nlog \"Configuring installation for engine: ${PROJECT_TYPE} (Version: ${DB_VERSION})...\"\n\n# Invoke version installer\nif [ -f /usr/local/bin/install-db-version.sh ]; then\n    /usr/local/bin/install-db-version.sh \"${PROJECT_TYPE}\" \"${DB_VERSION}\" \"${SERVER_DIR}/bin\" || true\nfi\n\n# Ensure permissions\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/scripts\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\nok \"Installation completed successfully.\"\n",
             "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
             "entrypoint": "bash"
         }
@@ -43,6 +43,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Version",
+            "description": "Version to install or run (e.g. latest, 10.11, 16, 7.2, 2.0.4, or a direct binary download URL).",
+            "env_variable": "DB_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
             "field_type": "text"
         },
         {
@@ -89,6 +99,26 @@
             "name": "Auto Generate Strong Secrets",
             "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and save them to .db_credentials and credentials.txt.",
             "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Dynamic Performance Auto-Tuning",
+            "description": "1 = Automatically calculate buffer pools, cache sizes, memory limits, and I/O threads based on allocated container RAM and CPU cores.",
+            "env_variable": "PERFORMANCE_TUNING",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Production Security Hardening",
+            "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
+            "env_variable": "SECURITY_HARDENING",
             "default_value": "1",
             "user_viewable": true,
             "user_editable": true,

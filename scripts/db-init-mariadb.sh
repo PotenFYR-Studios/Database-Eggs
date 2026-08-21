@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  PotenFYR Studios - MariaDB & MySQL Engine Handler
+#  Includes Automatic Performance Tuning and Production Security Hardening
 # =============================================================================
 
 set -euo pipefail
@@ -13,10 +14,23 @@ init_mariadb_mysql() {
     local pid_path="${SERVER_DIR}/mysql.pid"
 
     mkdir -p "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
+    chmod 700 "${data_dir}" 2>/dev/null || true
+
+    # Run dynamic performance auto-tuning if available
+    if command -v tune_mariadb_mysql >/dev/null 2>&1; then
+        tune_mariadb_mysql
+    else
+        export TUNED_INNODB_BUFFER_POOL="${INNODB_BUFFER_POOL:-128M}"
+        export TUNED_INNODB_LOG_FILE_SIZE="${INNODB_LOG_SIZE:-64M}"
+        export TUNED_INNODB_POOL_INSTANCES="1"
+        export TUNED_MYSQL_MAX_CONN="${MAX_CONNECTIONS:-150}"
+        export TUNED_MYSQL_READ_IO_THREADS="4"
+        export TUNED_MYSQL_WRITE_IO_THREADS="4"
+    fi
 
     # Generate custom my.cnf if not present
     if [ ! -f "${my_cnf}" ]; then
-        log "Generating optimized my.cnf configuration..."
+        log "Generating performance-tuned & hardened my.cnf configuration..."
         cat <<EOF > "${my_cnf}"
 [mysqld]
 user=container
@@ -26,15 +40,36 @@ datadir=${data_dir}
 socket=${socket_path}
 pid-file=${pid_path}
 log-error=${SERVER_DIR}/logs/mysql_error.log
+
+# Charset & Collation
 character-set-server=utf8mb4
 collation-server=utf8mb4_unicode_ci
-max_connections=${MAX_CONNECTIONS:-150}
-innodb_buffer_pool_size=${INNODB_BUFFER_POOL:-128M}
-innodb_log_file_size=${INNODB_LOG_SIZE:-64M}
+
+# Performance Auto-Tuning (Calculated from SERVER_MEMORY=${SERVER_MEMORY:-1024}M)
+innodb_buffer_pool_size=${TUNED_INNODB_BUFFER_POOL}
+innodb_buffer_pool_instances=${TUNED_INNODB_POOL_INSTANCES}
+innodb_log_file_size=${TUNED_INNODB_LOG_FILE_SIZE}
+innodb_log_buffer_size=16M
 innodb_flush_log_at_trx_commit=2
+innodb_flush_method=O_DIRECT
 innodb_file_per_table=1
+innodb_read_io_threads=${TUNED_MYSQL_READ_IO_THREADS}
+innodb_write_io_threads=${TUNED_MYSQL_WRITE_IO_THREADS}
+
+# Connections & Caches
+max_connections=${TUNED_MYSQL_MAX_CONN}
+max_connect_errors=10000
+thread_cache_size=32
+table_open_cache=2000
+table_definition_cache=1000
+tmp_table_size=64M
+max_heap_table_size=64M
+
+# Security Hardening
 skip-name-resolve
 skip-host-cache
+symbolic-links=0
+local-infile=0
 
 [client]
 port=${SERVER_PORT}
@@ -44,9 +79,9 @@ default-character-set=utf8mb4
 [mysql]
 default-character-set=utf8mb4
 EOF
-        ok "Created ${my_cnf}"
+        ok "Created performance-tuned ${my_cnf}"
     else
-        # Ensure port and paths in existing config match current allocation
+        # Ensure port matches current allocation
         sed -i "s/^port=.*/port=${SERVER_PORT}/g" "${my_cnf}" 2>/dev/null || true
     fi
 
@@ -68,9 +103,9 @@ EOF
         ok "Storage initialized."
     fi
 
-    # If first run or credentials need applying
+    # If first run, apply security hardening and user creation
     if [ "${first_run}" -eq 1 ]; then
-        log "Starting temporary MySQL daemon to apply user credentials..."
+        log "Starting temporary MySQL daemon to apply user credentials and security policies..."
         local daemon_bin="mysqld"
         command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
 
@@ -88,16 +123,20 @@ EOF
             fail "Temporary MySQL daemon failed to start within 30 seconds."
         fi
 
-        log "Configuring users and permissions..."
+        log "Configuring users, grants, and removing insecure defaults..."
         local client_bin="mysql"
         command -v mariadb >/dev/null 2>&1 && client_bin="mariadb"
 
-        # Apply root password
+        # Apply root password & remove insecure defaults
         "${client_bin}" -u root --socket="${socket_path}" <<EOSQL
+DELETE FROM mysql.user WHERE User='';
+DROP DATABASE IF EXISTS test;
+DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+FLUSH PRIVILEGES;
 EOSQL
 
         # Create application database and user if specified
@@ -116,16 +155,14 @@ GRANT ALL PRIVILEGES ON \`${DB_NAME:-*}\`.* TO '${DB_USER}'@'%';
 GRANT ALL PRIVILEGES ON \`${DB_NAME:-*}\`.* TO '${DB_USER}'@'localhost';
 FLUSH PRIVILEGES;
 EOSQL
-            ok "Created user '${DB_USER}' with full privileges on '${DB_NAME:-*}'"
+            ok "Created user '${DB_USER}' with privileges on '${DB_NAME:-*}'"
         fi
-
-        "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" -e "FLUSH PRIVILEGES;"
 
         log "Shutting down temporary MySQL daemon..."
         kill -s TERM "${tmp_pid}" 2>/dev/null || true
         wait "${tmp_pid}" 2>/dev/null || true
         rm -f "${socket_path}" "${pid_path}"
-        ok "Initial database configuration complete."
+        ok "Initial database configuration & security hardening complete."
     fi
 }
 
@@ -135,6 +172,6 @@ start_mariadb_mysql() {
     local daemon_bin="mysqld"
     command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
 
-    log "Starting ${PROJECT_TYPE^^} on 0.0.0.0:${SERVER_PORT}..."
+    log "Starting ${PROJECT_TYPE^^} on 0.0.0.0:${SERVER_PORT} (Buffer Pool: ${TUNED_INNODB_BUFFER_POOL:-auto})..."
     exec "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-}
 }
