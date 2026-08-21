@@ -1,0 +1,39 @@
+name: Validate Eggs & Scripts
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Egg JSON and Shell Scripts
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate JSON syntax
+        run: |
+          echo "Validating egg-database-multi.json..."
+          jq empty egg-database-multi.json
+          
+          if [ -d eggs ]; then
+            for egg in eggs/*.json; do
+              echo "Validating ${egg}..."
+              jq empty "${egg}"
+            done
+          fi
+          echo "All Egg JSON files are strictly valid."
+
+      - name: Lint Shell Scripts
+        run: |
+          for sh_file in *.sh scripts/*.sh; do
+            if [ -f "${sh_file}" ]; then
+              echo "Checking syntax of ${sh_file}..."
+              bash -n "${sh_file}"
+            fi
+          done
+          echo "All shell scripts passed syntax check."

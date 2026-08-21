@@ -1,0 +1,105 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "PostgreSQL Server",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Enterprise-grade PostgreSQL database with scram-sha-256 security, auto-provisioning, extension support (vector, uuid-ossp, pg_trgm), and strong password generation.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "PostgreSQL": "ghcr.io/potenfyr-studios/database-eggs:postgres",
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"database system is ready to accept connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/config /mnt/server/logs /mnt/server/socket\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "postgresql",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "Default database to create on first launch.",
+            "env_variable": "DB_NAME",
+            "default_value": "postgres",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "PostgreSQL Superuser",
+            "description": "Postgres superuser name.",
+            "env_variable": "POSTGRES_USER",
+            "default_value": "postgres",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Superuser / Root Password",
+            "description": "PostgreSQL superuser password (auto = ultra-strong random).",
+            "env_variable": "DB_ROOT_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Application Database User",
+            "description": "Application user to create with database privileges.",
+            "env_variable": "DB_USER",
+            "default_value": "dbuser",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Application User Password",
+            "description": "Application user password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic passwords on first launch.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

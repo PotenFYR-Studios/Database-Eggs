@@ -1,0 +1,85 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Redis / In-Memory Cache",
+    "author": "potenfyr@potenfyr.com",
+    "description": "High-performance Redis, Valkey, KeyDB, and Dragonfly in-memory datastore with RDB/AOF persistence, memory eviction policies, and strong password auth.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Redis": "ghcr.io/potenfyr-studios/database-eggs:redis",
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+        "startup": "{\"done\":[\"Ready to accept connections\",\"Server started\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/config /mnt/server/logs\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Engine Variant",
+            "description": "Variant to run: redis, valkey, keydb, dragonfly, or memcached.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "redis",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:redis,valkey,keydb,dragonfly,memcached",
+            "field_type": "text"
+        },
+        {
+            "name": "Password (requirepass)",
+            "description": "Authentication password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Enable AOF Persistence",
+            "description": "Enable Append-Only File persistence (yes or no).",
+            "env_variable": "ENABLE_AOF",
+            "default_value": "yes",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:yes,no",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Memory Policy",
+            "description": "Eviction policy when maxmemory is reached (e.g. allkeys-lru, volatile-lru, noeviction).",
+            "env_variable": "MAXMEMORY_POLICY",
+            "default_value": "allkeys-lru",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic password.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

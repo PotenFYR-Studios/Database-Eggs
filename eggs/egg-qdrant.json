@@ -1,0 +1,75 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Qdrant Vector Database",
+    "author": "potenfyr@potenfyr.com",
+    "description": "High-performance Vector Database & Search Engine for AI, LLM Embeddings, and Semantic Similarity with Web Dashboard.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Qdrant": "ghcr.io/potenfyr-studios/database-eggs:search",
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Qdrant HTTP listening on\",\"Access web UI at\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/logs\nARCH=$(uname -m)\ncase \"${ARCH}\" in x86_64|amd64) ARCH_ALT=\"x86_64\" ;; aarch64|arm64) ARCH_ALT=\"aarch64\" ;; esac\nQD_URL=\"https://github.com/qdrant/qdrant/releases/latest/download/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz\"\ncurl -fsSL \"${QD_URL}\" | tar -xz -C /mnt/server/\nchmod +x /mnt/server/qdrant\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "qdrant",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "API Key",
+            "description": "API Key for authentication (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "gRPC Port",
+            "description": "Port for high-performance gRPC API.",
+            "env_variable": "GRPC_PORT",
+            "default_value": "6334",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|integer|between:1024,65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic API key.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}

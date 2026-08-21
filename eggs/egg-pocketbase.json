@@ -1,0 +1,74 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "PocketBase Server",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Open Source backend in 1 file with embedded SQLite database, realtime subscriptions, built-in admin dashboard, and authentication.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "PocketBase": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "bash run.sh",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Server started at\",\"REST API:\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/data /mnt/server/logs\nARCH=$(uname -m)\ncase \"${ARCH}\" in x86_64|amd64) ARCH_TYPE=\"amd64\" ;; aarch64|arm64) ARCH_TYPE=\"arm64\" ;; esac\nPB_TAG=$(curl -fsSL https://api.github.com/repos/pocketbase/pocketbase/releases/latest | jq -r '.tag_name' | sed 's/^v//')\ncurl -fsSL -o pb.zip \"https://github.com/pocketbase/pocketbase/releases/download/v${PB_TAG}/pocketbase_${PB_TAG}_linux_${ARCH_TYPE}.zip\"\nunzip -q pb.zip -d /mnt/server/\nrm -f pb.zip\nchmod +x /mnt/server/pocketbase\nchown -R 988:988 /mnt/server 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "pocketbase",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin Email",
+            "description": "Initial superuser admin email.",
+            "env_variable": "DB_USER",
+            "default_value": "admin@example.com",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Admin Password",
+            "description": "Admin password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic admin password.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
+}
