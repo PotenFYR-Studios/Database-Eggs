@@ -1,86 +1,96 @@
-{
-    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
-    "meta": {
-        "version": "PTDL_v2",
-        "update_url": null
+﻿{
+  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-08-22T09:30:00+05:30",
+  "name": "Redis / In-Memory Cache",
+  "author": "potenfyr@potenfyr.com",
+  "description": "High-performance Redis, Valkey, KeyDB, and Dragonfly in-memory datastore with RDB/AOF persistence, memory eviction policies, and strong password auth.",
+  "features": [
+    "pid_limit"
+  ],
+  "docker_images": {
+    "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
+    "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
+    "Ubuntu 22.04 LTS": "ubuntu:22.04"
+  },
+  "file_denylist": [],
+  "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else curl -fsSL https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh | bash; fi",
+  "config": {
+    "files": "{\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+    "startup": "{\"done\":[\"Ready to accept connections\",\"Server started\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+    "stop": "^C",
+    "logs": "{}"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/sh\n# PotenFYR Studios - Redis Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
+      "container": "ghcr.io/pterodactyl/installers:alpine",
+      "entrypoint": "ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Engine Variant",
+      "description": "Variant to run: redis, valkey, keydb, dragonfly, or memcached.",
+      "env_variable": "DATABASE_TYPE",
+      "default_value": "redis",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:redis,valkey,keydb,dragonfly,memcached",
+      "field_type": "text"
     },
-    "exported_at": "2026-08-22T04:00:00+00:00",
-    "name": "Redis / In-Memory Cache",
-    "author": "potenfyr@potenfyr.com",
-    "description": "High-performance Redis, Valkey, KeyDB, and Dragonfly in-memory datastore with RDB/AOF persistence, memory eviction policies, and strong password auth.",
-    "features": [
-        "pid_limit"
-    ],
-    "docker_images": {
-        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-        "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
-        "Ubuntu 22.04 LTS": "ubuntu:22.04"
+    {
+      "name": "Password (requirepass)",
+      "description": "Authentication password (auto = ultra-strong random).",
+      "env_variable": "DB_PASSWORD",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:128",
+      "field_type": "text"
     },
-    "file_denylist": [],
-    "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else curl -fsSL https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh | bash; fi",
-    "config": {
-        "files": "{\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
-        "startup": "{\"done\":[\"Ready to accept connections\",\"Server started\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
-        "stop": "^C",
-        "logs": "{}"
+    {
+      "name": "Enable AOF Persistence",
+      "description": "Enable Append-Only File persistence (yes or no).",
+      "env_variable": "ENABLE_AOF",
+      "default_value": "yes",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:yes,no",
+      "field_type": "text"
     },
-    "scripts": {
-        "installation": {
-            "script": "#!/bin/sh\n# PotenFYR Studios - Redis Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
-            "container": "ghcr.io/pterodactyl/installers:alpine",
-            "entrypoint": "ash"
-        }
+    {
+      "name": "Max Memory Policy",
+      "description": "Eviction policy when maxmemory is reached (e.g. allkeys-lru, volatile-lru, noeviction).",
+      "env_variable": "MAXMEMORY_POLICY",
+      "default_value": "allkeys-lru",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:32",
+      "field_type": "text"
     },
-    "variables": [
-        {
-            "name": "Engine Variant",
-            "description": "Variant to run: redis, valkey, keydb, dragonfly, or memcached.",
-            "env_variable": "DATABASE_TYPE",
-            "default_value": "redis",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|in:redis,valkey,keydb,dragonfly,memcached",
-            "field_type": "text"
-        },
-        {
-            "name": "Password (requirepass)",
-            "description": "Authentication password (auto = ultra-strong random).",
-            "env_variable": "DB_PASSWORD",
-            "default_value": "auto",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:128",
-            "field_type": "text"
-        },
-        {
-            "name": "Enable AOF Persistence",
-            "description": "Enable Append-Only File persistence (yes or no).",
-            "env_variable": "ENABLE_AOF",
-            "default_value": "yes",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|in:yes,no",
-            "field_type": "text"
-        },
-        {
-            "name": "Max Memory Policy",
-            "description": "Eviction policy when maxmemory is reached (e.g. allkeys-lru, volatile-lru, noeviction).",
-            "env_variable": "MAXMEMORY_POLICY",
-            "default_value": "allkeys-lru",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:32",
-            "field_type": "text"
-        },
-        {
-            "name": "Auto Generate Credentials",
-            "description": "Auto-generate strong cryptographic password.",
-            "env_variable": "AUTO_GENERATE_CREDENTIALS",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        }
-    ]
+    {
+      "name": "Auto Generate Credentials",
+      "description": "Auto-generate strong cryptographic password.",
+      "env_variable": "AUTO_GENERATE_CREDENTIALS",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Save Credentials to .env",
+      "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+      "env_variable": "SAVE_TO_ENV",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    }
+  ]
 }

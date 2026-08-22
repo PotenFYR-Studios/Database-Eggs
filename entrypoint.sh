@@ -132,7 +132,7 @@ PROJECT_TYPE=$(echo "${DB_TYPE}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"
 export PROJECT_TYPE DB_VERSION
 
-AUTO_GENERATE_CREDENTIALS="${AUTO_GENERATE_CREDENTIALS:-1}"
+SAVE_TO_ENV="${SAVE_TO_ENV:-${SAVE_ENV:-1}}"
 
 # --- Strong Random Password & Secret Generation -------------------------------
 gen_rand() {
@@ -146,7 +146,7 @@ gen_rand() {
     fi
 }
 
-# Auto-generate credentials if empty or auto
+# Auto-generate credentials if empty, auto, or generate (otherwise use user-provided password)
 if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_ROOT_PASSWORD:-}" ] || [ "${DB_ROOT_PASSWORD}" = "auto" ] || [ "${DB_ROOT_PASSWORD}" = "generate" ]; then
         DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
@@ -160,34 +160,40 @@ DB_USER="${DB_USER:-dbuser}"
 DB_NAME="${DB_NAME:-database}"
 export DB_ROOT_PASSWORD DB_PASSWORD DB_USER DB_NAME
 
-# Export credentials into process environment for shell, startup command & CLI tools
+# Export latest active credentials into process environment for startup command, subshells & CLI tools
 export PGPASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export MYSQL_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export REDISCLI_AUTH="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export MONGO_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 
-# Save and synchronize sensitive credentials ONLY in .env (chmod 600)
-{
-    printf '# Database Configuration & Credentials (Synced by PotenFYR Runtime)\n'
-    printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
-    printf 'DB_HOST=127.0.0.1\n'
-    printf 'DB_PORT=%s\n' "${SERVER_PORT}"
-    printf 'DB_DATABASE=%s\n' "${DB_NAME}"
-    printf 'DB_USERNAME=%s\n' "${DB_USER}"
-    printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
-    printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
-    printf 'DB_VERSION=%s\n' "${DB_VERSION}"
-} > "${ENV_FILE}" 2>/dev/null || true
-chmod 600 "${ENV_FILE}" 2>/dev/null || true
+# Save and synchronize sensitive credentials into .env if enabled (Optional: SAVE_TO_ENV=1)
+if [ "${SAVE_TO_ENV}" = "1" ] || [ "${SAVE_TO_ENV}" = "true" ] || [ "${SAVE_TO_ENV}" = "yes" ]; then
+    {
+        printf '# Database Configuration & Credentials (Synced by PotenFYR Runtime)\n'
+        printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
+        printf 'DB_HOST=127.0.0.1\n'
+        printf 'DB_PORT=%s\n' "${SERVER_PORT}"
+        printf 'DB_DATABASE=%s\n' "${DB_NAME}"
+        printf 'DB_USERNAME=%s\n' "${DB_USER}"
+        printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
+        printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
+        printf 'DB_VERSION=%s\n' "${DB_VERSION}"
+    } > "${ENV_FILE}" 2>/dev/null || true
+    chmod 600 "${ENV_FILE}" 2>/dev/null || true
+fi
 
 # Generate user environment shortcuts for terminal CLI usage (.profile and .bashrc)
 {
     printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
-    printf '[ -f "%s/.env" ] && set -a && source "%s/.env" && set +a\n' "${SERVER_DIR}" "${SERVER_DIR}"
+    printf '[ -f "%s/.env" ] && set -a && source "%s/.env" 2>/dev/null && set +a\n' "${SERVER_DIR}" "${SERVER_DIR}"
+    printf 'export DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
+    printf 'export DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
     printf 'export PGPASSWORD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
     printf 'export MYSQL_PWD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
     printf 'export REDISCLI_AUTH="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+    printf 'export MONGO_PWD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+    printf 'export SURREAL_PASS="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 
     case "${PROJECT_TYPE}" in
         mariadb|mysql)

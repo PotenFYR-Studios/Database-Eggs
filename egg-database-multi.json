@@ -94,8 +94,18 @@
         },
         {
             "name": "Auto Generate Strong Secrets",
-            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and save them strictly to .env and startup environment variables.",
+            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and update startup environment variables.",
             "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Save Credentials to .env",
+            "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+            "env_variable": "SAVE_TO_ENV",
             "default_value": "1",
             "user_viewable": true,
             "user_editable": true,
