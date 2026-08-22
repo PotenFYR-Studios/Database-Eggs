@@ -76,7 +76,7 @@ EOF
         done
 
         log "Creating admin superuser..."
-        mongosh --port "${SERVER_PORT}" admin <<EOSCRIPT
+        mongosh --port "${SERVER_PORT}" admin >/dev/null 2>&1 <<EOSCRIPT
 db.createUser({
   user: "root",
   pwd: "${DB_ROOT_PASSWORD}",
@@ -87,7 +87,7 @@ EOSCRIPT
 
         # Create application database and user
         if [ -n "${DB_NAME:-}" ] && [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
-            mongosh --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" "${DB_NAME}" <<EOSCRIPT
+            mongosh --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" "${DB_NAME}" >/dev/null 2>&1 <<EOSCRIPT
 db.createUser({
   user: "${DB_USER}",
   pwd: "${DB_PASSWORD}",

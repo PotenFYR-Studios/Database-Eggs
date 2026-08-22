@@ -98,7 +98,7 @@ ensure_engine_binary() {
 
 ensure_engine_binary "${PROJECT_TYPE}"
 
-# --- Connection Summary Helper ----------------------------------------------
+# --- Connection Summary Helper (Strictly Masked - No Cleartext Passwords in Logs)
 print_connection_guide() {
     printf "\n"
     printf "${C_GREEN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
@@ -109,52 +109,56 @@ print_connection_guide() {
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Port" "${SERVER_PORT:-3306}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Database" "${DB_NAME:-database}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "${DB_PASSWORD:-[none]}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "${DB_ROOT_PASSWORD:-[none]}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Environment" "Saved in .env & credentials.txt"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "•••••••••••• [Protected in .env]"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "•••••••••••• [Protected in .env]"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Credentials" "Saved in .env & credentials.txt"
     printf "${C_GREEN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
-    printf "\n ${C_BOLD}${C_YELLOW}Quick Connection Examples:${C_RESET}\n"
+    printf "\n ${C_BOLD}${C_YELLOW}Quick Connection Examples (Zero-Leak Security):${C_RESET}\n"
     case "${PROJECT_TYPE}" in
         mariadb|mysql)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}mysql -h %s -P %s -u %s -p'%s' %s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-3306}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${DB_NAME:-database}"
-            printf "   ${C_BOLD}URI :${C_RESET} ${C_CYAN}mysql://%s:%s@%s:%s/%s${C_RESET}\n" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-3306}" "${DB_NAME:-database}"
+            printf "   ${C_BOLD}CLI (Pre-Auth) :${C_RESET} ${C_CYAN}db-cli${C_RESET}\n"
+            printf "   ${C_BOLD}CLI (Manual)   :${C_RESET} ${C_CYAN}mysql -h %s -P %s -u %s -p %s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-3306}" "${DB_USER:-root}" "${DB_NAME:-database}"
+            printf "   ${C_BOLD}URI            :${C_RESET} ${C_CYAN}mysql://%s:<PASSWORD_IN_.ENV>@%s:%s/%s${C_RESET}\n" "${DB_USER:-root}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-3306}" "${DB_NAME:-database}"
             ;;
         postgresql|postgres)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}psql \"postgresql://%s:%s@%s:%s/%s\"${C_RESET}\n" "${DB_USER:-postgres}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-5432}" "${DB_NAME:-postgres}"
-            printf "   ${C_BOLD}URI :${C_RESET} ${C_CYAN}postgresql://%s:%s@%s:%s/%s?sslmode=disable${C_RESET}\n" "${DB_USER:-postgres}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-5432}" "${DB_NAME:-postgres}"
+            printf "   ${C_BOLD}CLI (Pre-Auth) :${C_RESET} ${C_CYAN}db-cli${C_RESET}\n"
+            printf "   ${C_BOLD}CLI (Manual)   :${C_RESET} ${C_CYAN}psql -h %s -p %s -U %s -d %s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-5432}" "${DB_USER:-postgres}" "${DB_NAME:-postgres}"
+            printf "   ${C_BOLD}URI            :${C_RESET} ${C_CYAN}postgresql://%s:<PASSWORD_IN_.ENV>@%s:%s/%s?sslmode=disable${C_RESET}\n" "${DB_USER:-postgres}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-5432}" "${DB_NAME:-postgres}"
             ;;
         redis|valkey|keydb|dragonfly)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}redis-cli -h %s -p %s -a '%s'${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6379}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
-            printf "   ${C_BOLD}URI :${C_RESET} ${C_CYAN}redis://:%s@%s:%s${C_RESET}\n" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6379}"
+            printf "   ${C_BOLD}CLI (Pre-Auth) :${C_RESET} ${C_CYAN}db-cli${C_RESET}\n"
+            printf "   ${C_BOLD}CLI (Manual)   :${C_RESET} ${C_CYAN}redis-cli -h %s -p %s -a \"<PASSWORD_IN_.ENV>\"${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6379}"
+            printf "   ${C_BOLD}URI            :${C_RESET} ${C_CYAN}redis://:<PASSWORD_IN_.ENV>@%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6379}"
             ;;
         memcached)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}telnet %s %s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-11211}"
-            printf "   ${C_BOLD}URI :${C_RESET} ${C_CYAN}memcached://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-11211}"
+            printf "   ${C_BOLD}CLI            :${C_RESET} ${C_CYAN}telnet %s %s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-11211}"
+            printf "   ${C_BOLD}URI            :${C_RESET} ${C_CYAN}memcached://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-11211}"
             ;;
         mongodb|ferretdb)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}mongosh \"mongodb://%s:%s@%s:%s/%s?authSource=admin\"${C_RESET}\n" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-27017}" "${DB_NAME:-database}"
+            printf "   ${C_BOLD}CLI (Pre-Auth) :${C_RESET} ${C_CYAN}db-cli${C_RESET}\n"
+            printf "   ${C_BOLD}URI            :${C_RESET} ${C_CYAN}mongodb://%s:<PASSWORD_IN_.ENV>@%s:%s/%s?authSource=admin${C_RESET}\n" "${DB_USER:-root}" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-27017}" "${DB_NAME:-database}"
             ;;
         surrealdb)
-            printf "   ${C_BOLD}CLI :${C_RESET} ${C_CYAN}surreal sql --endpoint http://%s:%s --user %s --pass '%s'${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8000}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
-            printf "   ${C_BOLD}HTTP:${C_RESET} ${C_CYAN}http://%s:%s/rpc${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8000}"
+            printf "   ${C_BOLD}CLI (Pre-Auth) :${C_RESET} ${C_CYAN}db-cli${C_RESET}\n"
+            printf "   ${C_BOLD}HTTP           :${C_RESET} ${C_CYAN}http://%s:%s/rpc${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8000}"
             ;;
         meilisearch)
-            printf "   ${C_BOLD}HTTP:${C_RESET} ${C_CYAN}http://%s:%s${C_RESET} (Bearer: %s)\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-7700}" "${DB_ROOT_PASSWORD:-${DB_PASSWORD:-}}"
+            printf "   ${C_BOLD}HTTP Endpoint  :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET} (Bearer token in .env)\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-7700}"
             ;;
         typesense)
-            printf "   ${C_BOLD}HTTP:${C_RESET} ${C_CYAN}http://%s:%s${C_RESET} (X-TYPESENSE-API-KEY: %s)\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8108}" "${DB_ROOT_PASSWORD:-${DB_PASSWORD:-}}"
+            printf "   ${C_BOLD}HTTP Endpoint  :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET} (X-TYPESENSE-API-KEY in .env)\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8108}"
             ;;
         pocketbase)
-            printf "   ${C_BOLD}Admin UI:${C_RESET} ${C_CYAN}http://%s:%s/_/${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8090}"
+            printf "   ${C_BOLD}Admin UI       :${C_RESET} ${C_CYAN}http://%s:%s/_/${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-8090}"
             ;;
         minio)
-            printf "   ${C_BOLD}S3 API  :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-9000}"
-            printf "   ${C_BOLD}Console :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${CONSOLE_PORT:-$((SERVER_PORT + 1))}"
+            printf "   ${C_BOLD}S3 API         :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-9000}"
+            printf "   ${C_BOLD}Console        :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${CONSOLE_PORT:-$((SERVER_PORT + 1))}"
             ;;
         qdrant)
-            printf "   ${C_BOLD}REST API:${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6333}"
-            printf "   ${C_BOLD}Web UI  :${C_RESET} ${C_CYAN}http://%s:%s/dashboard${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6333}"
+            printf "   ${C_BOLD}REST API       :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6333}"
+            printf "   ${C_BOLD}Web UI         :${C_RESET} ${C_CYAN}http://%s:%s/dashboard${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6333}"
             ;;
     esac
     printf "\n"
