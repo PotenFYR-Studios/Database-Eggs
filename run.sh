@@ -20,7 +20,45 @@ PANEL_NAME="${PANEL_NAME:-panel}"
 log()   { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$*"; }
 ok()    { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_GREEN}${C_BOLD}[ok]${C_RESET} %s\n" "$*"; }
 warn()  { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_YELLOW}${C_BOLD}[warn]${C_RESET} %s\n" "$*"; }
-fail()  { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*"; exit 1; }
+error() { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*" >&2; }
+fail()  {
+    printf "\n${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[fatal error]${C_RESET} %s\n\n" "$*" >&2
+    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
+    printf '[%s] FATAL: %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*" >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
+    sleep 8
+    exit 1
+}
+
+# Diagnostic Error Trap
+error_trap() {
+    local exit_code=$?
+    local line_no=$1
+    local last_cmd="${BASH_COMMAND}"
+    if [ ${exit_code} -ne 0 ] && [ ${exit_code} -ne 130 ] && [ ${exit_code} -ne 143 ]; then
+        printf "\n${C_RED}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}│  ✗ DATABASE LAUNCH CRASH DETECTED                           │${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}├─────────────────────────────────────────────────────────────┤${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Exit Code" "${exit_code}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Source Line" "run.sh:L${line_no}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Failed Command" "${last_cmd:0:36}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Diagnostic Log" "logs/startup_error.log" >&2
+        printf "${C_RED}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n" >&2
+
+        mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
+        {
+            printf '=== RUNTIME CRASH REPORT (%s) ===\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            printf 'Exit Code: %s\n' "${exit_code}"
+            printf 'Script Line: %s\n' "${line_no}"
+            printf 'Command: %s\n' "${last_cmd}"
+            printf 'Working Directory: %s\n' "${SERVER_DIR:-$(pwd)}"
+            printf 'Database Engine: %s (v%s)\n' "${PROJECT_TYPE:-mariadb}" "${DB_VERSION:-latest}"
+            printf 'Allocated Port: %s\n' "${SERVER_PORT:-?}"
+            printf '================================================\n'
+        } >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
+        sleep 6
+    fi
+}
+trap 'error_trap $LINENO' ERR
 
 if [ -d /home/container ]; then
     cd /home/container 2>/dev/null || true

@@ -165,6 +165,12 @@ start_mariadb_mysql() {
     local daemon_bin="mysqld"
     command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
 
+    if ! command -v "${daemon_bin}" >/dev/null 2>&1; then
+        error "MariaDB/MySQL daemon binary '${daemon_bin}' not found in container PATH."
+        error "Please ensure your server uses the universal image: ghcr.io/potenfyr-studios/database-eggs:latest"
+        fail "Daemon binary '${daemon_bin}' is unavailable."
+    fi
+
     # Remove stale sockets before launching
     rm -f "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" 2>/dev/null || true
 

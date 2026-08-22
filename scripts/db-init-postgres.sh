@@ -234,6 +234,12 @@ start_postgres() {
     local pg_bin
     pg_bin=$(find_pg_bin "postgres")
 
+    if [ -z "${pg_bin}" ] || ! command -v "${pg_bin}" >/dev/null 2>&1; then
+        error "PostgreSQL daemon binary ('postgres') not found in container PATH."
+        error "Please ensure your server uses the universal image: ghcr.io/potenfyr-studios/database-eggs:latest"
+        fail "PostgreSQL daemon binary is unavailable."
+    fi
+
     mkdir -p "${socket_dir}"
     chmod 777 "${socket_dir}" 2>/dev/null || true
 

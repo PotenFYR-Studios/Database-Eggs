@@ -69,6 +69,11 @@ start_storage_family() {
             [ -x "${SERVER_DIR}/bin/pocketbase" ] && pb_bin="${SERVER_DIR}/bin/pocketbase"
             [ -x "${SERVER_DIR}/pocketbase" ] && pb_bin="${SERVER_DIR}/pocketbase"
 
+            if ! command -v "${pb_bin}" >/dev/null 2>&1 && [ ! -x "${pb_bin}" ]; then
+                error "PocketBase binary '${pb_bin}' not found in container PATH or bin/ directory."
+                fail "PocketBase binary is unavailable."
+            fi
+
             log "Starting PocketBase on 0.0.0.0:${SERVER_PORT}..."
             exec "${pb_bin}" serve --http="0.0.0.0:${SERVER_PORT}" --dir="${data_dir}/pb_data" ${EXTRA_ARGS:-}
             ;;
@@ -83,10 +88,19 @@ start_storage_family() {
             [ -x "${SERVER_DIR}/bin/minio" ] && minio_bin="${SERVER_DIR}/bin/minio"
             [ -x "${SERVER_DIR}/minio" ] && minio_bin="${SERVER_DIR}/minio"
 
+            if ! command -v "${minio_bin}" >/dev/null 2>&1 && [ ! -x "${minio_bin}" ]; then
+                error "MinIO binary '${minio_bin}' not found in container PATH or bin/ directory."
+                fail "MinIO binary is unavailable."
+            fi
+
             log "Starting MinIO S3 Object Storage on 0.0.0.0:${SERVER_PORT} (Console: :${console_port})..."
             exec "${minio_bin}" server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" --console-address "0.0.0.0:${console_port}" ${EXTRA_ARGS:-}
             ;;
         influxdb)
+            if ! command -v influxd >/dev/null 2>&1; then
+                error "InfluxDB binary 'influxd' not found in container PATH."
+                fail "InfluxDB binary is unavailable."
+            fi
             local cfg_arg=""
             [ -f "${conf_dir}/influxdb.conf" ] && cfg_arg="-config ${conf_dir}/influxdb.conf"
             log "Starting InfluxDB on 0.0.0.0:${SERVER_PORT}..."
@@ -96,6 +110,10 @@ start_storage_family() {
             exec influxd ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         clickhouse)
+            if ! command -v clickhouse-server >/dev/null 2>&1 && [ ! -x "${SERVER_DIR}/bin/clickhouse" ]; then
+                error "ClickHouse binary 'clickhouse-server' not found in container PATH or bin/ directory."
+                fail "ClickHouse binary is unavailable."
+            fi
             if [ ! -f "${conf_dir}/clickhouse.xml" ]; then
                 init_storage_family
             fi
@@ -107,10 +125,19 @@ start_storage_family() {
             [ -x "${SERVER_DIR}/bin/victoriametrics" ] && vm_bin="${SERVER_DIR}/bin/victoriametrics"
             [ -x "${SERVER_DIR}/bin/victoria-metrics-prod" ] && vm_bin="${SERVER_DIR}/bin/victoria-metrics-prod"
 
+            if ! command -v "${vm_bin}" >/dev/null 2>&1 && [ ! -x "${vm_bin}" ]; then
+                error "VictoriaMetrics binary '${vm_bin}' not found in container PATH or bin/ directory."
+                fail "VictoriaMetrics binary is unavailable."
+            fi
+
             log "Starting VictoriaMetrics on 0.0.0.0:${SERVER_PORT}..."
             exec "${vm_bin}" -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-}
             ;;
         couchdb)
+            if ! command -v couchdb >/dev/null 2>&1; then
+                error "CouchDB binary 'couchdb' not found in container PATH."
+                fail "CouchDB binary is unavailable."
+            fi
             local cfg_arg=""
             [ -f "${conf_dir}/local.ini" ] && cfg_arg="${conf_dir}/local.ini"
             log "Starting Apache CouchDB on 0.0.0.0:${SERVER_PORT}..."
@@ -119,6 +146,10 @@ start_storage_family() {
             exec couchdb ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         neo4j)
+            if ! command -v neo4j >/dev/null 2>&1; then
+                error "Neo4j binary 'neo4j' not found in container PATH."
+                fail "Neo4j binary is unavailable."
+            fi
             log "Starting Neo4j Graph Database on 0.0.0.0:${SERVER_PORT}..."
             export NEO4J_AUTH="${NEO4J_AUTH:-neo4j/${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
             exec neo4j console ${EXTRA_ARGS:-}

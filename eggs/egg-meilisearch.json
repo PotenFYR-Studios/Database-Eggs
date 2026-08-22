@@ -1,86 +1,86 @@
-﻿{
-  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
-  "meta": {
-    "version": "PTDL_v2",
-    "update_url": null
-  },
-  "exported_at": "2026-08-22T09:30:00+05:30",
-  "name": "Meilisearch Engine",
-  "author": "potenfyr@potenfyr.com",
-  "description": "Lightning-fast, typo-tolerant full-text search engine with RESTful API and automated strong Master Key generation.",
-  "features": [
-    "pid_limit"
-  ],
-  "docker_images": {
-    "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-    "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
-    "Ubuntu 22.04 LTS": "ubuntu:22.04"
-  },
-  "file_denylist": [],
-  "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else curl -fsSL https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh | bash; fi",
-  "config": {
-    "files": "{}",
-    "startup": "{\"done\":[\"Meilisearch is listening\",\"Server listening on\"],\"user_interaction\":[],\"strip_ansi\":false}",
-    "stop": "^C",
-    "logs": "{}"
-  },
-  "scripts": {
-    "installation": {
-      "script": "#!/bin/sh\n# PotenFYR Studios - Meilisearch Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
-      "container": "ghcr.io/pterodactyl/installers:alpine",
-      "entrypoint": "ash"
-    }
-  },
-  "variables": [
-    {
-      "name": "Database Type",
-      "description": "Engine type.",
-      "env_variable": "DATABASE_TYPE",
-      "default_value": "meilisearch",
-      "user_viewable": true,
-      "user_editable": false,
-      "rules": "required|string",
-      "field_type": "text"
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
     },
-    {
-      "name": "Master Key",
-      "description": "Master Key for full administrative API access (auto = ultra-strong 32+ char random).",
-      "env_variable": "MASTER_KEY",
-      "default_value": "auto",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|min:16|max:128",
-      "field_type": "text"
+    "exported_at": "2026-08-22T09:30:00+05:30",
+    "name": "Meilisearch Engine",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Lightning-fast, typo-tolerant full-text search engine with RESTful API and automated strong Master Key generation.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
+        "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
+        "Ubuntu 22.04 LTS": "ubuntu:22.04"
     },
-    {
-      "name": "Environment",
-      "description": "Environment mode (production or development).",
-      "env_variable": "MEILI_ENV",
-      "default_value": "production",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|in:production,development",
-      "field_type": "text"
+    "file_denylist": [],
+    "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | bash; fi",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Meilisearch is listening\",\"Server listening on\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
     },
-    {
-      "name": "Auto Generate Credentials",
-      "description": "Auto-generate strong cryptographic master key.",
-      "env_variable": "AUTO_GENERATE_CREDENTIALS",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/sh\n# PotenFYR Studios - Meilisearch Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
+            "container": "ghcr.io/pterodactyl/installers:alpine",
+            "entrypoint": "ash"
+        }
     },
-    {
-      "name": "Save Credentials to .env",
-      "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
-      "env_variable": "SAVE_TO_ENV",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    }
-  ]
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine type.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "meilisearch",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Master Key",
+            "description": "Master Key for full administrative API access (auto = ultra-strong 32+ char random).",
+            "env_variable": "MASTER_KEY",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|min:16|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Environment",
+            "description": "Environment mode (production or development).",
+            "env_variable": "MEILI_ENV",
+            "default_value": "production",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:production,development",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Auto-generate strong cryptographic master key.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Save Credentials to .env",
+            "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+            "env_variable": "SAVE_TO_ENV",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        }
+    ]
 }

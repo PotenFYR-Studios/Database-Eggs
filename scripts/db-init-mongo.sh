@@ -116,11 +116,19 @@ start_mongo_family() {
     fi
 
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
+        if ! command -v ferretdb >/dev/null 2>&1; then
+            error "FerretDB binary not found in container PATH."
+            fail "FerretDB binary is unavailable."
+        fi
         log "Starting FerretDB on 0.0.0.0:${SERVER_PORT}..."
         exec ferretdb --listen-addr="0.0.0.0:${SERVER_PORT}" \
                       --handler="${FERRETDB_HANDLER:-sqlite}" \
                       --sqlite-url="${data_dir}/" ${EXTRA_ARGS:-}
     else
+        if ! command -v mongod >/dev/null 2>&1; then
+            error "MongoDB binary 'mongod' not found in container PATH."
+            fail "MongoDB daemon 'mongod' is unavailable."
+        fi
         log "Starting MongoDB on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
         exec mongod --config "${mongod_conf}" ${EXTRA_ARGS:-}
     fi

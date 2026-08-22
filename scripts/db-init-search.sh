@@ -24,6 +24,11 @@ start_search_family() {
                 meili_bin="/usr/local/bin/meilisearch"
             fi
 
+            if ! command -v "${meili_bin}" >/dev/null 2>&1 && [ ! -x "${meili_bin}" ]; then
+                error "Meilisearch binary '${meili_bin}' not found in container PATH or bin/ directory."
+                fail "Meilisearch binary is unavailable."
+            fi
+
             local cfg_arg=""
             [ -f "${SERVER_DIR}/config/meilisearch.toml" ] && cfg_arg="--config-file-path ${SERVER_DIR}/config/meilisearch.toml"
 
@@ -45,6 +50,11 @@ start_search_family() {
                 ts_bin="/usr/local/bin/typesense-server"
             fi
 
+            if ! command -v "${ts_bin}" >/dev/null 2>&1 && [ ! -x "${ts_bin}" ]; then
+                error "Typesense binary '${ts_bin}' not found in container PATH or bin/ directory."
+                fail "Typesense binary is unavailable."
+            fi
+
             local cfg_arg=""
             [ -f "${SERVER_DIR}/config/typesense.ini" ] && cfg_arg="--config=${SERVER_DIR}/config/typesense.ini"
 
@@ -63,6 +73,11 @@ start_search_family() {
                 qdrant_bin="${SERVER_DIR}/qdrant"
             elif [ -x "/usr/local/bin/qdrant" ]; then
                 qdrant_bin="/usr/local/bin/qdrant"
+            fi
+
+            if ! command -v "${qdrant_bin}" >/dev/null 2>&1 && [ ! -x "${qdrant_bin}" ]; then
+                error "Qdrant binary '${qdrant_bin}' not found in container PATH or bin/ directory."
+                fail "Qdrant binary is unavailable."
             fi
 
             local cfg_arg=""
