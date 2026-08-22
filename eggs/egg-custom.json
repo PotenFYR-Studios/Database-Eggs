@@ -94,7 +94,7 @@
         },
         {
             "name": "Auto Generate Credentials",
-            "description": "Generate strong random cryptographic passwords available in .env and .db_credentials.",
+            "description": "Generate strong random cryptographic passwords available strictly in .env and startup environment.",
             "env_variable": "AUTO_GENERATE_CREDENTIALS",
             "default_value": "1",
             "user_viewable": true,

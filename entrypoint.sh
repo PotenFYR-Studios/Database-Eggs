@@ -85,24 +85,26 @@ export SERVER_IP
 INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2);exit}' 2>/dev/null || echo "${SERVER_IP}")
 export INTERNAL_IP
 
-# --- Persisted Settings & Credentials (.env, .multi-db.conf, .db_credentials) -
+# --- Persisted Settings & Credentials (.env only) -----------------------------
 ENV_FILE="${SERVER_DIR}/.env"
-CONF_FILE="${SERVER_DIR}/.multi-db.conf"
-CRED_FILE="${SERVER_DIR}/.db_credentials"
 
-read_conf_val() {
-    local file="$1" key="$2"
-    [ -f "${file}" ] || return 1
+# Clean up any legacy plain-text credential files so sensitive info is strictly in .env
+rm -f "${SERVER_DIR}/credentials.txt" "${SERVER_DIR}/.db_credentials" "${SERVER_DIR}/.multi-db.conf" 2>/dev/null || true
+
+read_env_val() {
+    local key="$1"
+    [ -f "${ENV_FILE}" ] || return 1
     local val
-    val=$(grep -E "^${key}=" "${file}" 2>/dev/null | tail -n1 | cut -d= -f2-)
+    val=$(grep -E "^${key}=" "${ENV_FILE}" 2>/dev/null | tail -n1 | cut -d= -f2-)
     [ -n "${val}" ] || return 1
     # Strip quotes and whitespace
     printf '%s' "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
 apply_persisted() {
-    local key="$1" file="${2:-${ENV_FILE}}" val
-    val=$(read_conf_val "${file}" "${key}") || return 0
+    local key="$1"
+    local val
+    val=$(read_env_val "${key}") || return 0
     # If the current environment variable is unset, empty, or "auto"/"generate", load persisted value
     if [ -z "${!key-}" ] || [ "${!key}" = "auto" ] || [ "${!key}" = "generate" ]; then
         printf -v "${key}" '%s' "${val}"
@@ -113,18 +115,16 @@ apply_persisted() {
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
             PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND; do
-    apply_persisted "${_key}" "${ENV_FILE}"
-    apply_persisted "${_key}" "${CONF_FILE}"
-    apply_persisted "${_key}" "${CRED_FILE}"
+    apply_persisted "${_key}"
 done
 unset _key
 
 # Also map common .env variations (DB_DATABASE, DB_USERNAME)
 if [ -z "${DB_NAME:-}" ]; then
-    DB_NAME=$(read_conf_val "${ENV_FILE}" "DB_DATABASE") || true
+    DB_NAME=$(read_env_val "DB_DATABASE") || true
 fi
 if [ -z "${DB_USER:-}" ]; then
-    DB_USER=$(read_conf_val "${ENV_FILE}" "DB_USERNAME") || true
+    DB_USER=$(read_env_val "DB_USERNAME") || true
 fi
 
 DB_TYPE="${DATABASE_TYPE:-${DB_TYPE:-mariadb}}"
@@ -160,14 +160,14 @@ DB_USER="${DB_USER:-dbuser}"
 DB_NAME="${DB_NAME:-database}"
 export DB_ROOT_PASSWORD DB_PASSWORD DB_USER DB_NAME
 
-# Export credentials into process environment for shell & CLI tools
+# Export credentials into process environment for shell, startup command & CLI tools
 export PGPASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export MYSQL_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export REDISCLI_AUTH="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export MONGO_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
 
-# Always keep and synchronize credentials in .env
+# Save and synchronize sensitive credentials ONLY in .env (chmod 600)
 {
     printf '# Database Configuration & Credentials (Synced by PotenFYR Runtime)\n'
     printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
@@ -180,38 +180,6 @@ export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
     printf 'DB_VERSION=%s\n' "${DB_VERSION}"
 } > "${ENV_FILE}" 2>/dev/null || true
 chmod 600 "${ENV_FILE}" 2>/dev/null || true
-
-# Persist internal config files
-{
-    printf '# Auto-Generated Database Credentials (DO NOT SHARE)\n'
-    printf 'DB_ROOT_PASSWORD=%s\n' "${DB_ROOT_PASSWORD}"
-    printf 'DB_PASSWORD=%s\n' "${DB_PASSWORD}"
-    printf 'DB_USER=%s\n' "${DB_USER}"
-    printf 'DB_NAME=%s\n' "${DB_NAME}"
-    printf 'PROJECT_TYPE=%s\n' "${PROJECT_TYPE}"
-    printf 'DB_VERSION=%s\n' "${DB_VERSION}"
-    printf 'GENERATED_AT=%s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-} > "${CRED_FILE}" 2>/dev/null || true
-chmod 600 "${CRED_FILE}" 2>/dev/null || true
-
-# Human-readable credentials summary sheet
-{
-    printf '=====================================================\n'
-    printf '       POTENFYR STUDIOS - DATABASE CREDENTIALS       \n'
-    printf '=====================================================\n'
-    printf 'Engine:        %s (v%s)\n' "${PROJECT_TYPE}" "${DB_VERSION}"
-    printf 'Host (Local):  127.0.0.1\n'
-    printf 'Host (Docker): %s\n' "${INTERNAL_IP}"
-    printf 'Port:          %s\n' "${SERVER_PORT}"
-    printf 'Database Name: %s\n' "${DB_NAME}"
-    printf 'User:          %s\n' "${DB_USER}"
-    printf 'User Password: %s\n' "${DB_PASSWORD}"
-    printf 'Root/Admin:    root / admin / postgres\n'
-    printf 'Root Password: %s\n' "${DB_ROOT_PASSWORD}"
-    printf 'Environment:   Saved in .env, .db_credentials, credentials.txt\n'
-    printf '=====================================================\n'
-} > "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
-chmod 600 "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
 
 # Generate user environment shortcuts for terminal CLI usage (.profile and .bashrc)
 {

@@ -96,10 +96,10 @@ function Test-DatabaseEngine {
         Write-Host "    Recent logs: $recentLogs" -ForegroundColor DarkGray
     }
 
-    # Verify credentials persistence
-    $hasCreds = (Test-Path "$tempDir/.db_credentials") -or (Test-Path "$tempDir/credentials.txt")
+    # Verify credentials persistence strictly in .env
+    $hasCreds = Test-Path "$tempDir/.env"
     if ($hasCreds) {
-        Report-Check -Name "$($Engine.ToUpper()) credentials persistence & security" -Passed $true
+        Report-Check -Name "$($Engine.ToUpper()) credentials persistence & security" -Passed $true -Details "Saved in .env"
     }
 
     # Verify graceful shutdown

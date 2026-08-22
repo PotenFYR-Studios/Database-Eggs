@@ -94,7 +94,7 @@
         },
         {
             "name": "Auto Generate Strong Secrets",
-            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and save them to .db_credentials and credentials.txt.",
+            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and save them strictly to .env and startup environment variables.",
             "env_variable": "AUTO_GENERATE_CREDENTIALS",
             "default_value": "1",
             "user_viewable": true,

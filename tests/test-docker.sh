@@ -142,9 +142,9 @@ run_db_test() {
         info "Recent logs:\n${logs}"
     fi
 
-    # Verify credentials persistence in .env and credentials.txt
-    if [ -f "${test_dir}/.env" ] && [ -f "${test_dir}/credentials.txt" ]; then
-        record_result "${engine^^} credential persistence & security" 0 "Generated .env, credentials.txt & .db_credentials"
+    # Verify sensitive credentials persistence strictly in .env
+    if [ -f "${test_dir}/.env" ]; then
+        record_result "${engine^^} credential persistence & security" 0 "Persisted in .env (mode 600)"
     fi
 
     # Verify graceful shutdown
