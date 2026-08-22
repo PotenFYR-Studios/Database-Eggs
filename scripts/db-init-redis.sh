@@ -27,9 +27,10 @@ init_redis_family() {
 port ${SERVER_PORT}
 bind 0.0.0.0
 protected-mode no
+daemonize no
+logfile ""
 dir ${data_dir}
 pidfile ${SERVER_DIR}/redis.pid
-logfile ${SERVER_DIR}/logs/redis.log
 databases ${REDIS_DATABASES:-16}
 
 # Memory Optimization & Eviction

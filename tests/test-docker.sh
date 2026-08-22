@@ -121,12 +121,12 @@ run_db_test() {
             if docker exec "${container_name}" bash -c "${test_cmd}" >/dev/null 2>&1; then
                 is_ready=0
                 break
-            elif docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -q ':${port} ' || netstat -tuln 2>/dev/null | grep -q ':${port} '" 2>/dev/null; then
+            elif docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -qE ':${port}(\b| |$)' || netstat -tuln 2>/dev/null | grep -qE ':${port}(\b| |$)'" 2>/dev/null; then
                 is_ready=0
                 break
             fi
         else
-            if docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -q ':${port} ' || netstat -tuln 2>/dev/null | grep -q ':${port} '" 2>/dev/null; then
+            if docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -qE ':${port}(\b| |$)' || netstat -tuln 2>/dev/null | grep -qE ':${port}(\b| |$)'" 2>/dev/null; then
                 is_ready=0
                 break
             fi
