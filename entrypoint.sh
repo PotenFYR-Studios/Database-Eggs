@@ -33,12 +33,36 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
+REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
+
+# Initialize local directory tree
+mkdir -p "${SERVER_DIR}/bin" "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/scripts"
+
 export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
 
-# Ensure run.sh is present locally in server dir
-if [ ! -f ./run.sh ] && [ -f /usr/local/bin/run.sh ]; then
-    cp -f /usr/local/bin/run.sh ./run.sh 2>/dev/null || ln -sf /usr/local/bin/run.sh ./run.sh 2>/dev/null || true
+# Self-Healing: Ensure run.sh is present locally in server dir
+if [ ! -f "${SERVER_DIR}/run.sh" ]; then
+    if [ -f /usr/local/bin/run.sh ]; then
+        cp -f /usr/local/bin/run.sh "${SERVER_DIR}/run.sh" 2>/dev/null || true
+    else
+        log "Downloading run.sh from repository..."
+        curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${SERVER_DIR}/run.sh" 2>/dev/null || true
+    fi
 fi
+chmod +x "${SERVER_DIR}/run.sh" 2>/dev/null || true
+
+# Self-Healing: Ensure all modular scripts are present locally
+if [ ! -f "${SERVER_DIR}/scripts/password-gen.sh" ]; then
+    if [ -d /usr/local/bin ] && ls /usr/local/bin/db-init-*.sh >/dev/null 2>&1; then
+        cp -rf /usr/local/bin/*.sh "${SERVER_DIR}/scripts/" 2>/dev/null || true
+    else
+        log "Downloading modular database handlers..."
+        for h in password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
+            curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${SERVER_DIR}/scripts/${h}" 2>/dev/null || true
+        done
+    fi
+fi
+chmod -R 755 "${SERVER_DIR}/scripts" "${SERVER_DIR}/bin" 2>/dev/null || true
 
 # Source performance and helper scripts if present
 [ -f "${SERVER_DIR}/scripts/performance-tuning.sh" ] && source "${SERVER_DIR}/scripts/performance-tuning.sh" 2>/dev/null || true
@@ -85,7 +109,7 @@ apply_persisted() {
 
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
-            PERFORMANCE_TUNING SECURITY_HARDENING; do
+            PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND; do
     apply_persisted "${_key}" "${CONF_FILE}"
     apply_persisted "${_key}" "${CRED_FILE}"
 done
@@ -227,15 +251,15 @@ log "Executing startup launcher..."
 if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     log "Custom launcher detected (run.custom.sh). Executing..."
     chmod +x "${SERVER_DIR}/run.custom.sh"
-    exec "${SERVER_DIR}/run.custom.sh" "$@"
+    exec "${SERVER_DIR}/run.custom.sh"
 elif [ -f "${SERVER_DIR}/run.sh" ]; then
     chmod +x "${SERVER_DIR}/run.sh"
-    exec "${SERVER_DIR}/run.sh" "$@"
+    exec "${SERVER_DIR}/run.sh"
 elif [ -f /usr/local/bin/run.sh ]; then
-    exec /usr/local/bin/run.sh "$@"
+    exec /usr/local/bin/run.sh
 else
     # Auto-generate local run.sh if completely missing
-    log "run.sh not found locally. Starting server dispatcher directly..."
+    log "Starting server dispatcher directly..."
     if [ -f "${SERVER_DIR}/scripts/db-init-mariadb.sh" ] || [ -f /usr/local/bin/db-init-mariadb.sh ]; then
         for script in "${SERVER_DIR}/scripts"/db-init-*.sh /usr/local/bin/db-init-*.sh; do
             [ -f "${script}" ] && source "${script}" 2>/dev/null || true
