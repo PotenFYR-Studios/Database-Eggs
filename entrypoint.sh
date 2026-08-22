@@ -165,26 +165,26 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     fi
 fi
 
-# --- ASCII Banner -----------------------------------------------------------
-printf "${C_CYAN}${C_BOLD}"
-cat << 'EOF'
-  ____        _        _                    _____                  
- |  _ \  __ _| |_ __ _| |__   __ _ ___  ___| ____|__ _  __ _ ___ 
- | | | |/ _` | __/ _` | '_ \ / _` / __|/ _ \  _| / _` |/ _` / __|
- | |_| | (_| | || (_| | |_) | (_| \__ \  __/ |__| (_| | (_| \__ \
- |____/ \__,_|\__\__,_|_.__/ \__,_|___/\___|_____\__, |\__, |___/
-                                                 |___/ |___/     
-EOF
-printf "${C_RESET}"
-printf "${C_YELLOW}${C_BOLD}   :: PotenFYR Studios Universal Database Platform ::${C_RESET}\n\n"
+# ---------------------------------------------------------------------------
+# Startup banner (Compact Slant font, clean ANSI gradient)
+# ---------------------------------------------------------------------------
+printf "\n"
+printf "${C_CYAN}${C_BOLD}   __  ___      ____  _       ____  ____     ${C_RESET}\n"
+printf "${C_CYAN}${C_BOLD}  /  |/  /_  __/ / /_(_)     / __ \\/ __ )    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD} / /|_/ / / / / / __/ /_____/ / / / __  |    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD}/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     ${C_RESET}\n"
+printf "${C_MAGENTA}${C_BOLD}/_/  /_/\\__,_/_/\\__/_/     /_____/_____/      ${C_RESET}\n"
+printf "${C_YELLOW}${C_BOLD}  » Universal Multi-Database Server Runtime${C_RESET}\n"
+printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
 
-printf "${C_BOLD} ┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
-printf "${C_BOLD} │ %-18s: ${C_GREEN}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
-printf "${C_BOLD} │ %-18s: ${C_CYAN}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Listen Address" "0.0.0.0:${SERVER_PORT}"
-printf "${C_BOLD} │ %-18s: ${C_MAGENTA}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
-printf "${C_BOLD} │ %-18s: ${C_BLUE}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
-printf "${C_BOLD} │ %-18s: ${C_YELLOW}%-38s${C_RESET}${C_BOLD} │${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
-printf "${C_BOLD} └─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
+# Runtime Environment Card
+printf "${C_CYAN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Listen Address" "0.0.0.0:${SERVER_PORT}"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
+printf "${C_CYAN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
 
 log "Executing startup launcher..."
 

@@ -41,17 +41,14 @@ record_result() {
     fi
 }
 
-printf "${C_CYAN}${C_BOLD}"
-cat << 'EOF'
-  ____        _        _                    _____                  
- |  _ \  __ _| |_ __ _| |__   __ _ ___  ___| ____|__ _  __ _ ___ 
- | | | |/ _` | __/ _` | '_ \ / _` / __|/ _ \  _| / _` |/ _` / __|
- | |_| | (_| | || (_| | |_) | (_| \__ \  __/ |__| (_| | (_| \__ \
- |____/ \__,_|\__\__,_|_.__/ \__,_|___/\___|_____\__, |\__, |___/
-                                                 |___/ |___/     
-             :: Docker & Panel Verification Test Suite ::
-EOF
-printf "${C_RESET}\n"
+printf "\n"
+printf "${C_CYAN}${C_BOLD}   __  ___      ____  _       ____  ____     ${C_RESET}\n"
+printf "${C_CYAN}${C_BOLD}  /  |/  /_  __/ / /_(_)     / __ \\/ __ )    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD} / /|_/ / / / / / __/ /_____/ / / / __  |    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD}/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     ${C_RESET}\n"
+printf "${C_MAGENTA}${C_BOLD}/_/  /_/\\__,_/_/\\__/_/     /_____/_____/      ${C_RESET}\n"
+printf "${C_YELLOW}${C_BOLD}  » Docker & Multi-Panel Verification Test Suite${C_RESET}\n"
+printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
 
 # Step 1: Build Docker image if requested
 if [ "${BUILD_IMAGE}" = "1" ]; then

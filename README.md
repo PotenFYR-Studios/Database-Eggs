@@ -2,14 +2,14 @@
 
 One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **20+ database engines** across all versions (SQL, In-Memory Caching, Document NoSQL, Multi-Model, Search, AI Vector stores, and S3-compatible Object Storage) with cryptographically strong automated secrets, dynamic performance auto-tuning, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Jexactyl, PufferPanel**, and native Docker.
 
-```
-  ____        _        _                    _____                  
- |  _ \  __ _| |_ __ _| |__   __ _ ___  ___| ____|__ _  __ _ ___ 
- | | | |/ _` | __/ _` | '_ \ / _` / __|/ _ \  _| / _` |/ _` / __|
- | |_| | (_| | || (_| | |_) | (_| \__ \  __/ |__| (_| | (_| \__ \
- |____/ \__,_|\__\__,_|_.__/ \__,_|___/\___|_____\__, |\__, |___/
-                                                 |___/ |___/     
-                          - By PotenFYR Studios
+```text
+   __  ___      ____  _       ____  ____     
+  /  |/  /_  __/ / /_(_)     / __ \/ __ )    
+ / /|_/ / / / / / __/ /_____/ / / / __  |    
+/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     
+/_/  /_/\__,_/_/\__/_/     /_____/_____/      
+  » Universal Multi-Database Server Runtime
+    By PotenFYR Studios • support@potenfyr.in
 ```
 
 [![GitHub License](https://img.shields.io/github/license/PotenFYR-Studios/Database-Eggs?style=for-the-badge&color=blue)](LICENSE)
