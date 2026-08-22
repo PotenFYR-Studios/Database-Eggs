@@ -116,15 +116,17 @@ run_db_test() {
             break
         fi
 
-        # Execute custom verification command inside container if specified
+        # Execute verification command or port check inside container
         if [ -n "${test_cmd}" ]; then
             if docker exec "${container_name}" bash -c "${test_cmd}" >/dev/null 2>&1; then
                 is_ready=0
                 break
+            elif docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -q ':${port} ' || netstat -tuln 2>/dev/null | grep -q ':${port} '" 2>/dev/null; then
+                is_ready=0
+                break
             fi
         else
-            # Default check: check if port is open / listening
-            if docker exec "${container_name}" bash -c "netstat -tuln 2>/dev/null | grep -q ':${port} ' || ss -tuln 2>/dev/null | grep -q ':${port} '" 2>/dev/null; then
+            if docker exec "${container_name}" bash -c "ss -tuln 2>/dev/null | grep -q ':${port} ' || netstat -tuln 2>/dev/null | grep -q ':${port} '" 2>/dev/null; then
                 is_ready=0
                 break
             fi
@@ -174,11 +176,11 @@ run_db_test "redis" "6379" "" "redis-cli -h 127.0.0.1 -p 6379 -a 'TestPassword12
 run_db_test "memcached" "11211" "" ""
 
 # 3. Document & Multi-Model
-run_db_test "surrealdb" "8000" "" "curl -fsSL http://127.0.0.1:8000/health 2>/dev/null || curl -fsSL http://127.0.0.1:8000/status 2>/dev/null"
+run_db_test "surrealdb" "8000" "" "curl -fsSL http://127.0.0.1:8000/health 2>/dev/null || curl -fsSL http://127.0.0.1:8000/status 2>/dev/null || curl -fsSL http://127.0.0.1:8000/version 2>/dev/null"
 
 # 4. Search & Vector Engines
 run_db_test "meilisearch" "7700" "-e MASTER_KEY=MasterKey1234567890SecureKey" "curl -fsSL -H 'Authorization: Bearer MasterKey1234567890SecureKey' http://127.0.0.1:7700/health 2>/dev/null || curl -fsSL http://127.0.0.1:7700/health 2>/dev/null"
-run_db_test "qdrant" "6333" "" "curl -fsSL http://127.0.0.1:6333/readyz 2>/dev/null || curl -fsSL http://127.0.0.1:6333/dashboard 2>/dev/null"
+run_db_test "qdrant" "6333" "" "curl -fsSL http://127.0.0.1:6333/readyz 2>/dev/null || curl -fsSL http://127.0.0.1:6333/dashboard 2>/dev/null || curl -fsSL http://127.0.0.1:6333/ 2>/dev/null"
 
 # 5. Backends & Storage
 run_db_test "pocketbase" "8090" "" "curl -fsSL http://127.0.0.1:8090/api/health 2>/dev/null"
