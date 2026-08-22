@@ -85,7 +85,8 @@ export SERVER_IP
 INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2);exit}' 2>/dev/null || echo "${SERVER_IP}")
 export INTERNAL_IP
 
-# --- Persisted Settings & Credentials ----------------------------------------
+# --- Persisted Settings & Credentials (.env, .multi-db.conf, .db_credentials) -
+ENV_FILE="${SERVER_DIR}/.env"
 CONF_FILE="${SERVER_DIR}/.multi-db.conf"
 CRED_FILE="${SERVER_DIR}/.db_credentials"
 
@@ -95,13 +96,15 @@ read_conf_val() {
     local val
     val=$(grep -E "^${key}=" "${file}" 2>/dev/null | tail -n1 | cut -d= -f2-)
     [ -n "${val}" ] || return 1
-    printf '%s' "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//'
+    # Strip quotes and whitespace
+    printf '%s' "${val}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//"
 }
 
 apply_persisted() {
-    local key="$1" file="${2:-${CONF_FILE}}" val
+    local key="$1" file="${2:-${ENV_FILE}}" val
     val=$(read_conf_val "${file}" "${key}") || return 0
-    if [ -z "${!key-}" ]; then
+    # If the current environment variable is unset, empty, or "auto"/"generate", load persisted value
+    if [ -z "${!key-}" ] || [ "${!key}" = "auto" ] || [ "${!key}" = "generate" ]; then
         printf -v "${key}" '%s' "${val}"
         export "${key}"
     fi
@@ -110,10 +113,19 @@ apply_persisted() {
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
             PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND; do
+    apply_persisted "${_key}" "${ENV_FILE}"
     apply_persisted "${_key}" "${CONF_FILE}"
     apply_persisted "${_key}" "${CRED_FILE}"
 done
 unset _key
+
+# Also map common .env variations (DB_DATABASE, DB_USERNAME)
+if [ -z "${DB_NAME:-}" ]; then
+    DB_NAME=$(read_conf_val "${ENV_FILE}" "DB_DATABASE") || true
+fi
+if [ -z "${DB_USER:-}" ]; then
+    DB_USER=$(read_conf_val "${ENV_FILE}" "DB_USERNAME") || true
+fi
 
 DB_TYPE="${DATABASE_TYPE:-${DB_TYPE:-mariadb}}"
 PROJECT_TYPE=$(echo "${DB_TYPE}" | tr '[:upper:]' '[:lower:]')
@@ -138,91 +150,97 @@ gen_rand() {
 if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_ROOT_PASSWORD:-}" ] || [ "${DB_ROOT_PASSWORD}" = "auto" ] || [ "${DB_ROOT_PASSWORD}" = "generate" ]; then
         DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
-        export DB_ROOT_PASSWORD
     fi
-
     if [ -z "${DB_PASSWORD:-}" ] || [ "${DB_PASSWORD}" = "auto" ] || [ "${DB_PASSWORD}" = "generate" ]; then
         DB_PASSWORD=$(gen_rand 32 urlsafe)
-        export DB_PASSWORD
     fi
-
-    {
-        printf '# Auto-Generated Database Credentials (DO NOT SHARE)\n'
-        printf 'DB_ROOT_PASSWORD=%s\n' "${DB_ROOT_PASSWORD}"
-        printf 'DB_PASSWORD=%s\n' "${DB_PASSWORD}"
-        printf 'DB_USER=%s\n' "${DB_USER:-dbuser}"
-        printf 'DB_NAME=%s\n' "${DB_NAME:-database}"
-        printf 'PROJECT_TYPE=%s\n' "${PROJECT_TYPE}"
-        printf 'DB_VERSION=%s\n' "${DB_VERSION}"
-        printf 'GENERATED_AT=%s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-    } > "${CRED_FILE}" 2>/dev/null || true
-    chmod 600 "${CRED_FILE}" 2>/dev/null || true
-
-    {
-        printf '=====================================================\n'
-        printf '       POTENFYR STUDIOS - DATABASE CREDENTIALS       \n'
-        printf '=====================================================\n'
-        printf 'Engine:        %s (v%s)\n' "${PROJECT_TYPE}" "${DB_VERSION}"
-        printf 'Host (Local):  127.0.0.1\n'
-        printf 'Host (Docker): %s\n' "${INTERNAL_IP}"
-        printf 'Port:          %s\n' "${SERVER_PORT}"
-        printf 'Database Name: %s\n' "${DB_NAME:-database}"
-        printf 'User:          %s\n' "${DB_USER:-dbuser}"
-        printf 'User Password: %s\n' "${DB_PASSWORD}"
-        printf 'Root/Admin:    root / admin / postgres\n'
-        printf 'Root Password: %s\n' "${DB_ROOT_PASSWORD}"
-        printf '=====================================================\n'
-    } > "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
-    chmod 600 "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
-
-    if [ ! -f "${SERVER_DIR}/.env" ]; then
-        {
-            printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
-            printf 'DB_HOST=127.0.0.1\n'
-            printf 'DB_PORT=%s\n' "${SERVER_PORT}"
-            printf 'DB_DATABASE=%s\n' "${DB_NAME:-database}"
-            printf 'DB_USERNAME=%s\n' "${DB_USER:-dbuser}"
-            printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
-            printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
-        } > "${SERVER_DIR}/.env" 2>/dev/null || true
-        chmod 600 "${SERVER_DIR}/.env" 2>/dev/null || true
-    fi
-
-    # Generate user environment shortcuts for easy terminal CLI usage
-    {
-        printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
-        printf 'export DB_CONNECTION="%s"\n' "${PROJECT_TYPE}"
-        printf 'export DB_HOST="127.0.0.1"\n'
-        printf 'export DB_PORT="%s"\n' "${SERVER_PORT}"
-        printf 'export DB_DATABASE="%s"\n' "${DB_NAME:-database}"
-        printf 'export DB_USERNAME="%s"\n' "${DB_USER:-dbuser}"
-        printf 'export DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
-        printf 'export DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
-        printf 'export PGPASSWORD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-        printf 'export MYSQL_PWD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-        printf 'export REDISCLI_AUTH="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-
-        case "${PROJECT_TYPE}" in
-            mariadb|mysql)
-                printf 'alias db-cli="mysql -h 127.0.0.1 -P %s -u %s -p\"%s\" %s"\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${DB_NAME:-database}"
-                ;;
-            postgresql|postgres)
-                printf 'alias db-cli="psql -h 127.0.0.1 -p %s -U %s -d %s"\n' "${SERVER_PORT}" "${DB_USER:-postgres}" "${DB_NAME:-postgres}"
-                ;;
-            redis|valkey|keydb|dragonfly)
-                printf 'alias db-cli="redis-cli -h 127.0.0.1 -p %s -a \"%s\""\n' "${SERVER_PORT}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-                ;;
-            mongodb|ferretdb)
-                printf 'alias db-cli="mongosh \"mongodb://%s:%s@127.0.0.1:%s/%s?authSource=admin\""\n' "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${SERVER_PORT}" "${DB_NAME:-database}"
-                ;;
-            surrealdb)
-                printf 'alias db-cli="surreal sql --endpoint http://127.0.0.1:%s --user %s --pass \"%s\""\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-                ;;
-        esac
-    } > "${SERVER_DIR}/.profile" 2>/dev/null || true
-    cp -f "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
-    chmod 600 "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
 fi
+
+DB_USER="${DB_USER:-dbuser}"
+DB_NAME="${DB_NAME:-database}"
+export DB_ROOT_PASSWORD DB_PASSWORD DB_USER DB_NAME
+
+# Export credentials into process environment for shell & CLI tools
+export PGPASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+export MYSQL_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+export REDISCLI_AUTH="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+export MONGO_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+
+# Always keep and synchronize credentials in .env
+{
+    printf '# Database Configuration & Credentials (Synced by PotenFYR Runtime)\n'
+    printf 'DB_CONNECTION=%s\n' "${PROJECT_TYPE}"
+    printf 'DB_HOST=127.0.0.1\n'
+    printf 'DB_PORT=%s\n' "${SERVER_PORT}"
+    printf 'DB_DATABASE=%s\n' "${DB_NAME}"
+    printf 'DB_USERNAME=%s\n' "${DB_USER}"
+    printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
+    printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
+    printf 'DB_VERSION=%s\n' "${DB_VERSION}"
+} > "${ENV_FILE}" 2>/dev/null || true
+chmod 600 "${ENV_FILE}" 2>/dev/null || true
+
+# Persist internal config files
+{
+    printf '# Auto-Generated Database Credentials (DO NOT SHARE)\n'
+    printf 'DB_ROOT_PASSWORD=%s\n' "${DB_ROOT_PASSWORD}"
+    printf 'DB_PASSWORD=%s\n' "${DB_PASSWORD}"
+    printf 'DB_USER=%s\n' "${DB_USER}"
+    printf 'DB_NAME=%s\n' "${DB_NAME}"
+    printf 'PROJECT_TYPE=%s\n' "${PROJECT_TYPE}"
+    printf 'DB_VERSION=%s\n' "${DB_VERSION}"
+    printf 'GENERATED_AT=%s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+} > "${CRED_FILE}" 2>/dev/null || true
+chmod 600 "${CRED_FILE}" 2>/dev/null || true
+
+# Human-readable credentials summary sheet
+{
+    printf '=====================================================\n'
+    printf '       POTENFYR STUDIOS - DATABASE CREDENTIALS       \n'
+    printf '=====================================================\n'
+    printf 'Engine:        %s (v%s)\n' "${PROJECT_TYPE}" "${DB_VERSION}"
+    printf 'Host (Local):  127.0.0.1\n'
+    printf 'Host (Docker): %s\n' "${INTERNAL_IP}"
+    printf 'Port:          %s\n' "${SERVER_PORT}"
+    printf 'Database Name: %s\n' "${DB_NAME}"
+    printf 'User:          %s\n' "${DB_USER}"
+    printf 'User Password: %s\n' "${DB_PASSWORD}"
+    printf 'Root/Admin:    root / admin / postgres\n'
+    printf 'Root Password: %s\n' "${DB_ROOT_PASSWORD}"
+    printf 'Environment:   Saved in .env, .db_credentials, credentials.txt\n'
+    printf '=====================================================\n'
+} > "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
+chmod 600 "${SERVER_DIR}/credentials.txt" 2>/dev/null || true
+
+# Generate user environment shortcuts for terminal CLI usage (.profile and .bashrc)
+{
+    printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
+    printf '[ -f "%s/.env" ] && set -a && source "%s/.env" && set +a\n' "${SERVER_DIR}" "${SERVER_DIR}"
+    printf 'export PGPASSWORD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+    printf 'export MYSQL_PWD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+    printf 'export REDISCLI_AUTH="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+
+    case "${PROJECT_TYPE}" in
+        mariadb|mysql)
+            printf 'alias db-cli="mysql -h 127.0.0.1 -P %s -u %s -p\"%s\" %s"\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${DB_NAME}"
+            ;;
+        postgresql|postgres)
+            printf 'alias db-cli="psql -h 127.0.0.1 -p %s -U %s -d %s"\n' "${SERVER_PORT}" "${DB_USER:-postgres}" "${DB_NAME:-postgres}"
+            ;;
+        redis|valkey|keydb|dragonfly)
+            printf 'alias db-cli="redis-cli -h 127.0.0.1 -p %s -a \"%s\""\n' "${SERVER_PORT}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+            ;;
+        mongodb|ferretdb)
+            printf 'alias db-cli="mongosh \"mongodb://%s:%s@127.0.0.1:%s/%s?authSource=admin\""\n' "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${SERVER_PORT}" "${DB_NAME}"
+            ;;
+        surrealdb)
+            printf 'alias db-cli="surreal sql --endpoint http://127.0.0.1:%s --user %s --pass \"%s\""\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+            ;;
+    esac
+} > "${SERVER_DIR}/.profile" 2>/dev/null || true
+cp -f "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
+chmod 600 "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
 
 # ---------------------------------------------------------------------------
 # Startup banner (Compact Slant font, clean ANSI gradient)
