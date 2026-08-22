@@ -5,12 +5,63 @@
 
 init_storage_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    mkdir -p "${data_dir}" "${SERVER_DIR}/logs"
+    local conf_dir="${SERVER_DIR}/config"
+    mkdir -p "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
     chmod 700 "${data_dir}" 2>/dev/null || true
+
+    if [ "${PROJECT_TYPE}" = "clickhouse" ] && [ ! -f "${conf_dir}/clickhouse.xml" ]; then
+        log "Generating ClickHouse server configuration..."
+        cat <<EOF > "${conf_dir}/clickhouse.xml"
+<clickhouse>
+    <logger>
+        <level>information</level>
+        <log>${SERVER_DIR}/logs/clickhouse.log</log>
+        <errorlog>${SERVER_DIR}/logs/clickhouse.err.log</errorlog>
+        <size>100M</size>
+        <count>5</count>
+    </logger>
+    <http_port>${SERVER_PORT}</http_port>
+    <tcp_port>${TCP_PORT:-$((SERVER_PORT + 1))}</tcp_port>
+    <listen_host>0.0.0.0</listen_host>
+    <max_connections>100</max_connections>
+    <path>${data_dir}/</path>
+    <tmp_path>${data_dir}/tmp/</tmp_path>
+    <user_files_path>${data_dir}/user_files/</user_files_path>
+    <users_config>${conf_dir}/users.xml</users_config>
+</clickhouse>
+EOF
+        cat <<EOF > "${conf_dir}/users.xml"
+<clickhouse>
+    <users>
+        <default>
+            <password>${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}</password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+        </default>
+    </users>
+    <profiles>
+        <default />
+    </profiles>
+    <quotas>
+        <default />
+    </quotas>
+</clickhouse>
+EOF
+        ok "Generated ClickHouse configuration."
+    fi
 }
 
 start_storage_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local conf_dir="${SERVER_DIR}/config"
+
+    # Self-healing check
+    if [ ! -d "${data_dir}" ]; then
+        init_storage_family
+    fi
 
     case "${PROJECT_TYPE}" in
         pocketbase)
@@ -43,8 +94,11 @@ start_storage_family() {
             exec influxd ${EXTRA_ARGS:-}
             ;;
         clickhouse)
+            if [ ! -f "${conf_dir}/clickhouse.xml" ]; then
+                init_storage_family
+            fi
             log "Starting ClickHouse Server on 0.0.0.0:${SERVER_PORT}..."
-            exec clickhouse-server --config-file="${SERVER_DIR}/config/clickhouse.xml" ${EXTRA_ARGS:-}
+            exec clickhouse-server --config-file="${conf_dir}/clickhouse.xml" ${EXTRA_ARGS:-}
             ;;
         victoriametrics)
             local vm_bin="victoriametrics"

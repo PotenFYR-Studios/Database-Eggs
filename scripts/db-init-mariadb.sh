@@ -154,6 +154,14 @@ EOSQL
 start_mariadb_mysql() {
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
+    local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+
+    # Self-healing check: if configuration or data is missing, run init
+    if [ ! -f "${my_cnf}" ] || [ ! -d "${data_dir}/mysql" ]; then
+        warn "Configuration or data files missing. Initializing MariaDB storage..."
+        init_mariadb_mysql
+    fi
+
     local daemon_bin="mysqld"
     command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
 
