@@ -13,10 +13,30 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-log()  { echo -e "\033[1m\033[36m[install]\033[0m $*"; }
-ok()   { echo -e "\033[1m\033[32m[install][OK]\033[0m $*"; }
-warn() { echo -e "\033[1m\033[33m[install][warn]\033[0m $*"; }
-fail() { echo -e "\033[1m\033[31m[install][ERROR]\033[0m $*"; exit 1; }
+C_RESET='\033[0m'
+C_BOLD='\033[1m'
+C_CYAN='\033[36m'
+C_GREEN='\033[32m'
+C_YELLOW='\033[33m'
+C_RED='\033[31m'
+C_BLUE='\033[34m'
+C_MAGENTA='\033[35m'
+C_DIM='\033[2m'
+
+log()  { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} %s\n" "$*"; }
+ok()   { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_GREEN}${C_BOLD}[ok]${C_RESET} %s\n" "$*"; }
+warn() { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_YELLOW}${C_BOLD}[warn]${C_RESET} %s\n" "$*"; }
+fail() { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*"; exit 1; }
+
+# Startup banner (Compact Slant font, clean ANSI gradient)
+printf "\n"
+printf "${C_CYAN}${C_BOLD}   __  ___      ____  _       ____  ____     ${C_RESET}\n"
+printf "${C_CYAN}${C_BOLD}  /  |/  /_  __/ / /_(_)     / __ \\/ __ )    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD} / /|_/ / / / / / __/ /_____/ / / / __  |    ${C_RESET}\n"
+printf "${C_BLUE}${C_BOLD}/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     ${C_RESET}\n"
+printf "${C_MAGENTA}${C_BOLD}/_/  /_/\\__,_/_/\\__/_/     /_____/_____/      ${C_RESET}\n"
+printf "${C_YELLOW}${C_BOLD}  » Universal Multi-Database Server Installer${C_RESET}\n"
+printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
 
 ARCH=$(uname -m)
 case "${ARCH}" in
