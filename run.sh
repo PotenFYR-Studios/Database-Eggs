@@ -30,35 +30,45 @@ fail()  {
 }
 
 # Diagnostic Error Trap
-error_trap() {
-    local exit_code=$?
-    local line_no=$1
-    local last_cmd="${BASH_COMMAND}"
+print_crash_diagnostics() {
+    local exit_code=$1
+    local line_no=$2
+    local last_cmd="$3"
+
     if [ ${exit_code} -ne 0 ] && [ ${exit_code} -ne 130 ] && [ ${exit_code} -ne 143 ]; then
         printf "\n${C_RED}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n" >&2
-        printf "${C_RED}${C_BOLD}│  ✗ DATABASE LAUNCH CRASH DETECTED                           │${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}│  ✗ CRITICAL DATABASE CRASH DIAGNOSTIC REPORT                │${C_RESET}\n" >&2
         printf "${C_RED}${C_BOLD}├─────────────────────────────────────────────────────────────┤${C_RESET}\n" >&2
         printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Exit Code" "${exit_code}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})" >&2
         printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Source Line" "run.sh:L${line_no}" >&2
         printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Failed Command" "${last_cmd:0:36}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Memory Limit" "${SERVER_MEMORY:-?} MB" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Allocated Port" "${SERVER_PORT:-?}" >&2
         printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Diagnostic Log" "logs/startup_error.log" >&2
         printf "${C_RED}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n" >&2
 
         mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
         {
-            printf '=== RUNTIME CRASH REPORT (%s) ===\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            printf 'Exit Code: %s\n' "${exit_code}"
-            printf 'Script Line: %s\n' "${line_no}"
-            printf 'Command: %s\n' "${last_cmd}"
-            printf 'Working Directory: %s\n' "${SERVER_DIR:-$(pwd)}"
-            printf 'Database Engine: %s (v%s)\n' "${PROJECT_TYPE:-mariadb}" "${DB_VERSION:-latest}"
-            printf 'Allocated Port: %s\n' "${SERVER_PORT:-?}"
-            printf '================================================\n'
+            printf '=== CRASH DIAGNOSTICS (%s) ===\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+            printf 'Exit Code: %s\nLine: %s\nCommand: %s\n' "${exit_code}" "${line_no}" "${last_cmd}"
+            printf 'Engine: %s (v%s)\nPort: %s\nMemory: %s MB\n' "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_PORT:-?}" "${SERVER_MEMORY:-?}"
+            printf 'Disk Space:\n%s\n' "$(df -h "${SERVER_DIR}" 2>/dev/null || true)"
+            printf 'Recent Logs:\n'
+            for lf in "${SERVER_DIR}/logs"/*.log; do
+                if [ -f "${lf}" ]; then
+                    printf '--- %s ---\n' "$(basename "${lf}")"
+                    tail -n 20 "${lf}" 2>/dev/null || true
+                fi
+            done
+            printf '=======================================\n'
         } >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
-        sleep 6
+
+        # 5-second console grace period for panel stream synchronization
+        sleep 5
     fi
 }
-trap 'error_trap $LINENO' ERR
+trap 'print_crash_diagnostics $? $LINENO "${BASH_COMMAND}"' ERR
 
 if [ -d /home/container ]; then
     cd /home/container 2>/dev/null || true
@@ -69,7 +79,22 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
+# Build isolated workspace environment
+build_isolated_environment() {
+    local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local conf_dir="${SERVER_DIR}/config"
+    local log_dir="${SERVER_DIR}/logs"
+    local run_dir="${SERVER_DIR}/run"
+    local bin_dir="${SERVER_DIR}/bin"
+    local runtimes_dir="${SERVER_DIR}/.runtimes"
+
+    mkdir -p "${data_dir}" "${conf_dir}" "${log_dir}" "${run_dir}" "${bin_dir}" "${runtimes_dir}"
+    chmod 755 "${SERVER_DIR}" "${conf_dir}" "${log_dir}" "${bin_dir}" "${runtimes_dir}" 2>/dev/null || true
+    chmod 700 "${data_dir}" "${run_dir}" 2>/dev/null || true
+}
+build_isolated_environment
+
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/.runtimes/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
 
 # Source .env if available to load active credentials and parameters
 if [ -f "${SERVER_DIR}/.env" ]; then
@@ -86,10 +111,17 @@ export REDISCLI_AUTH="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
 export MONGO_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
 export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
 
-# Source all modular initialization handlers & performance tuning safely from image or isolated runtime
-for script in /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh /tmp/.database-runtime/db-init-*.sh /tmp/.database-runtime/performance-*.sh "${SERVER_DIR}/scripts"/db-init-*.sh; do
+# Source all modular initialization handlers, performance tuning, and companion loader
+for script in /usr/local/bin/companion-loader.sh /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh \
+              /tmp/.database-runtime/companion-loader.sh /tmp/.database-runtime/db-init-*.sh /tmp/.database-runtime/performance-*.sh \
+              "${SERVER_DIR}/scripts"/companion-loader.sh "${SERVER_DIR}/scripts"/db-init-*.sh; do
     [ -f "${script}" ] && source "${script}" 2>/dev/null || true
 done
+
+# Dynamic companion injection (Python, Node.js, Litestream, Rclone, AWS CLI, Database CLIs)
+if command -v load_companions >/dev/null 2>&1; then
+    load_companions
+fi
 
 PROJECT_TYPE=$(echo "${DB_TYPE:-${DATABASE_TYPE:-mariadb}}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"

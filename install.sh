@@ -79,7 +79,7 @@ if ! command -v curl >/dev/null 2>&1 || ! command -v tar >/dev/null 2>&1; then
 fi
 
 # Clean directories for user files
-mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/bin"
+mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/run" "${SERVER_DIR}/bin" "${SERVER_DIR}/.runtimes"
 
 # Remove any obsolete scripts that might have been copied from older egg versions
 rm -f "${SERVER_DIR}/run.sh" "${SERVER_DIR}/entrypoint.sh" 2>/dev/null || true

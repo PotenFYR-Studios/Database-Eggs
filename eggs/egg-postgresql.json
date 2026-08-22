@@ -12,9 +12,8 @@
         "pid_limit"
     ],
     "docker_images": {
-        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-        "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
-        "Ubuntu 22.04 LTS": "ubuntu:22.04"
+        "PostgreSQL (Lean)": "ghcr.io/potenfyr-studios/database-eggs:postgres",
+        "Universal": "ghcr.io/potenfyr-studios/database-eggs:latest"
     },
     "file_denylist": [],
     "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | bash; fi",
@@ -110,6 +109,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Smart Companion & Extra Runtimes",
+            "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
+            "env_variable": "EXTRA_RUNTIMES",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:256",
             "field_type": "text"
         }
     ]
