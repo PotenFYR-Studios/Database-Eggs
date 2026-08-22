@@ -31,7 +31,7 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
 
 # Source all modular initialization handlers & performance tuning safely
 for script in "${SERVER_DIR}/scripts"/db-init-*.sh "${SERVER_DIR}/scripts"/performance-*.sh /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh; do

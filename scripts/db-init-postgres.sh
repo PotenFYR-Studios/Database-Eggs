@@ -4,6 +4,8 @@
 #  Includes Automatic Performance Tuning and Production Security Hardening
 # =============================================================================
 
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${PATH}"
+
 init_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
@@ -32,7 +34,14 @@ init_postgres() {
         printf '%s' "${DB_ROOT_PASSWORD}" > "${pwfile}"
         chmod 600 "${pwfile}"
 
-        initdb -D "${data_dir}" \
+        local initdb_bin="initdb"
+        if ! command -v initdb >/dev/null 2>&1; then
+            local found_initdb
+            found_initdb=$(find /usr/lib/postgresql -name initdb -type f 2>/dev/null | tail -n 1)
+            [ -n "${found_initdb}" ] && initdb_bin="${found_initdb}"
+        fi
+
+        "${initdb_bin}" -D "${data_dir}" \
                -U "${POSTGRES_USER:-postgres}" \
                --pwfile="${pwfile}" \
                --auth-local=trust \
@@ -95,7 +104,14 @@ EOF
     # If first run, create application DB, user, and extensions
     if [ "${first_run}" -eq 1 ]; then
         log "Starting temporary PostgreSQL daemon to provision database and users..."
-        pg_ctl -D "${data_dir}" -o "-k ${socket_dir} -p ${SERVER_PORT}" -w start >/dev/null 2>&1
+        local pg_ctl_bin="pg_ctl"
+        if ! command -v pg_ctl >/dev/null 2>&1; then
+            local found_pg_ctl
+            found_pg_ctl=$(find /usr/lib/postgresql -name pg_ctl -type f 2>/dev/null | tail -n 1)
+            [ -n "${found_pg_ctl}" ] && pg_ctl_bin="${found_pg_ctl}"
+        fi
+
+        "${pg_ctl_bin}" -D "${data_dir}" -o "-k ${socket_dir} -p ${SERVER_PORT}" -w start >/dev/null 2>&1
 
         local superuser="${POSTGRES_USER:-postgres}"
 
@@ -124,7 +140,7 @@ EOSQL
         ok "Loaded standard PostgreSQL extensions (uuid-ossp, pg_trgm, vector if available)."
 
         log "Shutting down temporary PostgreSQL daemon..."
-        pg_ctl -D "${data_dir}" -w stop >/dev/null 2>&1
+        "${pg_ctl_bin}" -D "${data_dir}" -w stop >/dev/null 2>&1
         ok "PostgreSQL initial provisioning completed."
     fi
 }
@@ -133,6 +149,13 @@ start_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local socket_dir="${SERVER_DIR}/socket"
 
+    local pg_bin="postgres"
+    if ! command -v postgres >/dev/null 2>&1; then
+        local found_pg
+        found_pg=$(find /usr/lib/postgresql -name postgres -type f 2>/dev/null | tail -n 1)
+        [ -n "${found_pg}" ] && pg_bin="${found_pg}"
+    fi
+
     log "Starting PostgreSQL on 0.0.0.0:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."
-    exec postgres -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "0.0.0.0" ${EXTRA_ARGS:-}
+    exec "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "0.0.0.0" ${EXTRA_ARGS:-}
 }

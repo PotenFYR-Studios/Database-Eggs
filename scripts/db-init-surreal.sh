@@ -11,7 +11,10 @@ init_surreal_family() {
 
 start_surreal_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    local storage="${SURREAL_STORAGE:-file://${data_dir}/surreal.db}"
+    local storage="${SURREAL_STORAGE:-surrealkv://${data_dir}}"
+    # Automatically convert deprecated file:// storage scheme to modern surrealkv://
+    storage="${storage/#file:\/\//surrealkv://}"
+
     local user="${DB_USER:-${SURREAL_USER:-root}}"
     local pass="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-${SURREAL_PASS:-root}}}"
     local log_level="${SURREAL_LOG:-info}"
