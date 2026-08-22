@@ -83,12 +83,28 @@ EOF
         first_run=1
         log "First run detected. Initializing database storage in ${data_dir}..."
 
-        mariadb-install-db --basedir=/usr --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db >/dev/null 2>&1 || \
-        mariadb-install-db --datadir="${data_dir}" --skip-test-db >/dev/null 2>&1 || \
-        mysql_install_db --basedir=/usr --datadir="${data_dir}" >/dev/null 2>&1 || \
-        mysqld --initialize-insecure --basedir=/usr --datadir="${data_dir}" >/dev/null 2>&1 || true
+        local init_out=""
+        local init_ok=0
 
-        ok "Storage initialized."
+        if command -v mariadb-install-db >/dev/null 2>&1; then
+            init_out=$(mariadb-install-db --basedir=/usr --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db 2>&1) && init_ok=1
+            if [ ${init_ok} -eq 0 ]; then
+                init_out=$(mariadb-install-db --datadir="${data_dir}" --skip-test-db 2>&1) && init_ok=1
+            fi
+        elif command -v mysql_install_db >/dev/null 2>&1; then
+            init_out=$(mysql_install_db --basedir=/usr --datadir="${data_dir}" 2>&1) && init_ok=1
+        elif command -v mysqld >/dev/null 2>&1; then
+            init_out=$(mysqld --initialize-insecure --basedir=/usr --datadir="${data_dir}" 2>&1) && init_ok=1
+        fi
+
+        if [ -d "${data_dir}/mysql" ] || [ -f "${data_dir}/ibdata1" ]; then
+            ok "MariaDB/MySQL storage initialized successfully."
+        else
+            error "MariaDB/MySQL storage initialization failed."
+            error "Detailed installer output:"
+            printf '%s\n' "${init_out}" >&2
+            fail "Fatal: Failed to initialize database storage in ${data_dir}."
+        fi
     fi
 
     # If first run, apply security hardening and user creation
@@ -97,12 +113,21 @@ EOF
         local daemon_bin="mysqld"
         command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
 
-        "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --socket="${socket_path}" &
+        local init_log="${SERVER_DIR}/logs/mariadb_init.log"
+        "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --socket="${socket_path}" > "${init_log}" 2>&1 &
         local tmp_pid=$!
 
         # Wait for socket
         local retries=30
         while [ ! -S "${socket_path}" ] && [ "${retries}" -gt 0 ]; do
+            if ! kill -0 "${tmp_pid}" 2>/dev/null; then
+                error "Temporary MariaDB daemon exited prematurely."
+                if [ -f "${init_log}" ]; then
+                    error "Recent daemon log output:"
+                    tail -n 25 "${init_log}" >&2
+                fi
+                fail "Fatal: MariaDB initialization daemon crashed."
+            fi
             sleep 1
             retries=$((retries - 1))
         done
@@ -143,7 +168,8 @@ EOSQL
             kill -s TERM "${tmp_pid}" 2>/dev/null || true
             wait "${tmp_pid}" 2>/dev/null || true
         else
-            warn "Could not connect to temporary socket. Proceeding to main daemon start."
+            warn "Could not connect to temporary socket. Checking init log..."
+            [ -f "${init_log}" ] && tail -n 20 "${init_log}" >&2
             kill -s 9 "${tmp_pid}" 2>/dev/null || true
         fi
         rm -f "${socket_path}" "${pid_path}"

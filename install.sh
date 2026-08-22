@@ -26,7 +26,28 @@ C_DIM='\033[2m'
 log()  { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} %s\n" "$*"; }
 ok()   { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_GREEN}${C_BOLD}[ok]${C_RESET} %s\n" "$*"; }
 warn() { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_YELLOW}${C_BOLD}[warn]${C_RESET} %s\n" "$*"; }
-fail() { printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*"; exit 1; }
+error(){ printf "${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*" >&2; }
+fail() {
+    printf "\n${C_CYAN}${C_BOLD}[install]${C_RESET} ${C_RED}${C_BOLD}[fatal error]${C_RESET} %s\n\n" "$*" >&2
+    exit 1
+}
+
+# Diagnostic Error Trap
+error_trap() {
+    local exit_code=$?
+    local line_no=$1
+    local last_cmd="${BASH_COMMAND}"
+    if [ ${exit_code} -ne 0 ]; then
+        printf "\n${C_RED}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}│  ✗ INSTALLATION STEP FAILED                                 │${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}├─────────────────────────────────────────────────────────────┤${C_RESET}\n" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Exit Code" "${exit_code}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Source Line" "install.sh:L${line_no}" >&2
+        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Failed Command" "${last_cmd:0:36}" >&2
+        printf "${C_RED}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n" >&2
+    fi
+}
+trap 'error_trap $LINENO' ERR
 
 # Startup banner (Compact Slant font, clean ANSI gradient)
 printf "\n"
