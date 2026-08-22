@@ -61,7 +61,6 @@ max_heap_table_size=64M
 
 # Security Hardening
 skip-name-resolve
-skip-host-cache
 symbolic-links=0
 local-infile=0
 
@@ -84,15 +83,11 @@ EOF
         first_run=1
         log "First run detected. Initializing database storage in ${data_dir}..."
 
-        if command -v mariadb-install-db >/dev/null 2>&1; then
-            mariadb-install-db --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db >/dev/null 2>&1 || mariadb-install-db --datadir="${data_dir}" >/dev/null 2>&1
-        elif command -v mysql_install_db >/dev/null 2>&1; then
-            mysql_install_db --datadir="${data_dir}" >/dev/null 2>&1
-        elif command -v mysqld >/dev/null 2>&1; then
-            mysqld --initialize-insecure --datadir="${data_dir}" >/dev/null 2>&1
-        else
-            warn "MySQL/MariaDB binaries not in default PATH. Checking dynamic fallback..."
-        fi
+        mariadb-install-db --basedir=/usr --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db >/dev/null 2>&1 || \
+        mariadb-install-db --datadir="${data_dir}" --skip-test-db >/dev/null 2>&1 || \
+        mysql_install_db --basedir=/usr --datadir="${data_dir}" >/dev/null 2>&1 || \
+        mysqld --initialize-insecure --basedir=/usr --datadir="${data_dir}" >/dev/null 2>&1 || true
+
         ok "Storage initialized."
     fi
 
