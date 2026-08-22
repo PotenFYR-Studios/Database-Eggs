@@ -13,7 +13,23 @@ mkdir -p "${INSTALL_DIR}"
 log()  { echo -e "\033[1m\033[36m[version-installer]\033[0m $*"; }
 ok()   { echo -e "\033[1m\033[32m[version-installer][OK]\033[0m $*"; }
 warn() { echo -e "\033[1m\033[33m[version-installer][warn]\033[0m $*"; }
-fail() { echo -e "\033[1m\033[31m[version-installer][ERROR]\033[0m $*"; exit 1; }
+fail() {
+    echo -e "\033[1m\033[31m[version-installer][ERROR]\033[0m $*" >&2
+    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
+    printf '[%s] INSTALLER ERROR: %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*" >> "${SERVER_DIR:-.}/logs/installer.log" 2>/dev/null || true
+    exit 1
+}
+
+# Diagnostic Error Trap
+error_trap() {
+    local exit_code=$?
+    local line_no=$1
+    local last_cmd="${BASH_COMMAND}"
+    if [ ${exit_code} -ne 0 ]; then
+        printf "\n\033[1;31m[version-installer] ERROR at Line %s (Exit Code: %s, Command: %s)\033[0m\n" "${line_no}" "${exit_code}" "${last_cmd}" >&2
+    fi
+}
+trap 'error_trap $LINENO' ERR
 
 ARCH=$(uname -m)
 case "${ARCH}" in

@@ -66,14 +66,31 @@ EOF
         first_run=1
         log "First run detected. Initializing MongoDB authentication..."
 
+        local init_log="${SERVER_DIR}/logs/mongod_init.log"
         # Start temporary mongod without auth bound strictly to local loopback
-        mongod --port "${SERVER_PORT}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --logpath "${SERVER_DIR}/logs/mongod_init.log" --fork
+        mongod --port "${SERVER_PORT}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --logpath "${init_log}" --fork >/dev/null 2>&1
+        local fork_status=$?
+
+        if [ ${fork_status} -ne 0 ]; then
+            error "Failed to start temporary MongoDB initialization daemon."
+            [ -f "${init_log}" ] && tail -n 25 "${init_log}" >&2
+            fail "Fatal: MongoDB temporary initialization daemon failed to fork."
+        fi
 
         local retries=30
         while ! mongosh --port "${SERVER_PORT}" --eval "db.adminCommand('ping')" >/dev/null 2>&1 && [ "${retries}" -gt 0 ]; do
             sleep 1
             retries=$((retries - 1))
         done
+
+        if [ "${retries}" -le 0 ]; then
+            error "Timed out waiting for temporary MongoDB daemon to respond."
+            if [ -f "${init_log}" ]; then
+                error "Recent mongod_init.log output:"
+                tail -n 25 "${init_log}" >&2
+            fi
+            fail "Fatal: MongoDB initialization timeout."
+        fi
 
         log "Creating admin superuser..."
         mongosh --port "${SERVER_PORT}" admin >/dev/null 2>&1 <<EOSCRIPT
