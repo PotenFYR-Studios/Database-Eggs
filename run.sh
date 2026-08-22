@@ -31,10 +31,10 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
 
-# Source all modular initialization handlers & performance tuning safely
-for script in "${SERVER_DIR}/scripts"/db-init-*.sh "${SERVER_DIR}/scripts"/performance-*.sh /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh; do
+# Source all modular initialization handlers & performance tuning safely from image or isolated runtime
+for script in /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh /tmp/.database-runtime/db-init-*.sh /tmp/.database-runtime/performance-*.sh "${SERVER_DIR}/scripts"/db-init-*.sh; do
     [ -f "${script}" ] && source "${script}" 2>/dev/null || true
 done
 
@@ -57,18 +57,27 @@ ensure_engine_binary() {
         ferretdb) bin_needed="ferretdb" ;;
     esac
 
+    local installer_bin=""
+    if [ -x /usr/local/bin/install-db-version.sh ]; then
+        installer_bin="/usr/local/bin/install-db-version.sh"
+    elif [ -x /tmp/.database-runtime/install-db-version.sh ]; then
+        installer_bin="/tmp/.database-runtime/install-db-version.sh"
+    elif [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ]; then
+        installer_bin="${SERVER_DIR}/scripts/install-db-version.sh"
+    fi
+
     if [ -n "${bin_needed}" ]; then
         if ! command -v "${bin_needed}" >/dev/null 2>&1 && [ ! -x "${SERVER_DIR}/bin/${bin_needed}" ]; then
             log "Binary '${bin_needed}' not detected in system. Auto-installing on container..."
-            if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ]; then
-                "${SERVER_DIR}/scripts/install-db-version.sh" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin" || true
+            if [ -n "${installer_bin}" ]; then
+                "${installer_bin}" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin" || true
             fi
         fi
     fi
 
-    if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
+    if [ -n "${installer_bin}" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
         log "Checking requested version for ${engine} (v${DB_VERSION})..."
-        "${SERVER_DIR}/scripts/install-db-version.sh" "${engine}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
+        "${installer_bin}" "${engine}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
     fi
 }
 

@@ -33,42 +33,42 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
+# Create clean user directory tree
+mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/bin"
 
-# Initialize local directory tree
-mkdir -p "${SERVER_DIR}/bin" "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/scripts"
-
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
-
-# Self-Healing: Ensure run.sh is present locally in server dir
-if [ ! -f "${SERVER_DIR}/run.sh" ]; then
-    if [ -f /usr/local/bin/run.sh ]; then
-        cp -f /usr/local/bin/run.sh "${SERVER_DIR}/run.sh" 2>/dev/null || true
-    else
-        log "Downloading run.sh from repository..."
-        curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${SERVER_DIR}/run.sh" 2>/dev/null || true
-    fi
+# Backward-Compatibility & Cleanup:
+# Remove obsolete root scripts copied by previous egg versions so old servers run cleanly on latest image scripts
+if [ -f "${SERVER_DIR}/run.sh" ] && [ -f /usr/local/bin/run.sh ]; then
+    rm -f "${SERVER_DIR}/run.sh" 2>/dev/null || true
 fi
-chmod +x "${SERVER_DIR}/run.sh" 2>/dev/null || true
+if [ -f "${SERVER_DIR}/entrypoint.sh" ] && [ -f /entrypoint.sh ]; then
+    rm -f "${SERVER_DIR}/entrypoint.sh" 2>/dev/null || true
+fi
+if [ -d "${SERVER_DIR}/scripts" ] && [ -f /usr/local/bin/password-gen.sh ]; then
+    rm -rf "${SERVER_DIR}/scripts" 2>/dev/null || true
+fi
 
-# Self-Healing: Ensure all modular scripts are present locally
-if [ ! -f "${SERVER_DIR}/scripts/password-gen.sh" ]; then
-    if [ -d /usr/local/bin ] && ls /usr/local/bin/db-init-*.sh >/dev/null 2>&1; then
-        cp -rf /usr/local/bin/*.sh "${SERVER_DIR}/scripts/" 2>/dev/null || true
-    else
-        log "Downloading modular database handlers..."
+# Fallback bootstrap for generic images (only when not running the official pre-baked image)
+RUNTIME_DIR="/usr/local/bin"
+if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
+    RUNTIME_DIR="/tmp/.database-runtime"
+    mkdir -p "${RUNTIME_DIR}"
+    if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
+        log "Bootstrapping runtime components into isolated runtime space..."
+        REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
+        curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
         for h in password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
-            curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${SERVER_DIR}/scripts/${h}" 2>/dev/null || true
+            curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${RUNTIME_DIR}/${h}" 2>/dev/null || true
         done
+        chmod +x "${RUNTIME_DIR}"/*.sh 2>/dev/null || true
     fi
 fi
-chmod -R 755 "${SERVER_DIR}/scripts" "${SERVER_DIR}/bin" 2>/dev/null || true
 
-# Source performance and helper scripts if present
-[ -f "${SERVER_DIR}/scripts/performance-tuning.sh" ] && source "${SERVER_DIR}/scripts/performance-tuning.sh" 2>/dev/null || true
-[ -f /usr/local/bin/performance-tuning.sh ] && source /usr/local/bin/performance-tuning.sh 2>/dev/null || true
-[ -f "${SERVER_DIR}/scripts/password-gen.sh" ] && source "${SERVER_DIR}/scripts/password-gen.sh" 2>/dev/null || true
-[ -f /usr/local/bin/password-gen.sh ] && source /usr/local/bin/password-gen.sh 2>/dev/null || true
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${RUNTIME_DIR}:/usr/local/bin:${PATH}"
+
+# Source performance and helper scripts safely
+[ -f "${RUNTIME_DIR}/performance-tuning.sh" ] && source "${RUNTIME_DIR}/performance-tuning.sh" 2>/dev/null || true
+[ -f "${RUNTIME_DIR}/password-gen.sh" ] && source "${RUNTIME_DIR}/password-gen.sh" 2>/dev/null || true
 
 # Default Timezone
 TZ="${TZ:-UTC}"
@@ -190,7 +190,7 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
 
     # Generate user environment shortcuts for easy terminal CLI usage
     {
-        printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s/scripts:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${SERVER_DIR}"
+        printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
         printf 'export DB_CONNECTION="%s"\n' "${PROJECT_TYPE}"
         printf 'export DB_HOST="127.0.0.1"\n'
         printf 'export DB_PORT="%s"\n' "${SERVER_PORT}"
@@ -247,32 +247,16 @@ printf "${C_CYAN}${C_BOLD}└─────────────────
 
 log "Executing startup launcher..."
 
-# Execute run.sh or custom launcher
+# Execute run.custom.sh if user explicitly provided one, otherwise execute canonical image launcher
 if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     log "Custom launcher detected (run.custom.sh). Executing..."
     chmod +x "${SERVER_DIR}/run.custom.sh"
     exec "${SERVER_DIR}/run.custom.sh"
-elif [ -f "${SERVER_DIR}/run.sh" ]; then
-    chmod +x "${SERVER_DIR}/run.sh"
-    exec "${SERVER_DIR}/run.sh"
+elif [ -f "${RUNTIME_DIR}/run.sh" ]; then
+    chmod +x "${RUNTIME_DIR}/run.sh"
+    exec "${RUNTIME_DIR}/run.sh"
 elif [ -f /usr/local/bin/run.sh ]; then
     exec /usr/local/bin/run.sh
 else
-    # Auto-generate local run.sh if completely missing
-    log "Starting server dispatcher directly..."
-    if [ -f "${SERVER_DIR}/scripts/db-init-mariadb.sh" ] || [ -f /usr/local/bin/db-init-mariadb.sh ]; then
-        for script in "${SERVER_DIR}/scripts"/db-init-*.sh /usr/local/bin/db-init-*.sh; do
-            [ -f "${script}" ] && source "${script}" 2>/dev/null || true
-        done
-    fi
-    case "${PROJECT_TYPE}" in
-        mariadb|mysql) init_mariadb_mysql; start_mariadb_mysql ;;
-        postgresql|postgres) init_postgres; start_postgres ;;
-        redis|valkey|keydb|dragonfly|memcached) init_redis_family; start_redis_family ;;
-        mongodb|ferretdb) init_mongo_family; start_mongo_family ;;
-        surrealdb) init_surreal_family; start_surreal_family ;;
-        meilisearch|typesense|qdrant) init_search_family; start_search_family ;;
-        pocketbase|minio|influxdb|clickhouse|victoriametrics) init_storage_family; start_storage_family ;;
-        *) exec "$@" ;;
-    esac
+    fail "Runtime launcher not found."
 fi
