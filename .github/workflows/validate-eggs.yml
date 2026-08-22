@@ -30,7 +30,7 @@ jobs:
 
       - name: Lint Shell Scripts
         run: |
-          for sh_file in *.sh scripts/*.sh; do
+          for sh_file in *.sh scripts/*.sh tests/*.sh; do
             if [ -f "${sh_file}" ]; then
               echo "Checking syntax of ${sh_file}..."
               bash -n "${sh_file}"
