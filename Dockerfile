@@ -50,23 +50,40 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Download pre-built standalone database binaries
 RUN case "${TARGETARCH}" in \
-        "amd64") \
+        "amd64"|"") \
+            # SurrealDB \
             curl -fsSL https://install.surrealdb.com | sh \
             && mv /root/.surrealdb/surreal /usr/local/bin/surreal || true; \
+            # Meilisearch \
             curl -fsSL https://get.meilisearch.com | sh \
             && mv meilisearch /usr/local/bin/meilisearch || true; \
+            # MinIO \
             curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-amd64/minio \
             && chmod +x /usr/local/bin/minio || true; \
+            # PocketBase \
+            curl -fsSL -o /tmp/pb.zip https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_amd64.zip \
+            && unzip -q /tmp/pb.zip -d /tmp/pb && mv /tmp/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /tmp/pb* || true; \
+            # Qdrant \
+            curl -fsSL https://github.com/qdrant/qdrant/releases/download/v1.12.1/qdrant-x86_64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin/ || true; \
             ;; \
         "arm64") \
+            # SurrealDB \
             curl -fsSL https://install.surrealdb.com | sh \
             && mv /root/.surrealdb/surreal /usr/local/bin/surreal || true; \
+            # Meilisearch \
             curl -fsSL https://get.meilisearch.com | sh \
             && mv meilisearch /usr/local/bin/meilisearch || true; \
+            # MinIO \
             curl -fsSL -o /usr/local/bin/minio https://dl.min.io/server/minio/release/linux-arm64/minio \
             && chmod +x /usr/local/bin/minio || true; \
+            # PocketBase \
+            curl -fsSL -o /tmp/pb.zip https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_arm64.zip \
+            && unzip -q /tmp/pb.zip -d /tmp/pb && mv /tmp/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /tmp/pb* || true; \
+            # Qdrant \
+            curl -fsSL https://github.com/qdrant/qdrant/releases/download/v1.12.1/qdrant-aarch64-unknown-linux-gnu.tar.gz | tar -xz -C /usr/local/bin/ || true; \
             ;; \
-    esac
+    esac \
+    && chmod +x /usr/local/bin/pocketbase /usr/local/bin/qdrant /usr/local/bin/surreal /usr/local/bin/meilisearch /usr/local/bin/minio 2>/dev/null || true
 
 # Create container user (UID 988, GID 988)
 RUN groupadd -g 988 container \

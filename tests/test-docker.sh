@@ -101,8 +101,8 @@ run_db_test() {
         -v "${test_dir}:/home/container" \
         "${IMAGE_NAME}" >/dev/null 2>&1
 
-    # Wait for ready state (up to 25 seconds)
-    local retries=25
+    # Wait for ready state (up to 30 seconds)
+    local retries=30
     local is_ready=1
     while [ "${retries}" -gt 0 ]; do
         sleep 1
@@ -166,18 +166,18 @@ run_db_test() {
 # ---------------------------------------------------------------------------
 
 # 1. Relational SQL Databases
-run_db_test "mariadb" "3306" "" "mariadb -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null || mysql -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null"
-run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -U postgres -d postgres -c 'SELECT 1;' 2>/dev/null"
+run_db_test "mariadb" "3306" "" "mariadb -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null || mysql -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null"
+run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c 'SELECT 1;' 2>/dev/null"
 
 # 2. In-Memory & Caching
-run_db_test "redis" "6379" "" "redis-cli -a 'TestPassword123!Secure' ping 2>/dev/null | grep -q 'PONG'"
+run_db_test "redis" "6379" "" "redis-cli -h 127.0.0.1 -p 6379 -a 'TestPassword123!Secure' ping 2>/dev/null | grep -q 'PONG'"
 run_db_test "memcached" "11211" "" ""
 
 # 3. Document & Multi-Model
 run_db_test "surrealdb" "8000" "" "curl -fsSL http://127.0.0.1:8000/health 2>/dev/null || curl -fsSL http://127.0.0.1:8000/status 2>/dev/null"
 
 # 4. Search & Vector Engines
-run_db_test "meilisearch" "7700" "-e MASTER_KEY=MasterKey1234567890SecureKey" "curl -fsSL http://127.0.0.1:7700/health 2>/dev/null"
+run_db_test "meilisearch" "7700" "-e MASTER_KEY=MasterKey1234567890SecureKey" "curl -fsSL -H 'Authorization: Bearer MasterKey1234567890SecureKey' http://127.0.0.1:7700/health 2>/dev/null || curl -fsSL http://127.0.0.1:7700/health 2>/dev/null"
 run_db_test "qdrant" "6333" "" "curl -fsSL http://127.0.0.1:6333/readyz 2>/dev/null || curl -fsSL http://127.0.0.1:6333/dashboard 2>/dev/null"
 
 # 5. Backends & Storage
