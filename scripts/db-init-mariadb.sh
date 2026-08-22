@@ -8,14 +8,18 @@ init_mariadb_mysql() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
-    local socket_path="${SERVER_DIR}/mysql.sock"
-    local pid_path="${SERVER_DIR}/mysql.pid"
 
-    mkdir -p "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
-    chmod 700 "${data_dir}" 2>/dev/null || true
+    # Isolate unix sockets into /tmp/.db-sockets or fallback to internal socket dir
+    local socket_dir="/tmp/.db-sockets"
+    mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
+    mkdir -p "${socket_dir}" "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
+    chmod 700 "${socket_dir}" "${data_dir}" 2>/dev/null || true
+
+    local socket_path="${socket_dir}/mysql.sock"
+    local pid_path="${socket_dir}/mysql.pid"
 
     # Clean up any stale sockets or pid files from unclean shutdowns
-    rm -f "${socket_path}" "${pid_path}" "${data_dir}/*.pid" 2>/dev/null || true
+    rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "${data_dir}/*.pid" 2>/dev/null || true
 
     # Run dynamic performance auto-tuning if available
     if command -v tune_mariadb_mysql >/dev/null 2>&1; then
@@ -198,7 +202,7 @@ start_mariadb_mysql() {
     fi
 
     # Remove stale sockets before launching
-    rm -f "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" 2>/dev/null || true
+    rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "/tmp/.db-sockets/mysql.sock" 2>/dev/null || true
 
     log "Starting ${PROJECT_TYPE^^} on 0.0.0.0:${SERVER_PORT}..."
     exec "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-}
