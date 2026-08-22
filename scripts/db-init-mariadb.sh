@@ -111,7 +111,7 @@ EOF
             local client_bin="mysql"
             command -v mariadb >/dev/null 2>&1 && client_bin="mariadb"
 
-            "${client_bin}" -u root --socket="${socket_path}" 2>/dev/null <<EOSQL || true
+            "${client_bin}" -u root --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
 DELETE FROM mysql.user WHERE User='';
 DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
@@ -123,14 +123,14 @@ FLUSH PRIVILEGES;
 EOSQL
 
             if [ -n "${DB_NAME:-}" ]; then
-                "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" 2>/dev/null <<EOSQL || true
+                "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
 CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 EOSQL
                 ok "Created database \`${DB_NAME}\`"
             fi
 
             if [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
-                "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" 2>/dev/null <<EOSQL || true
+                "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
 GRANT ALL PRIVILEGES ON \`${DB_NAME:-*}\`.* TO '${DB_USER}'@'%';
