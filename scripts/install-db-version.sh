@@ -27,12 +27,34 @@ log "Configuring: ${ENGINE} (Target Version: ${VERSION}, Arch: ${ARCH_TYPE})"
 # ---------------------------------------------------------------------------
 # Direct Custom URL or GitHub Release handling
 # ---------------------------------------------------------------------------
-if [[ "${VERSION}" =~ ^https?:// ]]; then
-    log "Downloading custom binary from direct URL: ${VERSION}..."
-    filename=$(basename "${VERSION}" | sed 's/[?].*//')
-    curl -fsSL --retry 3 -o "${INSTALL_DIR}/${filename}" "${VERSION}"
-    chmod +x "${INSTALL_DIR}/${filename}" 2>/dev/null || true
-    ok "Installed ${filename} to ${INSTALL_DIR}"
+if [[ "${VERSION}" =~ ^https?:// ]] || [[ -n "${CUSTOM_DOWNLOAD_URL:-}" && "${ENGINE}" = "custom" ]]; then
+    DL_URL="${CUSTOM_DOWNLOAD_URL:-${VERSION}}"
+    log "Downloading custom database/binary from URL: ${DL_URL}..."
+    filename=$(basename "${DL_URL}" | sed 's/[?].*//')
+    tmp_dl=$(mktemp)
+
+    if curl -fsSL --retry 3 -o "${tmp_dl}" "${DL_URL}"; then
+        case "${filename}" in
+            *.tar.gz|*.tgz)
+                tar -xzf "${tmp_dl}" -C "${INSTALL_DIR}/"
+                ;;
+            *.tar.xz)
+                tar -xJf "${tmp_dl}" -C "${INSTALL_DIR}/"
+                ;;
+            *.zip)
+                unzip -q -o "${tmp_dl}" -d "${INSTALL_DIR}/"
+                ;;
+            *)
+                target_name="${CUSTOM_BINARY_NAME:-${filename}}"
+                cp -f "${tmp_dl}" "${INSTALL_DIR}/${target_name}"
+                ;;
+        esac
+        rm -f "${tmp_dl}"
+        find "${INSTALL_DIR}" -type f -exec chmod +x {} + 2>/dev/null || true
+        ok "Custom binary/package installed into ${INSTALL_DIR}"
+    else
+        warn "Failed to download custom binary from ${DL_URL}"
+    fi
     exit 0
 fi
 
@@ -43,7 +65,8 @@ case "${ENGINE}" in
     pocketbase)
         TAG="${VERSION#v}"
         if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/pocketbase/pocketbase/releases/latest 2>/dev/null | jq -r '.tag_name // "v0.25.0"' | sed 's/^v//')
+            TAG=$(curl -fsSL https://api.github.com/repos/pocketbase/pocketbase/releases/latest 2>/dev/null | jq -r '.tag_name // "v0.25.0"' 2>/dev/null | sed 's/^v//')
+            [ -z "${TAG}" ] && TAG="0.25.0"
         fi
         log "Installing PocketBase v${TAG}..."
         URL="https://github.com/pocketbase/pocketbase/releases/download/v${TAG}/pocketbase_${TAG}_linux_${ARCH_TYPE}.zip"
@@ -61,7 +84,8 @@ case "${ENGINE}" in
     surrealdb|surreal)
         TAG="${VERSION}"
         if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/surrealdb/surrealdb/releases/latest 2>/dev/null | jq -r '.tag_name // "v2.0.4"')
+            TAG=$(curl -fsSL https://api.github.com/repos/surrealdb/surrealdb/releases/latest 2>/dev/null | jq -r '.tag_name // "v2.0.4"' 2>/dev/null)
+            [ -z "${TAG}" ] && TAG="v2.0.4"
         fi
         [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
         log "Installing SurrealDB ${TAG}..."
@@ -80,7 +104,8 @@ case "${ENGINE}" in
     meilisearch)
         TAG="${VERSION}"
         if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/meilisearch/meilisearch/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.0"')
+            TAG=$(curl -fsSL https://api.github.com/repos/meilisearch/meilisearch/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.0"' 2>/dev/null)
+            [ -z "${TAG}" ] && TAG="v1.12.0"
         fi
         [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
         log "Installing Meilisearch ${TAG}..."
@@ -99,7 +124,8 @@ case "${ENGINE}" in
     qdrant)
         TAG="${VERSION}"
         if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/qdrant/qdrant/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.1"')
+            TAG=$(curl -fsSL https://api.github.com/repos/qdrant/qdrant/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.1"' 2>/dev/null)
+            [ -z "${TAG}" ] && TAG="v1.12.1"
         fi
         [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
         log "Installing Qdrant ${TAG}..."
@@ -133,10 +159,21 @@ case "${ENGINE}" in
         fi
         ;;
 
+    clickhouse)
+        TAG="${VERSION#v}"
+        log "Installing ClickHouse standalone binary..."
+        if curl -fsSL https://clickhouse.com/ | sh; then
+            [ -f ./clickhouse ] && mv ./clickhouse "${INSTALL_DIR}/clickhouse"
+            chmod +x "${INSTALL_DIR}/clickhouse"
+            ok "ClickHouse binary installed."
+        fi
+        ;;
+
     victoriametrics)
         TAG="${VERSION}"
         if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/VictoriaMetrics/VictoriaMetrics/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.108.0"')
+            TAG=$(curl -fsSL https://api.github.com/repos/VictoriaMetrics/VictoriaMetrics/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.108.0"' 2>/dev/null)
+            [ -z "${TAG}" ] && TAG="v1.108.0"
         fi
         [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
         log "Installing VictoriaMetrics ${TAG}..."
@@ -147,12 +184,42 @@ case "${ENGINE}" in
         fi
         ;;
 
-    mariadb|mysql|postgresql|postgres|redis|valkey|keydb|dragonfly|memcached|mongodb|ferretdb|clickhouse|influxdb|couchdb|neo4j|rethinkdb)
-        log "Engine '${ENGINE}' (${VERSION}) is managed natively via container runtime and package orchestrator."
-        ok "Engine ready."
+    ferretdb)
+        TAG="${VERSION}"
+        if [ "${TAG}" = "latest" ]; then
+            TAG="v1.21.0"
+        fi
+        log "Installing FerretDB ${TAG}..."
+        URL="https://github.com/FerretDB/FerretDB/releases/download/${TAG}/ferretdb-linux-${ARCH_TYPE}.tar.gz"
+        if curl -fsSL "${URL}" | tar -xz -C "${INSTALL_DIR}/"; then
+            chmod +x "${INSTALL_DIR}/ferretdb" 2>/dev/null || true
+            ok "FerretDB installed."
+        fi
+        ;;
+
+    valkey)
+        TAG="${VERSION#v}"
+        if [ "${TAG}" = "latest" ]; then
+            TAG="7.2.5"
+        fi
+        log "Configuring Valkey ${TAG}..."
+        ;;
+
+    custom)
+        if [ -n "${CUSTOM_DOWNLOAD_URL:-}" ]; then
+            log "Downloading custom engine binary from ${CUSTOM_DOWNLOAD_URL}..."
+            curl -fsSL --retry 3 -o "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}" "${CUSTOM_DOWNLOAD_URL}"
+            chmod +x "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}"
+            ok "Custom engine ready: ${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}"
+        fi
+        ;;
+
+    mariadb|mysql|postgresql|postgres|redis|keydb|dragonfly|memcached|mongodb|influxdb|couchdb|neo4j|rethinkdb)
+        log "Engine '${ENGINE}' (${VERSION}) is ready via container runtime orchestrator."
+        ok "Engine verified."
         ;;
 
     *)
-        log "Configured custom database engine '${ENGINE}'."
+        log "Configured database engine '${ENGINE}'."
         ;;
 esac

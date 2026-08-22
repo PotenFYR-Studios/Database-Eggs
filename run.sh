@@ -146,11 +146,35 @@ case "${PROJECT_TYPE}" in
         start_storage_family
         ;;
     custom)
-        if [ -n "${CUSTOM_COMMAND:-}" ]; then
-            log "Executing custom command: ${CUSTOM_COMMAND}"
-            exec ${CUSTOM_COMMAND}
+        print_connection_guide
+        mkdir -p "${SERVER_DIR}/bin" "${SERVER_DIR}/data" "${SERVER_DIR}/logs" "${SERVER_DIR}/config"
+
+        if [ -n "${CUSTOM_PRE_RUN_SCRIPT:-}" ]; then
+            log "Executing pre-run custom script..."
+            eval "${CUSTOM_PRE_RUN_SCRIPT}"
+        fi
+
+        if [ -n "${CUSTOM_DOWNLOAD_URL:-}" ] && [ ! -f "${SERVER_DIR}/bin/${CUSTOM_BINARY_NAME:-app}" ]; then
+            log "Downloading custom binary from ${CUSTOM_DOWNLOAD_URL}..."
+            "${SERVER_DIR}/scripts/install-db-version.sh" "custom" "${CUSTOM_DOWNLOAD_URL}" "${SERVER_DIR}/bin" || true
+        fi
+
+        local run_cmd="${CUSTOM_COMMAND:-${CUSTOM_STARTUP_CMD:-}}"
+        if [ -z "${run_cmd}" ]; then
+            if [ -n "${CUSTOM_BINARY_NAME:-}" ] && [ -x "${SERVER_DIR}/bin/${CUSTOM_BINARY_NAME}" ]; then
+                run_cmd="${SERVER_DIR}/bin/${CUSTOM_BINARY_NAME} ${CUSTOM_ARGS:-}"
+            elif [ -x "${SERVER_DIR}/bin/server" ]; then
+                run_cmd="${SERVER_DIR}/bin/server ${CUSTOM_ARGS:-}"
+            elif [ -x "${SERVER_DIR}/server" ]; then
+                run_cmd="${SERVER_DIR}/server ${CUSTOM_ARGS:-}"
+            fi
+        fi
+
+        if [ -n "${run_cmd}" ]; then
+            log "Starting Custom Engine: ${run_cmd}"
+            exec ${run_cmd}
         else
-            fail "CUSTOM_COMMAND is empty. Provide a valid command to run."
+            fail "CUSTOM_COMMAND or CUSTOM_BINARY_NAME is empty. Provide a valid command or binary to run."
         fi
         ;;
     *)

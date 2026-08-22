@@ -1,0 +1,74 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Valkey / Dragonfly In-Memory Cache",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Next-generation, ultra-fast Redis-compatible in-memory key-value datastore. Fully open source with multi-threaded performance and zero-drop migration.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal Runtime": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "if [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; elif [ -f ./run.sh ]; then bash ./run.sh; elif [ -f /entrypoint.sh ]; then bash /entrypoint.sh; else bash /usr/local/bin/run.sh; fi",
+    "config": {
+        "files": "{\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+        "startup": "{\"done\":[\"Ready to accept connections\",\"Server initialized\",\"Dragonfly is ready\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/bin /mnt/server/data /mnt/server/config /mnt/server/logs /mnt/server/scripts\nREPO_BASE=\"https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main\"\nif [ -f /usr/local/bin/run.sh ]; then\n    cp -f /usr/local/bin/run.sh /mnt/server/run.sh 2>/dev/null || true\n    cp -f /usr/local/bin/entrypoint.sh /mnt/server/entrypoint.sh 2>/dev/null || true\n    cp -rf /usr/local/bin/*.sh /mnt/server/scripts/ 2>/dev/null || true\nelse\n    curl -fsSL --retry 3 \"${REPO_BASE}/run.sh\" -o /mnt/server/run.sh 2>/dev/null || true\n    curl -fsSL --retry 3 \"${REPO_BASE}/entrypoint.sh\" -o /mnt/server/entrypoint.sh 2>/dev/null || true\nfi\nchown -R 988:988 /mnt/server 2>/dev/null || true\nchmod -R 755 /mnt/server/scripts /mnt/server/bin /mnt/server/*.sh 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Engine Flavor",
+            "description": "Select valkey, dragonfly, or keydb.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "valkey",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:valkey,dragonfly,keydb",
+            "field_type": "text"
+        },
+        {
+            "name": "Auth Password",
+            "description": "Requirepass authentication password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Max Memory Policy",
+            "description": "Eviction policy when max memory is reached.",
+            "env_variable": "MAXMEMORY_POLICY",
+            "default_value": "allkeys-lru",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:allkeys-lru,volatile-lru,allkeys-random,volatile-random,volatile-ttl,noeviction",
+            "field_type": "text"
+        },
+        {
+            "name": "Enable AOF Persistence",
+            "description": "Enable append-only file disk persistence.",
+            "env_variable": "ENABLE_AOF",
+            "default_value": "yes",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|in:yes,no",
+            "field_type": "text"
+        }
+    ]
+}

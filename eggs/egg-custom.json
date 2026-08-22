@@ -1,0 +1,124 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Custom Database & Runtime Engine",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Run ANY custom database, analytical engine, backend server, or custom compiled binary on Pterodactyl, Pelican, Feather, or Wisp. Supports automatic direct URL downloads (binary, tar.gz, zip), automated cryptographic passwords, pre-run scripts, and custom argument injection.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal Runtime": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "if [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; elif [ -f ./run.sh ]; then bash ./run.sh; elif [ -f /entrypoint.sh ]; then bash /entrypoint.sh; else bash /usr/local/bin/run.sh; fi",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Server started\",\"Listening on\",\"ready for connections\",\"API listening on\",\"Accepting connections\",\"Started\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/bin /mnt/server/data /mnt/server/config /mnt/server/logs /mnt/server/scripts\nREPO_BASE=\"https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main\"\nif [ -f /usr/local/bin/run.sh ]; then\n    cp -f /usr/local/bin/run.sh /mnt/server/run.sh 2>/dev/null || true\n    cp -f /usr/local/bin/entrypoint.sh /mnt/server/entrypoint.sh 2>/dev/null || true\n    cp -rf /usr/local/bin/*.sh /mnt/server/scripts/ 2>/dev/null || true\nelse\n    curl -fsSL --retry 3 \"${REPO_BASE}/run.sh\" -o /mnt/server/run.sh 2>/dev/null || true\n    curl -fsSL --retry 3 \"${REPO_BASE}/entrypoint.sh\" -o /mnt/server/entrypoint.sh 2>/dev/null || true\n    for h in password-gen.sh performance-tuning.sh install-db-version.sh; do\n        curl -fsSL --retry 2 \"${REPO_BASE}/scripts/${h}\" -o \"/mnt/server/scripts/${h}\" 2>/dev/null || true\n    done\nfi\n\nif [ -n \"${CUSTOM_DOWNLOAD_URL:-}\" ]; then\n    echo \"[install] Downloading custom binary from ${CUSTOM_DOWNLOAD_URL}...\"\n    curl -fsSL --retry 3 -o \"/mnt/server/bin/${CUSTOM_BINARY_NAME:-server}\" \"${CUSTOM_DOWNLOAD_URL}\" 2>/dev/null || true\n    chmod +x \"/mnt/server/bin/${CUSTOM_BINARY_NAME:-server}\" 2>/dev/null || true\nfi\n\nchown -R 988:988 /mnt/server 2>/dev/null || true\nchmod -R 755 /mnt/server/scripts /mnt/server/bin /mnt/server/*.sh 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Keep as 'custom' for custom engine mode.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "custom",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Download URL",
+            "description": "Optional direct URL to download your binary, tarball (.tar.gz), or zip archive automatically into /home/container/bin.",
+            "env_variable": "CUSTOM_DOWNLOAD_URL",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Binary Name",
+            "description": "Name of the binary located in bin/ (e.g. server, app, caddy, my-db).",
+            "env_variable": "CUSTOM_BINARY_NAME",
+            "default_value": "server",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Command Line",
+            "description": "Exact command line string to run if not using standard binary invocation (e.g. ./bin/server --port {{SERVER_PORT}}).",
+            "env_variable": "CUSTOM_COMMAND",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Arguments",
+            "description": "Additional flags passed to the binary.",
+            "env_variable": "CUSTOM_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Pre-Run Script Hook",
+            "description": "Optional bash commands to execute before starting the primary daemon.",
+            "env_variable": "CUSTOM_PRE_RUN_SCRIPT",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Credentials",
+            "description": "Generate strong random cryptographic passwords available in .env and .db_credentials.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "User Password",
+            "description": "Application user password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Root Password",
+            "description": "Admin root password (auto = ultra-strong random).",
+            "env_variable": "DB_ROOT_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        }
+    ]
+}
