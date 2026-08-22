@@ -48,12 +48,6 @@ lazyfree-lazy-expire yes
 lazyfree-lazy-server-del yes
 replica-lazy-flush yes
 
-# Active Memory Defragmentation
-activedefrag yes
-active-defrag-ignore-bytes 100mb
-active-defrag-threshold-lower 10
-active-defrag-threshold-upper 30
-
 # Persistence (RDB & AOF)
 save 900 1
 save 300 10
@@ -76,6 +70,8 @@ EOF
         ok "Created performance-tuned ${redis_conf}"
     else
         sed -i "s/^port .*/port ${SERVER_PORT}/g" "${redis_conf}" 2>/dev/null || true
+        sed -i "/^activedefrag/d" "${redis_conf}" 2>/dev/null || true
+        sed -i "/^active-defrag/d" "${redis_conf}" 2>/dev/null || true
         if [ -n "${DB_PASSWORD:-}" ]; then
             if grep -q "^requirepass" "${redis_conf}"; then
                 sed -i "s/^requirepass .*/requirepass ${DB_PASSWORD}/g" "${redis_conf}" 2>/dev/null || true

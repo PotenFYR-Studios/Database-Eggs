@@ -16,8 +16,13 @@ start_search_family() {
         meilisearch)
             local master_key="${MASTER_KEY:-${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
             local meili_bin="meilisearch"
-            [ -x "${SERVER_DIR}/bin/meilisearch" ] && meili_bin="${SERVER_DIR}/bin/meilisearch"
-            [ -x "${SERVER_DIR}/meilisearch" ] && meili_bin="${SERVER_DIR}/meilisearch"
+            if [ -x "${SERVER_DIR}/bin/meilisearch" ]; then
+                meili_bin="${SERVER_DIR}/bin/meilisearch"
+            elif [ -x "${SERVER_DIR}/meilisearch" ]; then
+                meili_bin="${SERVER_DIR}/meilisearch"
+            elif [ -x "/usr/local/bin/meilisearch" ]; then
+                meili_bin="/usr/local/bin/meilisearch"
+            fi
 
             log "Starting Meilisearch on 0.0.0.0:${SERVER_PORT}..."
             exec "${meili_bin}" --http-addr "0.0.0.0:${SERVER_PORT}" \
@@ -28,8 +33,13 @@ start_search_family() {
         typesense)
             local api_key="${TYPESENSE_API_KEY:-${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
             local ts_bin="typesense-server"
-            [ -x "${SERVER_DIR}/bin/typesense-server" ] && ts_bin="${SERVER_DIR}/bin/typesense-server"
-            [ -x "${SERVER_DIR}/typesense-server" ] && ts_bin="${SERVER_DIR}/typesense-server"
+            if [ -x "${SERVER_DIR}/bin/typesense-server" ]; then
+                ts_bin="${SERVER_DIR}/bin/typesense-server"
+            elif [ -x "${SERVER_DIR}/typesense-server" ]; then
+                ts_bin="${SERVER_DIR}/typesense-server"
+            elif [ -x "/usr/local/bin/typesense-server" ]; then
+                ts_bin="/usr/local/bin/typesense-server"
+            fi
 
             log "Starting Typesense on 0.0.0.0:${SERVER_PORT}..."
             exec "${ts_bin}" --data-dir="${data_dir}" \
@@ -39,8 +49,13 @@ start_search_family() {
             ;;
         qdrant)
             local qdrant_bin="qdrant"
-            [ -x "${SERVER_DIR}/bin/qdrant" ] && qdrant_bin="${SERVER_DIR}/bin/qdrant"
-            [ -x "${SERVER_DIR}/qdrant" ] && qdrant_bin="${SERVER_DIR}/qdrant"
+            if [ -x "${SERVER_DIR}/bin/qdrant" ]; then
+                qdrant_bin="${SERVER_DIR}/bin/qdrant"
+            elif [ -x "${SERVER_DIR}/qdrant" ]; then
+                qdrant_bin="${SERVER_DIR}/qdrant"
+            elif [ -x "/usr/local/bin/qdrant" ]; then
+                qdrant_bin="/usr/local/bin/qdrant"
+            fi
 
             log "Starting Qdrant Vector DB on 0.0.0.0:${SERVER_PORT}..."
             export QDRANT__SERVICE__HTTP_PORT="${SERVER_PORT}"

@@ -33,7 +33,7 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
-export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
+export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/scripts:/usr/local/bin:${PATH}"
 
 # Ensure run.sh is present locally in server dir
 if [ ! -f ./run.sh ] && [ -f /usr/local/bin/run.sh ]; then
