@@ -25,7 +25,7 @@ init_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
     local socket_dir="${SERVER_DIR}/socket"
-    mkdir -p "${data_dir}" "${conf_dir}" "${socket_dir}" "${SERVER_DIR}/logs"
+    mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
     chmod 700 "${data_dir}" "${socket_dir}" 2>/dev/null || true
 
     # Run performance auto-tuning
@@ -123,11 +123,15 @@ port = ${SERVER_PORT}
 listen_addresses = '*'
 unix_socket_directories = '${socket_dir}'
 password_encryption = scram-sha-256
-
-# Include user custom configuration from config/postgresql.conf if present
-include_if_exists = '${conf_dir}/postgresql.conf'
-include_dir = '${conf_dir}/conf.d'
 EOF
+
+        # Include user custom configuration from config/postgresql.conf if present
+        if [ -f "${conf_dir}/postgresql.conf" ]; then
+            echo "include_if_exists = '${conf_dir}/postgresql.conf'" >> "${conf_file}"
+        fi
+        if [ -d "${conf_dir}/conf.d" ]; then
+            echo "include_dir = '${conf_dir}/conf.d'" >> "${conf_file}"
+        fi
 
         if [ "${PERFORMANCE_TUNING:-1}" = "1" ]; then
             cat <<EOF >> "${conf_file}"
