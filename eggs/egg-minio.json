@@ -1,86 +1,96 @@
-{
-    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
-    "meta": {
-        "version": "PTDL_v2",
-        "update_url": null
+﻿{
+  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-08-22T09:30:00+05:30",
+  "name": "MinIO S3 Object Storage",
+  "author": "potenfyr@potenfyr.com",
+  "description": "High-Performance S3 Compatible Object Storage server with Web Console and automated secret key generation.",
+  "features": [
+    "pid_limit"
+  ],
+  "docker_images": {
+    "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
+    "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
+    "Ubuntu 22.04 LTS": "ubuntu:22.04"
+  },
+  "file_denylist": [],
+  "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else curl -fsSL https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh | bash; fi",
+  "config": {
+    "files": "{}",
+    "startup": "{\"done\":[\"MinIO Object Storage\",\"API:\",\"Console:\"],\"user_interaction\":[],\"strip_ansi\":false}",
+    "stop": "^C",
+    "logs": "{}"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/sh\n# PotenFYR Studios - MinIO Object Storage Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
+      "container": "ghcr.io/pterodactyl/installers:alpine",
+      "entrypoint": "ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Database Type",
+      "description": "Engine type.",
+      "env_variable": "DATABASE_TYPE",
+      "default_value": "minio",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|string",
+      "field_type": "text"
     },
-    "exported_at": "2026-08-22T04:00:00+00:00",
-    "name": "MinIO S3 Object Storage",
-    "author": "potenfyr@potenfyr.com",
-    "description": "High-Performance S3 Compatible Object Storage server with Web Console and automated secret key generation.",
-    "features": [
-        "pid_limit"
-    ],
-    "docker_images": {
-        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-        "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
-        "Ubuntu 22.04 LTS": "ubuntu:22.04"
+    {
+      "name": "Root User / Access Key",
+      "description": "MinIO Root User / Access Key.",
+      "env_variable": "MINIO_ROOT_USER",
+      "default_value": "minioadmin",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
     },
-    "file_denylist": [],
-    "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else curl -fsSL https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh | bash; fi",
-    "config": {
-        "files": "{}",
-        "startup": "{\"done\":[\"MinIO Object Storage\",\"API:\",\"Console:\"],\"user_interaction\":[],\"strip_ansi\":false}",
-        "stop": "^C",
-        "logs": "{}"
+    {
+      "name": "Root Password / Secret Key",
+      "description": "MinIO Root Password / Secret Key (auto = ultra-strong random).",
+      "env_variable": "MINIO_ROOT_PASSWORD",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|min:8|max:128",
+      "field_type": "text"
     },
-    "scripts": {
-        "installation": {
-            "script": "#!/bin/sh\n# PotenFYR Studios - MinIO Object Storage Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
-            "container": "ghcr.io/pterodactyl/installers:alpine",
-            "entrypoint": "ash"
-        }
+    {
+      "name": "Console Port",
+      "description": "Web Console UI port (recommended: allocate second port).",
+      "env_variable": "CONSOLE_PORT",
+      "default_value": "9001",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|between:1024,65535",
+      "field_type": "text"
     },
-    "variables": [
-        {
-            "name": "Database Type",
-            "description": "Engine type.",
-            "env_variable": "DATABASE_TYPE",
-            "default_value": "minio",
-            "user_viewable": true,
-            "user_editable": false,
-            "rules": "required|string",
-            "field_type": "text"
-        },
-        {
-            "name": "Root User / Access Key",
-            "description": "MinIO Root User / Access Key.",
-            "env_variable": "MINIO_ROOT_USER",
-            "default_value": "minioadmin",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:64",
-            "field_type": "text"
-        },
-        {
-            "name": "Root Password / Secret Key",
-            "description": "MinIO Root Password / Secret Key (auto = ultra-strong random).",
-            "env_variable": "MINIO_ROOT_PASSWORD",
-            "default_value": "auto",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|min:8|max:128",
-            "field_type": "text"
-        },
-        {
-            "name": "Console Port",
-            "description": "Web Console UI port (recommended: allocate second port).",
-            "env_variable": "CONSOLE_PORT",
-            "default_value": "9001",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|integer|between:1024,65535",
-            "field_type": "text"
-        },
-        {
-            "name": "Auto Generate Credentials",
-            "description": "Auto-generate strong cryptographic secret key.",
-            "env_variable": "AUTO_GENERATE_CREDENTIALS",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        }
-    ]
+    {
+      "name": "Auto Generate Credentials",
+      "description": "Auto-generate strong cryptographic secret key.",
+      "env_variable": "AUTO_GENERATE_CREDENTIALS",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Save Credentials to .env",
+      "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+      "env_variable": "SAVE_TO_ENV",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    }
+  ]
 }
