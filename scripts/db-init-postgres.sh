@@ -44,49 +44,78 @@ init_postgres() {
     initdb_bin=$(find_pg_bin "initdb")
 
     local first_run=0
-    if [ ! -f "${data_dir}/PG_VERSION" ] || [ ! -f "${data_dir}/postgresql.conf" ]; then
+    if [ ! -f "${data_dir}/PG_VERSION" ]; then
         first_run=1
         log "First run or uninitialized cluster detected. Initializing PostgreSQL in ${data_dir}..."
 
-        # If data dir exists but has broken/incomplete files from a failed previous boot, clean it
-        if [ -d "${data_dir}" ] && [ "$(ls -A "${data_dir}" 2>/dev/null)" ]; then
-            if [ ! -f "${data_dir}/PG_VERSION" ]; then
-                warn "Found incomplete data directory. Preparing clean cluster path..."
-                rm -rf "${data_dir:?}"/* 2>/dev/null || true
-            fi
+        # If data dir exists, clean any broken/incomplete files from a failed previous boot
+        if [ -d "${data_dir}" ]; then
+            warn "Preparing clean cluster path in ${data_dir}..."
+            rm -rf "${data_dir:?}"/* "${data_dir:?}"/.[!.]* 2>/dev/null || true
         fi
+        mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
+        chmod 700 "${data_dir}" "${socket_dir}" 2>/dev/null || true
 
         local pwfile="${SERVER_DIR}/.pg_pw_init"
         printf '%s' "${DB_ROOT_PASSWORD:-postgres}" > "${pwfile}"
-        chmod 600 "${pwfile}"
+        chmod 600 "${pwfile}" 2>/dev/null || true
 
-        # Initialize cluster with UTF8 encoding
-        "${initdb_bin}" -D "${data_dir}" \
-               -U "${POSTGRES_USER:-postgres}" \
-               --pwfile="${pwfile}" \
-               --auth-local=trust \
-               --auth-host=scram-sha-256 \
-               --encoding=UTF8 \
-               --locale=C.UTF-8 >/dev/null 2>&1
-        local init_status=$?
+        local init_out=""
+        local init_status=1
 
-        # Fallback if locale C.UTF-8 is unavailable in minimal container
-        if [ ${init_status} -ne 0 ] || [ ! -f "${data_dir}/postgresql.conf" ]; then
-            warn "Retrying cluster initialization with default system locale..."
-            rm -rf "${data_dir:?}"/* 2>/dev/null || true
-            "${initdb_bin}" -D "${data_dir}" \
+        # Attempt 1: UTF-8 with C.UTF-8 locale & SCRAM authentication
+        init_out=$("${initdb_bin}" -D "${data_dir}" \
                    -U "${POSTGRES_USER:-postgres}" \
                    --pwfile="${pwfile}" \
                    --auth-local=trust \
-                   --auth-host=scram-sha-256 >/dev/null 2>&1 || true
+                   --auth-host=scram-sha-256 \
+                   --encoding=UTF8 \
+                   --locale=C.UTF-8 2>&1)
+        init_status=$?
+
+        # Attempt 2: Standard C locale
+        if [ ${init_status} -ne 0 ] || [ ! -f "${data_dir}/PG_VERSION" ]; then
+            warn "Retrying cluster initialization with default system locale (C)..."
+            rm -rf "${data_dir:?}"/* "${data_dir:?}"/.[!.]* 2>/dev/null || true
+            init_out=$("${initdb_bin}" -D "${data_dir}" \
+                       -U "${POSTGRES_USER:-postgres}" \
+                       --pwfile="${pwfile}" \
+                       --auth-local=trust \
+                       --auth-host=scram-sha-256 \
+                       --locale=C 2>&1)
+            init_status=$?
         fi
 
-        rm -f "${pwfile}"
+        # Attempt 3: Standard auth flag (-A scram-sha-256)
+        if [ ${init_status} -ne 0 ] || [ ! -f "${data_dir}/PG_VERSION" ]; then
+            warn "Retrying cluster initialization with standard auth flag (-A)..."
+            rm -rf "${data_dir:?}"/* "${data_dir:?}"/.[!.]* 2>/dev/null || true
+            init_out=$("${initdb_bin}" -D "${data_dir}" \
+                       -U "${POSTGRES_USER:-postgres}" \
+                       --pwfile="${pwfile}" \
+                       -A scram-sha-256 2>&1)
+            init_status=$?
+        fi
+
+        # Attempt 4: Minimal bare initialization
+        if [ ${init_status} -ne 0 ] || [ ! -f "${data_dir}/PG_VERSION" ]; then
+            warn "Retrying minimal cluster initialization..."
+            rm -rf "${data_dir:?}"/* "${data_dir:?}"/.[!.]* 2>/dev/null || true
+            init_out=$("${initdb_bin}" -D "${data_dir}" \
+                       -U "${POSTGRES_USER:-postgres}" \
+                       -A trust 2>&1)
+            init_status=$?
+        fi
+
+        rm -f "${pwfile}" 2>/dev/null || true
 
         if [ -f "${data_dir}/PG_VERSION" ]; then
             ok "PostgreSQL cluster initialized successfully."
         else
-            warn "Cluster initialization warning. Creating baseline postgresql.conf..."
+            error "PostgreSQL cluster creation failed."
+            error "initdb output details:"
+            printf '%s\n' "${init_out}" >&2
+            fail "Fatal: PostgreSQL cluster could not be created in ${data_dir}."
         fi
     fi
 
@@ -182,7 +211,7 @@ EOF
     fi
 
     # If first run, create application DB, user, and extensions
-    if [ "${first_run}" -eq 1 ] && [ -f "${conf_file}" ]; then
+    if [ "${first_run}" -eq 1 ] && [ -f "${conf_file}" ] && [ -f "${data_dir}/PG_VERSION" ]; then
         log "Starting temporary PostgreSQL daemon to provision database and users..."
         local pg_ctl_bin
         pg_ctl_bin=$(find_pg_bin "pg_ctl")
