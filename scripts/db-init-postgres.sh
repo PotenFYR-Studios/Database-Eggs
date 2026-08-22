@@ -24,9 +24,11 @@ find_pg_bin() {
 init_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
-    local socket_dir="${SERVER_DIR}/socket"
+    local socket_dir="/tmp/.db-sockets"
+    mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
     mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
-    chmod 700 "${data_dir}" "${socket_dir}" 2>/dev/null || true
+    chmod 700 "${data_dir}" 2>/dev/null || true
+    chmod 777 "${socket_dir}" 2>/dev/null || true
 
     # Run performance auto-tuning
     if command -v tune_postgresql >/dev/null 2>&1; then
@@ -54,9 +56,10 @@ init_postgres() {
             rm -rf "${data_dir:?}"/* "${data_dir:?}"/.[!.]* 2>/dev/null || true
         fi
         mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
-        chmod 700 "${data_dir}" "${socket_dir}" 2>/dev/null || true
+        chmod 700 "${data_dir}" 2>/dev/null || true
+        chmod 777 "${socket_dir}" 2>/dev/null || true
 
-        local pwfile="${SERVER_DIR}/.pg_pw_init"
+        local pwfile="/tmp/.pg_pw_init"
         printf '%s' "${DB_ROOT_PASSWORD:-postgres}" > "${pwfile}"
         chmod 600 "${pwfile}" 2>/dev/null || true
 
@@ -252,7 +255,10 @@ EOSQL
 
 start_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    local socket_dir="${SERVER_DIR}/socket"
+    local socket_dir="/tmp/.db-sockets"
+    mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
+    mkdir -p "${socket_dir}"
+    chmod 777 "${socket_dir}" 2>/dev/null || true
 
     # Self-healing check: if configuration is missing, run init
     if [ ! -f "${data_dir}/postgresql.conf" ] || [ ! -f "${data_dir}/PG_VERSION" ]; then
