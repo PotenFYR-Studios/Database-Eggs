@@ -41,11 +41,38 @@ done
 PROJECT_TYPE=$(echo "${DB_TYPE:-${DATABASE_TYPE:-mariadb}}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"
 
-# Dynamic version installer check (if specific version requested and not locally cached)
-if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
-    log "Checking version binary for ${PROJECT_TYPE} (v${DB_VERSION})..."
-    "${SERVER_DIR}/scripts/install-db-version.sh" "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_DIR}/bin" >/dev/null 2>&1 || true
-fi
+# Dynamic version installer check (or missing standalone engine binary download)
+ensure_engine_binary() {
+    local engine="$1"
+    local bin_needed=""
+    case "${engine}" in
+        pocketbase) bin_needed="pocketbase" ;;
+        surrealdb) bin_needed="surreal" ;;
+        meilisearch) bin_needed="meilisearch" ;;
+        qdrant) bin_needed="qdrant" ;;
+        minio) bin_needed="minio" ;;
+        clickhouse) bin_needed="clickhouse" ;;
+        typesense) bin_needed="typesense-server" ;;
+        victoriametrics) bin_needed="victoriametrics" ;;
+        ferretdb) bin_needed="ferretdb" ;;
+    esac
+
+    if [ -n "${bin_needed}" ]; then
+        if ! command -v "${bin_needed}" >/dev/null 2>&1 && [ ! -x "${SERVER_DIR}/bin/${bin_needed}" ]; then
+            log "Binary '${bin_needed}' not detected in system. Auto-installing on container..."
+            if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ]; then
+                "${SERVER_DIR}/scripts/install-db-version.sh" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin" || true
+            fi
+        fi
+    fi
+
+    if [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
+        log "Checking requested version for ${engine} (v${DB_VERSION})..."
+        "${SERVER_DIR}/scripts/install-db-version.sh" "${engine}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
+    fi
+}
+
+ensure_engine_binary "${PROJECT_TYPE}"
 
 # --- Connection Summary Helper ----------------------------------------------
 print_connection_guide() {
