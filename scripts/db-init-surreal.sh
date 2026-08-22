@@ -24,12 +24,21 @@ start_surreal_family() {
     [ -x "${SERVER_DIR}/surreal" ] && bin_cmd="${SERVER_DIR}/surreal"
 
     if [ "${PROJECT_TYPE}" = "rethinkdb" ]; then
+        if ! command -v rethinkdb >/dev/null 2>&1; then
+            error "RethinkDB binary not found in container PATH."
+            fail "RethinkDB binary is unavailable."
+        fi
         log "Starting RethinkDB on 0.0.0.0:${SERVER_PORT}..."
         exec rethinkdb --directory "${data_dir}" \
                        --bind all \
                        --driver-port "${SERVER_PORT}" \
                        --cluster-port "${CLUSTER_PORT:-29015}" \
                        --http-port "${WEB_PORT:-8080}" ${EXTRA_ARGS:-}
+    fi
+
+    if ! command -v "${bin_cmd}" >/dev/null 2>&1 && [ ! -x "${bin_cmd}" ]; then
+        error "SurrealDB binary '${bin_cmd}' not found in container PATH or bin/ directory."
+        fail "SurrealDB binary '${bin_cmd}' is unavailable."
     fi
 
     log "Starting SurrealDB on 0.0.0.0:${SERVER_PORT} (Storage: ${storage})..."

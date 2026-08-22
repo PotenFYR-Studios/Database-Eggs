@@ -95,24 +95,44 @@ start_redis_family() {
 
     case "${PROJECT_TYPE}" in
         dragonfly)
+            if ! command -v dragonfly >/dev/null 2>&1; then
+                error "Dragonfly binary not found in container PATH."
+                fail "Dragonfly binary is unavailable."
+            fi
             local pw_arg=""
             [ -n "${DB_PASSWORD:-}" ] && pw_arg="--requirepass=${DB_PASSWORD}"
             log "Starting Dragonfly on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB})..."
             exec dragonfly --port="${SERVER_PORT}" --dir="${data_dir}" --maxmemory="${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB}" ${pw_arg} ${EXTRA_ARGS:-}
             ;;
         keydb)
+            if ! command -v keydb-server >/dev/null 2>&1; then
+                error "KeyDB binary 'keydb-server' not found in container PATH."
+                fail "KeyDB binary is unavailable."
+            fi
             log "Starting KeyDB on 0.0.0.0:${SERVER_PORT} (Threads: ${TUNED_REDIS_IO_THREADS:-2})..."
             exec keydb-server "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
         valkey)
+            if ! command -v valkey-server >/dev/null 2>&1; then
+                error "Valkey binary 'valkey-server' not found in container PATH."
+                fail "Valkey binary is unavailable."
+            fi
             log "Starting Valkey on 0.0.0.0:${SERVER_PORT}..."
             exec valkey-server "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
         memcached)
+            if ! command -v memcached >/dev/null 2>&1; then
+                error "Memcached binary not found in container PATH."
+                fail "Memcached binary is unavailable."
+            fi
             log "Starting Memcached on 0.0.0.0:${SERVER_PORT}..."
             exec memcached -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" ${EXTRA_ARGS:-}
             ;;
         *) # redis
+            if ! command -v redis-server >/dev/null 2>&1; then
+                error "Redis binary 'redis-server' not found in container PATH."
+                fail "Redis binary is unavailable."
+            fi
             log "Starting Redis on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
             exec redis-server "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
