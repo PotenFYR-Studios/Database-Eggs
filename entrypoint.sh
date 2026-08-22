@@ -163,6 +163,41 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
         } > "${SERVER_DIR}/.env" 2>/dev/null || true
         chmod 600 "${SERVER_DIR}/.env" 2>/dev/null || true
     fi
+
+    # Generate user environment shortcuts for easy terminal CLI usage
+    {
+        printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s/scripts:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${SERVER_DIR}"
+        printf 'export DB_CONNECTION="%s"\n' "${PROJECT_TYPE}"
+        printf 'export DB_HOST="127.0.0.1"\n'
+        printf 'export DB_PORT="%s"\n' "${SERVER_PORT}"
+        printf 'export DB_DATABASE="%s"\n' "${DB_NAME:-database}"
+        printf 'export DB_USERNAME="%s"\n' "${DB_USER:-dbuser}"
+        printf 'export DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
+        printf 'export DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
+        printf 'export PGPASSWORD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+        printf 'export MYSQL_PWD="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+        printf 'export REDISCLI_AUTH="%s"\n' "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+
+        case "${PROJECT_TYPE}" in
+            mariadb|mysql)
+                printf 'alias db-cli="mysql -h 127.0.0.1 -P %s -u %s -p\"%s\" %s"\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${DB_NAME:-database}"
+                ;;
+            postgresql|postgres)
+                printf 'alias db-cli="psql -h 127.0.0.1 -p %s -U %s -d %s"\n' "${SERVER_PORT}" "${DB_USER:-postgres}" "${DB_NAME:-postgres}"
+                ;;
+            redis|valkey|keydb|dragonfly)
+                printf 'alias db-cli="redis-cli -h 127.0.0.1 -p %s -a \"%s\""\n' "${SERVER_PORT}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+                ;;
+            mongodb|ferretdb)
+                printf 'alias db-cli="mongosh \"mongodb://%s:%s@127.0.0.1:%s/%s?authSource=admin\""\n' "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}" "${SERVER_PORT}" "${DB_NAME:-database}"
+                ;;
+            surrealdb)
+                printf 'alias db-cli="surreal sql --endpoint http://127.0.0.1:%s --user %s --pass \"%s\""\n' "${SERVER_PORT}" "${DB_USER:-root}" "${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
+                ;;
+        esac
+    } > "${SERVER_DIR}/.profile" 2>/dev/null || true
+    cp -f "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
+    chmod 600 "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
 fi
 
 # ---------------------------------------------------------------------------

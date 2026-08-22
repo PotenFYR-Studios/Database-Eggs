@@ -1,0 +1,94 @@
+{
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": null
+    },
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "ClickHouse Analytical Database",
+    "author": "potenfyr@potenfyr.com",
+    "description": "Ultra-fast column-oriented database management system for real-time analytical reporting (OLAP). Supports automatic version downloading, user provisioning, and full panel compatibility.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal Runtime": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    },
+    "file_denylist": [],
+    "startup": "if [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; elif [ -f ./run.sh ]; then bash ./run.sh; elif [ -f /entrypoint.sh ]; then bash /entrypoint.sh; else bash /usr/local/bin/run.sh; fi",
+    "config": {
+        "files": "{}",
+        "startup": "{\"done\":[\"Ready for connections\",\"Listening for\",\"Server started\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
+    },
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/bash\nmkdir -p /mnt/server/bin /mnt/server/data /mnt/server/config /mnt/server/logs /mnt/server/scripts\nREPO_BASE=\"https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main\"\nif [ -f /usr/local/bin/run.sh ]; then\n    cp -f /usr/local/bin/run.sh /mnt/server/run.sh 2>/dev/null || true\n    cp -f /usr/local/bin/entrypoint.sh /mnt/server/entrypoint.sh 2>/dev/null || true\n    cp -rf /usr/local/bin/*.sh /mnt/server/scripts/ 2>/dev/null || true\nelse\n    curl -fsSL --retry 3 \"${REPO_BASE}/run.sh\" -o /mnt/server/run.sh 2>/dev/null || true\n    curl -fsSL --retry 3 \"${REPO_BASE}/entrypoint.sh\" -o /mnt/server/entrypoint.sh 2>/dev/null || true\nfi\nchown -R 988:988 /mnt/server 2>/dev/null || true\nchmod -R 755 /mnt/server/scripts /mnt/server/bin /mnt/server/*.sh 2>/dev/null || true\n",
+            "container": "ghcr.io/potenfyr-studios/database-eggs:latest",
+            "entrypoint": "bash"
+        }
+    },
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Keep as clickhouse.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "clickhouse",
+            "user_viewable": true,
+            "user_editable": false,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Version",
+            "description": "ClickHouse version (latest, 24.3, etc.).",
+            "env_variable": "DB_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "Default database name.",
+            "env_variable": "DB_NAME",
+            "default_value": "default",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database User",
+            "description": "ClickHouse user name.",
+            "env_variable": "DB_USER",
+            "default_value": "default",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "User Password",
+            "description": "ClickHouse user password (auto = ultra-strong random).",
+            "env_variable": "DB_PASSWORD",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "HTTP Port",
+            "description": "ClickHouse HTTP protocol port.",
+            "env_variable": "HTTP_PORT",
+            "default_value": "8123",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|numeric",
+            "field_type": "text"
+        }
+    ]
+}
