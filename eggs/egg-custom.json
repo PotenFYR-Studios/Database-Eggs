@@ -12,8 +12,7 @@
         "pid_limit"
     ],
     "docker_images": {
-        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-        "Pterodactyl Debian (Universal Fallback)": "ghcr.io/pterodactyl/yolks:debian",
+        "Universal": "ghcr.io/potenfyr-studios/database-eggs:latest",
         "Ubuntu 22.04 LTS": "ubuntu:22.04"
     },
     "file_denylist": [],
@@ -130,6 +129,16 @@
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Smart Companion & Extra Runtimes",
+            "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
+            "env_variable": "EXTRA_RUNTIMES",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:256",
             "field_type": "text"
         }
     ]

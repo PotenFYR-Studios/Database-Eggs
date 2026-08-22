@@ -1,4 +1,4 @@
-name: Build & Publish Docker Images
+name: Build & Publish Multi-Variant Container Images
 
 on:
   push:
@@ -13,12 +13,32 @@ env:
   IMAGE_NAME: potenfyr-studios/database-eggs
 
 jobs:
-  build:
-    name: Build & Push Multi-Arch Image
+  build-variants:
+    name: Build ${{ matrix.tag }} (${{ matrix.variant }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: all
+            tag: latest
+          - variant: mysql
+            tag: mysql
+          - variant: postgres
+            tag: postgres
+          - variant: mongodb
+            tag: mongodb
+          - variant: redis
+            tag: redis
+          - variant: meilisearch
+            tag: meilisearch
+          - variant: clickhouse
+            tag: clickhouse
+          - variant: sqlite
+            tag: sqlite
 
     steps:
       - name: Checkout repository
@@ -38,25 +58,24 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Extract Docker metadata
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=ref,event=branch
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=short
+      - name: Compute tags
+        id: tags
+        run: |
+          IMAGE_URI="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+          TAGS="${IMAGE_URI}:${{ matrix.tag }}"
+          if [ "${{ matrix.variant }}" = "all" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS="${TAGS},${IMAGE_URI}:latest,${IMAGE_URI}:main"
+          fi
+          echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
-      - name: Build and push universal image
+      - name: Build and push container image
         uses: docker/build-push-action@v5
         with:
           context: .
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            RUNTIME_VARIANT=${{ matrix.variant }}
           push: ${{ github.event_name != 'pull_request' }}
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.variant }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}

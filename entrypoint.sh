@@ -99,12 +99,12 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
         REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
-            for h in password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
+            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
                 curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${RUNTIME_DIR}/${h}" 2>/dev/null || true
             done
         elif command -v wget >/dev/null 2>&1; then
             wget -qO "${RUNTIME_DIR}/run.sh" "${REPO_BASE}/run.sh" 2>/dev/null || true
-            for h in password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
+            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
                 wget -qO "${RUNTIME_DIR}/${h}" "${REPO_BASE}/scripts/${h}" 2>/dev/null || true
             done
         fi
