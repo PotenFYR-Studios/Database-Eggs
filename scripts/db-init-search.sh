@@ -24,11 +24,15 @@ start_search_family() {
                 meili_bin="/usr/local/bin/meilisearch"
             fi
 
+            local cfg_arg=""
+            [ -f "${SERVER_DIR}/config/meilisearch.toml" ] && cfg_arg="--config-file-path ${SERVER_DIR}/config/meilisearch.toml"
+
             log "Starting Meilisearch on 0.0.0.0:${SERVER_PORT}..."
             exec "${meili_bin}" --http-addr "0.0.0.0:${SERVER_PORT}" \
                                 --db-path "${data_dir}" \
                                 --master-key "${master_key}" \
-                                --env "${MEILI_ENV:-production}" ${EXTRA_ARGS:-}
+                                --env "${MEILI_ENV:-production}" \
+                                ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         typesense)
             local api_key="${TYPESENSE_API_KEY:-${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
@@ -41,11 +45,15 @@ start_search_family() {
                 ts_bin="/usr/local/bin/typesense-server"
             fi
 
+            local cfg_arg=""
+            [ -f "${SERVER_DIR}/config/typesense.ini" ] && cfg_arg="--config=${SERVER_DIR}/config/typesense.ini"
+
             log "Starting Typesense on 0.0.0.0:${SERVER_PORT}..."
             exec "${ts_bin}" --data-dir="${data_dir}" \
                              --api-port="${SERVER_PORT}" \
                              --api-key="${api_key}" \
-                             --enable-cors="${ENABLE_CORS:-true}" ${EXTRA_ARGS:-}
+                             --enable-cors="${ENABLE_CORS:-true}" \
+                             ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         qdrant)
             local qdrant_bin="qdrant"
@@ -57,12 +65,19 @@ start_search_family() {
                 qdrant_bin="/usr/local/bin/qdrant"
             fi
 
+            local cfg_arg=""
+            if [ -f "${SERVER_DIR}/config/config.yaml" ]; then
+                cfg_arg="--config-path ${SERVER_DIR}/config/config.yaml"
+            elif [ -f "${SERVER_DIR}/config.yaml" ]; then
+                cfg_arg="--config-path ${SERVER_DIR}/config.yaml"
+            fi
+
             log "Starting Qdrant Vector DB on 0.0.0.0:${SERVER_PORT}..."
             export QDRANT__SERVICE__HTTP_PORT="${SERVER_PORT}"
             export QDRANT__SERVICE__GRPC_PORT="${GRPC_PORT:-$((SERVER_PORT + 1))}"
             export QDRANT__STORAGE__STORAGE_PATH="${data_dir}"
             [ -n "${DB_PASSWORD:-}" ] && export QDRANT__SERVICE__API_KEY="${DB_PASSWORD}"
-            exec "${qdrant_bin}" ${EXTRA_ARGS:-}
+            exec "${qdrant_bin}" ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         *)
             fail "Unknown search/vector engine: ${PROJECT_TYPE}"

@@ -106,6 +106,11 @@ password_encryption = scram-sha-256
 EOF
     fi
 
+    # Respect user custom config in config/postgresql.conf and config/pg_hba.conf if present
+    if [ -f "${conf_dir}/pg_hba.conf" ]; then
+        cp -f "${conf_dir}/pg_hba.conf" "${hba_file}" 2>/dev/null || true
+    fi
+
     # Inject performance parameters and security settings into postgresql.conf
     if [ -f "${conf_file}" ]; then
         # Remove any previous appended tuning blocks to prevent duplicate accumulation
@@ -118,6 +123,14 @@ port = ${SERVER_PORT}
 listen_addresses = '*'
 unix_socket_directories = '${socket_dir}'
 password_encryption = scram-sha-256
+
+# Include user custom configuration from config/postgresql.conf if present
+include_if_exists = '${conf_dir}/postgresql.conf'
+include_dir = '${conf_dir}/conf.d'
+EOF
+
+        if [ "${PERFORMANCE_TUNING:-1}" = "1" ]; then
+            cat <<EOF >> "${conf_file}"
 
 # Memory & Caching
 shared_buffers = ${TUNED_PG_SHARED_BUFFERS:-128MB}
@@ -138,6 +151,10 @@ random_page_cost = 1.1
 effective_io_concurrency = 200
 default_statistics_target = 100
 max_parallel_workers_per_gather = ${TUNED_PG_WORKERS:-2}
+EOF
+        fi
+
+        cat <<EOF >> "${conf_file}"
 # --- End PotenFYR Tuning ---
 EOF
     fi
