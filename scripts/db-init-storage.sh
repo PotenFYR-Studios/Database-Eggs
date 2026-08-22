@@ -87,11 +87,13 @@ start_storage_family() {
             exec "${minio_bin}" server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" --console-address "0.0.0.0:${console_port}" ${EXTRA_ARGS:-}
             ;;
         influxdb)
+            local cfg_arg=""
+            [ -f "${conf_dir}/influxdb.conf" ] && cfg_arg="-config ${conf_dir}/influxdb.conf"
             log "Starting InfluxDB on 0.0.0.0:${SERVER_PORT}..."
             export INFLUXD_BOLT_PATH="${data_dir}/influxd.bolt"
             export INFLUXD_ENGINE_PATH="${data_dir}/engine"
             export INFLUXD_HTTP_BIND_ADDRESS="0.0.0.0:${SERVER_PORT}"
-            exec influxd ${EXTRA_ARGS:-}
+            exec influxd ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         clickhouse)
             if [ ! -f "${conf_dir}/clickhouse.xml" ]; then
@@ -109,10 +111,12 @@ start_storage_family() {
             exec "${vm_bin}" -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-}
             ;;
         couchdb)
+            local cfg_arg=""
+            [ -f "${conf_dir}/local.ini" ] && cfg_arg="${conf_dir}/local.ini"
             log "Starting Apache CouchDB on 0.0.0.0:${SERVER_PORT}..."
             export COUCHDB_USER="${DB_USER:-admin}"
             export COUCHDB_PASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-            exec couchdb ${EXTRA_ARGS:-}
+            exec couchdb ${cfg_arg} ${EXTRA_ARGS:-}
             ;;
         neo4j)
             log "Starting Neo4j Graph Database on 0.0.0.0:${SERVER_PORT}..."
