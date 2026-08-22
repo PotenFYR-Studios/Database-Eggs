@@ -298,10 +298,10 @@ log "Executing startup launcher..."
 # Execute run.custom.sh if user explicitly provided one, otherwise execute canonical image launcher
 if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     log "Custom launcher detected (run.custom.sh). Executing..."
-    chmod +x "${SERVER_DIR}/run.custom.sh"
+    chmod +x "${SERVER_DIR}/run.custom.sh" 2>/dev/null || true
     exec "${SERVER_DIR}/run.custom.sh"
 elif [ -f "${RUNTIME_DIR}/run.sh" ]; then
-    chmod +x "${RUNTIME_DIR}/run.sh"
+    chmod +x "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
     exec "${RUNTIME_DIR}/run.sh"
 elif [ -f /usr/local/bin/run.sh ]; then
     exec /usr/local/bin/run.sh
