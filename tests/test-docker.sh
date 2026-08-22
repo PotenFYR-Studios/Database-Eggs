@@ -136,9 +136,9 @@ run_db_test() {
         record_result "${engine^^} startup & client readiness" 0 "Port ${port} active"
     else
         local logs
-        logs=$(docker logs "${container_name}" 2>&1 | tail -n 5)
+        logs=$(docker logs "${container_name}" 2>&1 | tail -n 25)
         record_result "${engine^^} startup & client readiness" 1 "Failed to become ready within timeout"
-        info "Recent logs: ${logs}"
+        info "Recent logs:\n${logs}"
     fi
 
     # Verify credentials persistence

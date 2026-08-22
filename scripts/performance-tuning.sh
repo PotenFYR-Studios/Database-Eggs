@@ -5,8 +5,6 @@
 #  allocated container memory (SERVER_MEMORY) and CPU core count.
 # =============================================================================
 
-set -euo pipefail
-
 calculate_system_specs() {
     export MEM_TOTAL_MB="${SERVER_MEMORY:-1024}"
     local cores

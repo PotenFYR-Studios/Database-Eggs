@@ -4,8 +4,6 @@
 #  Includes Performance Multi-Threading, Memory Tuning, and Security Isolation
 # =============================================================================
 
-set -euo pipefail
-
 init_redis_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
@@ -109,7 +107,7 @@ start_redis_family() {
             ;;
         memcached)
             log "Starting Memcached on 0.0.0.0:${SERVER_PORT}..."
-            exec memcached -p "${SERVER_PORT}" -u container -m "${SERVER_MEMORY}" ${EXTRA_ARGS:-}
+            exec memcached -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" ${EXTRA_ARGS:-}
             ;;
         *) # redis
             log "Starting Redis on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
