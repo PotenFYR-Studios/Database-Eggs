@@ -109,6 +109,12 @@ start_mongo_family() {
     local mongod_conf="${conf_dir}/mongod.conf"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
 
+    # Self-healing check: if configuration is missing, run init
+    if [ ! -f "${mongod_conf}" ] && [ "${PROJECT_TYPE}" != "ferretdb" ]; then
+        warn "MongoDB configuration missing. Initializing config..."
+        init_mongo_family
+    fi
+
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
         log "Starting FerretDB on 0.0.0.0:${SERVER_PORT}..."
         exec ferretdb --listen-addr="0.0.0.0:${SERVER_PORT}" \

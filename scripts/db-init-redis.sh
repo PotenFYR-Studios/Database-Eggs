@@ -87,6 +87,12 @@ start_redis_family() {
     local redis_conf="${conf_dir}/redis.conf"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
 
+    # Self-healing check: if configuration is missing, run init
+    if [ ! -f "${redis_conf}" ]; then
+        warn "Configuration missing. Initializing ${PROJECT_TYPE^^} config..."
+        init_redis_family
+    fi
+
     case "${PROJECT_TYPE}" in
         dragonfly)
             local pw_arg=""
