@@ -33,6 +33,21 @@ SERVER_DIR="$(pwd)"
 
 export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
 
+# Source .env if available to load active credentials and parameters
+if [ -f "${SERVER_DIR}/.env" ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source "${SERVER_DIR}/.env" 2>/dev/null || true
+    set +a
+fi
+
+# Export credentials into process environment for shell & CLI tools
+export PGPASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
+export MYSQL_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
+export REDISCLI_AUTH="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
+export MONGO_PWD="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
+export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
+
 # Source all modular initialization handlers & performance tuning safely from image or isolated runtime
 for script in /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh /tmp/.database-runtime/db-init-*.sh /tmp/.database-runtime/performance-*.sh "${SERVER_DIR}/scripts"/db-init-*.sh; do
     [ -f "${script}" ] && source "${script}" 2>/dev/null || true
@@ -96,6 +111,7 @@ print_connection_guide() {
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "${DB_PASSWORD:-[none]}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "${DB_ROOT_PASSWORD:-[none]}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Environment" "Saved in .env & credentials.txt"
     printf "${C_GREEN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
     printf "\n ${C_BOLD}${C_YELLOW}Quick Connection Examples:${C_RESET}\n"
