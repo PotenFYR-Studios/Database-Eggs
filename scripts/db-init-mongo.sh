@@ -4,8 +4,6 @@
 #  Includes WiredTiger Cache Optimization and Authentication Security
 # =============================================================================
 
-set -euo pipefail
-
 init_mongo_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"

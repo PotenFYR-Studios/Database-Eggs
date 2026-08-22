@@ -4,8 +4,6 @@
 #  Downloads and installs ANY specific version or custom URL for any database engine.
 # =============================================================================
 
-set -euo pipefail
-
 ENGINE="${1:-${DATABASE_TYPE:-mariadb}}"
 VERSION="${2:-${DB_VERSION:-latest}}"
 INSTALL_DIR="${3:-${SERVER_DIR:-$(pwd)}/bin}"

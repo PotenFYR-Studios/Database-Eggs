@@ -3,8 +3,6 @@
 #  PotenFYR Studios - Search & Vector Engine Handler (Meilisearch, Typesense, Qdrant)
 # =============================================================================
 
-set -euo pipefail
-
 init_search_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     mkdir -p "${data_dir}" "${SERVER_DIR}/logs"

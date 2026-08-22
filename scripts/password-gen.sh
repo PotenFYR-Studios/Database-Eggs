@@ -4,8 +4,6 @@
 #  Ensures 100% random, cryptographically secure passwords & tokens for databases.
 # =============================================================================
 
-set -euo pipefail
-
 # Generate a cryptographically strong random password
 # Arguments:
 #   $1: Length (default: 32)

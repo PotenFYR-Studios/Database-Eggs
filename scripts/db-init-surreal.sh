@@ -3,8 +3,6 @@
 #  PotenFYR Studios - SurrealDB & Multi-Model Engine Handler
 # =============================================================================
 
-set -euo pipefail
-
 init_surreal_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     mkdir -p "${data_dir}" "${SERVER_DIR}/logs"

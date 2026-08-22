@@ -4,8 +4,6 @@
 #  Includes Automatic Performance Tuning and Production Security Hardening
 # =============================================================================
 
-set -euo pipefail
-
 init_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"

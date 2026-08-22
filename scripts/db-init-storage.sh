@@ -3,8 +3,6 @@
 #  PotenFYR Studios - Storage, Backend & Analytical Handler (PocketBase, MinIO, InfluxDB, ClickHouse, VictoriaMetrics, Neo4j, CouchDB)
 # =============================================================================
 
-set -euo pipefail
-
 init_storage_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     mkdir -p "${data_dir}" "${SERVER_DIR}/logs"
