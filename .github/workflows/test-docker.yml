@@ -11,6 +11,8 @@ jobs:
   test-docker:
     name: Run Docker Integration Suite
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
 
     steps:
       - name: Checkout repository
