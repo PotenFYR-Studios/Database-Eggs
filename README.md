@@ -27,11 +27,12 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 5. [Production Security Hardening](#production-security-hardening)
 6. [Quickstart & Setup](#quickstart--setup)
 7. [Connecting to Your Database](#connecting-to-your-database)
-8. [Egg Variables Reference](#egg-variables-reference)
-9. [Repository Layout](#repository-layout)
-10. [Docker Images (GHCR)](#docker-images-ghcr)
-11. [Troubleshooting & FAQ](#troubleshooting--faq)
-12. [License](#license)
+8. [Docker & Panel Testing Suite](#docker--panel-testing-suite)
+9. [Egg Variables Reference](#egg-variables-reference)
+10. [Repository Layout](#repository-layout)
+11. [Docker Images (GHCR)](#docker-images-ghcr)
+12. [Troubleshooting & FAQ](#troubleshooting--faq)
+13. [License](#license)
 
 ---
 
@@ -174,6 +175,32 @@ surreal sql --endpoint http://<SERVER_IP>:<PORT> --user <DB_USER> --pass '<DB_PA
 
 ---
 
+## Docker & Panel Testing Suite
+
+The repository includes a standalone automated test suite to verify all database engines under simulated panel container conditions (UID `988:988`, volume mounts, non-root user permissions, memory limits, and signal handling):
+
+### Running on Linux / macOS / WSL
+
+```bash
+chmod +x tests/test-docker.sh
+./tests/test-docker.sh
+```
+
+### Running on Windows (PowerShell)
+
+```powershell
+.\tests\test-docker.ps1
+```
+
+The test suite validates:
+- [x] Multi-engine startup & socket initialization
+- [x] Client connection & query execution (MariaDB, PostgreSQL, Redis, MongoDB, SurrealDB, Meilisearch, PocketBase, MinIO, Qdrant)
+- [x] Automatic credential generation & `.db_credentials` file persistence
+- [x] Dynamic RAM auto-tuning & memory capping
+- [x] Graceful `SIGTERM` / `SIGINT` container shutdown (clean exit codes)
+
+---
+
 ## Egg Variables Reference
 
 | Variable | Default | Description |
@@ -223,9 +250,13 @@ Database-Eggs/
 │   ├── db-init-surreal.sh          # SurrealDB handler
 │   ├── db-init-search.sh           # Meilisearch, Typesense, Qdrant handler
 │   └── db-init-storage.sh          # PocketBase, MinIO, InfluxDB handler
+├── tests/                          # Automated Docker verification suites
+│   ├── test-docker.sh              # Universal bash Docker verification test suite
+│   └── test-docker.ps1             # PowerShell Docker test runner for Windows
 ├── .github/workflows/
 │   ├── docker-image.yml            # CI/CD: Builds multi-arch images (GHCR)
-│   └── validate-eggs.yml           # CI: Validates egg JSON and shell syntax
+│   ├── validate-eggs.yml           # CI: Validates egg JSON and shell syntax
+│   └── test-docker.yml             # CI: Automated Docker integration testing
 ├── LICENSE                         # MIT License
 └── README.md                       # Documentation
 ```
