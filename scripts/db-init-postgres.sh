@@ -63,6 +63,22 @@ init_postgres() {
         printf '%s' "${DB_ROOT_PASSWORD:-postgres}" > "${pwfile}"
         chmod 600 "${pwfile}" 2>/dev/null || true
 
+        # Ensure current effective UID exists in /etc/passwd for getpwuid() in PostgreSQL initdb
+        local current_uid
+        current_uid=$(id -u 2>/dev/null || echo "988")
+        local current_gid
+        current_gid=$(id -g 2>/dev/null || echo "988")
+        if ! getent passwd "${current_uid}" >/dev/null 2>&1; then
+            if [ -w /etc/passwd ]; then
+                echo "container:x:${current_uid}:${current_gid}:container user:${SERVER_DIR}:/bin/bash" >> /etc/passwd 2>/dev/null || true
+            fi
+        fi
+        if ! getent group "${current_gid}" >/dev/null 2>&1; then
+            if [ -w /etc/group ]; then
+                echo "container:x:${current_gid}:" >> /etc/group 2>/dev/null || true
+            fi
+        fi
+
         local init_out=""
         local init_status=1
 

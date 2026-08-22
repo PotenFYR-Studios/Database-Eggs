@@ -64,6 +64,20 @@ error_trap() {
 }
 trap 'error_trap $LINENO' ERR
 
+# Universal UID/GID Mapping (Resolves 'initdb: could not look up effective user ID <UID>: user does not exist')
+CURRENT_UID=$(id -u 2>/dev/null || echo "988")
+CURRENT_GID=$(id -g 2>/dev/null || echo "988")
+if ! whoami >/dev/null 2>&1 || ! getent passwd "${CURRENT_UID}" >/dev/null 2>&1; then
+    if [ -w /etc/passwd ]; then
+        echo "container:x:${CURRENT_UID}:${CURRENT_GID}:container user:${HOME:-/home/container}:/bin/bash" >> /etc/passwd 2>/dev/null || true
+    fi
+fi
+if ! getent group "${CURRENT_GID}" >/dev/null 2>&1; then
+    if [ -w /etc/group ]; then
+        echo "container:x:${CURRENT_GID}:" >> /etc/group 2>/dev/null || true
+    fi
+fi
+
 # Universal working directory detection
 if [ -d /home/container ]; then
     cd /home/container 2>/dev/null || true

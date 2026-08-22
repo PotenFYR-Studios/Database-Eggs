@@ -91,11 +91,17 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
     fi; \
     chmod +x /usr/local/bin/* 2>/dev/null || true
 
-# Create container user (UID 988, GID 988)
-RUN groupadd -g 988 container \
-    && useradd -m -u 988 -g container -s /bin/bash container \
+# Create container users and configure permissions for dynamic UID mapping (OpenShift/Pterodactyl/Docker)
+RUN groupadd -g 988 container 2>/dev/null || true \
+    && useradd -m -u 988 -g container -s /bin/bash container 2>/dev/null || true \
+    && groupadd -g 999 dockeruser 2>/dev/null || true \
+    && useradd -m -u 999 -g 988 -s /bin/bash ptdluser 2>/dev/null || true \
+    && groupadd -g 1000 standarduser 2>/dev/null || true \
+    && useradd -m -u 1000 -g 988 -s /bin/bash appuser 2>/dev/null || true \
     && mkdir -p /home/container /mnt/server \
-    && chown -R container:container /home/container /mnt/server
+    && chown -R container:container /home/container /mnt/server \
+    && chmod -R 777 /home/container /mnt/server \
+    && chmod 666 /etc/passwd /etc/group /etc/shadow 2>/dev/null || true
 
 # Copy entrypoint, launcher, installer, and modular scripts
 COPY entrypoint.sh /entrypoint.sh
