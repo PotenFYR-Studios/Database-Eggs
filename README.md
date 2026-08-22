@@ -41,7 +41,7 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 - **Cryptographically Strong Automated Secrets**: Whenever passwords or secrets are left blank or set to `auto`, the system automatically generates high-entropy, 32+ character random credentials using `/dev/urandom` and OpenSSL (~190 bits of entropy).
 - **Dynamic Performance Auto-Tuning**: Automatically calculates optimal buffer pool sizes, cache limits, worker threads, and connection limits based on allocated server memory (`SERVER_MEMORY`) and CPU cores.
 - **Production Security Hardening**: Enforces SCRAM-SHA-256 password hashing for PostgreSQL, removes anonymous and test accounts for MySQL/MariaDB, disables dangerous debug commands in Redis, and locks down permissions to `chmod 600` and `chmod 700`.
-- **Protected Credential Persistence**: Generated secrets and connection info are saved in `.db_credentials`, `credentials.txt`, and `.env` and printed directly on the console with ready-to-copy connection strings.
+- **Protected Credential Persistence**: Generated secrets and connection parameters are saved strictly in `.env` (mode `600`) and exported to the startup environment, while remaining fully masked in console logs.
 - **True Cross-Panel Universal Compatibility**: First-class support for **Pterodactyl (0.7, 1.x)**, **Pelican Panel**, **Feather Panel**, **Wisp**, **Jexactyl**, **PufferPanel**, and native Docker.
 
 ---
@@ -82,10 +82,8 @@ Database security requires non-guessable, high-entropy secrets. By default (`AUT
 1. **High-Entropy Generation**: Uses `/dev/urandom` and OpenSSL cryptographic random byte streams to generate 32-character passwords (~190 bits of entropy).
 2. **URL and Connection-String Safe**: Characters are selected to prevent breaking URI connection strings (`mysql://...`, `postgresql://...`, `redis://...`).
 3. **Persisted Securely**:
-   - `.db_credentials`: Read by the container on startup to ensure passwords never change on server reboot.
-   - `credentials.txt`: Formatted human-readable summary of all connection parameters.
-   - `.env`: Ready-to-use environment variables for your application.
-   - File permissions are locked to `chmod 600` (read/write only by the server container).
+   - `.env`: Saved in standard dotenv format with permissions locked to `chmod 600`. Read on startup so passwords never change on server reboot.
+   - Startup Environment: Exported into runtime environment variables and shell aliases (`.profile` & `.bashrc`).
 
 ---
 
@@ -192,7 +190,7 @@ chmod +x tests/test-docker.sh
 The test suite validates:
 - Multi-engine startup and socket initialization
 - Client connection and query execution (MariaDB, PostgreSQL, Redis, MongoDB, SurrealDB, Meilisearch, PocketBase, MinIO, Qdrant)
-- Automatic credential generation and `.db_credentials` file persistence
+- Automatic credential generation and `.env` file persistence (mode 600)
 - Dynamic RAM auto-tuning and memory capping
 - Graceful `SIGTERM` / `SIGINT` container shutdown (clean exit codes)
 
