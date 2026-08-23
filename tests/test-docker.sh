@@ -21,6 +21,9 @@ C_DIM='\033[2m'
 
 IMAGE_NAME="${IMAGE_NAME:-database-eggs:test}"
 BUILD_IMAGE="${BUILD_IMAGE:-1}"
+READY_TIMEOUT="${READY_TIMEOUT:-120}"     # seconds to wait for engine readiness
+STOP_GRACE="${STOP_GRACE:-10}"            # docker stop grace period (seconds)
+LOG_TAIL="${LOG_TAIL:-40}"                # log lines shown on failure
 
 log()   { printf "${C_CYAN}${C_BOLD}[CHECK]${C_RESET} %s\n" "$*"; }
 pass()  { printf "  ${C_GREEN}${C_BOLD}✓ PASS:${C_RESET} %s\n" "$*"; }
@@ -100,8 +103,12 @@ run_db_test() {
         -v "${test_dir}:/home/container" \
         "${IMAGE_NAME}" >/dev/null 2>&1
 
-    # Wait for ready state (up to 30 seconds)
-    local retries=30
+    # Wait for ready state (configurable; pinned-version rows may download on first boot)
+    local retries="${READY_TIMEOUT}"
+    case "${engine}:${version}" in
+        mariadb:*.*|mysql:*.*|mongodb:*.*|postgresql:[0-9]*)
+            [ "${version}" != "latest" ] && retries=$((READY_TIMEOUT * 3)) ;;
+    esac
     local is_ready=1
     while [ "${retries}" -gt 0 ]; do
         sleep 1
@@ -137,9 +144,10 @@ run_db_test() {
         record_result "${engine^^} startup & client readiness" 0 "Port ${port} active"
     else
         local logs
-        logs=$(docker logs "${container_name}" 2>&1 | tail -n 25)
+        logs=$(docker logs "${container_name}" 2>&1 | tail -n "${LOG_TAIL}")
         record_result "${engine^^} startup & client readiness" 1 "Failed to become ready within timeout"
-        info "Recent logs:\n${logs}"
+        printf "  ${C_BLUE}ℹ INFO:${C_RESET} Recent logs:\n"
+        printf '%s\n' "${logs}" | sed 's/^/    /'
     fi
 
     # Verify sensitive credentials persistence strictly in .env
@@ -148,7 +156,7 @@ run_db_test() {
     fi
 
     # Verify graceful shutdown
-    docker stop --time 5 "${container_name}" >/dev/null 2>&1 || true
+    docker stop --time "${STOP_GRACE}" "${container_name}" >/dev/null 2>&1 || true
     local exit_code
     exit_code=$(docker inspect -f '{{.State.ExitCode}}' "${container_name}" 2>/dev/null || echo "0")
     if [ "${exit_code}" -eq 0 ] || [ "${exit_code}" -eq 130 ] || [ "${exit_code}" -eq 143 ]; then

@@ -41,10 +41,17 @@ PF_INSTALLER_LOG="${PF_INSTALLER_LOG:-$(_pf_log_dir)/installer.log}"
 
 # --------------------------------------------------------------- sanitization
 pf_sanitize() {
-    printf '%s' "$1" | sed -E \
+    local input="$1" out=""
+    out=$(printf '%s' "${input}" | sed -E \
         -e 's/(PASSWORD|PASSWD|PASS|SECRET|TOKEN|API[_-]?KEY|MASTER[_-]?KEY|AUTH|CREDENTIALS?)([A-Za-z0-9_]*[=:])[^ ]+/\1\2<masked>/gI' \
-        -e 's/(://[^:/@?#]+):[^@/?#]{4,}@/\1:<masked>@/g' \
-        -e 's/(-p|--password)[ ]+[^ ]+/\1 <masked>/gI'
+        -e 's|(://[^:/@?#]+):[^@/?#]{4,}@|\1:<masked>@|g' \
+        -e 's/(-p|--password)[ ]+[^ ]+/\1 <masked>/gI' 2>/dev/null)
+    # Never swallow messages if the sanitizer itself fails
+    if [ -n "${input}" ] && [ -z "${out}" ]; then
+        printf '%s' "${input}"
+    else
+        printf '%s' "${out}"
+    fi
 }
 
 # ------------------------------------------------------------------ rotation
