@@ -22,7 +22,7 @@ export C_RESET C_BOLD C_CYAN C_GREEN C_YELLOW C_RED C_MAGENTA C_BLUE C_DIM
 # -----------------------------------------------------------------------------
 PF_COMPONENT="entrypoint"
 PF_FAIL_SLEEP=8   # linger so panel consoles capture the fatal message
-source "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/scripts/lib-diagnostics.sh" \
+_src="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/scripts/lib-diagnostics.sh"; [ -f "${_src}" ] && source "${_src}" \
     || source /usr/local/bin/lib-diagnostics.sh \
     || source ./lib-diagnostics.sh \
     || true
@@ -331,7 +331,7 @@ printf "${C_CYAN}${C_BOLD}  /  |/  /_  __/ / /_(_)     / __ \\/ __ )    ${C_RESE
 printf "${C_BLUE}${C_BOLD} / /|_/ / / / / / __/ /_____/ / / / __  |    ${C_RESET}\n"
 printf "${C_BLUE}${C_BOLD}/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     ${C_RESET}\n"
 printf "${C_MAGENTA}${C_BOLD}/_/  /_/\\__,_/_/\\__/_/     /_____/_____/      ${C_RESET}\n"
-printf "${C_YELLOW}${C_BOLD}  » Universal Multi-Database Server Runtime${C_RESET}\n"
+printf "${C_YELLOW}${C_BOLD}  » Multi-Database Server Runtime${C_RESET}\n"
 printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
 
 # Runtime Environment Card
