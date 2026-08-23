@@ -1093,11 +1093,28 @@ case "${ENGINE}" in
         [ -z "${TAG}" ] && TAG="v1.12.1"
         [[ "${TAG}" != v* ]] && TAG="v${TAG}"
         if [ ! -x "${INSTALL_DIR}/qdrant" ]; then
-            URL="https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
-            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
-                seal_binary "${INSTALL_DIR}/qdrant"
-                ok "Qdrant ${TAG} installed."
-            else rm -f "${INSTALL_DIR}/qdrant"; warn "Qdrant ${TAG} download failed; baked binary (if any) will serve."; fi
+            # Prefer STATIC musl builds: immune to host glibc age (recent qdrant
+            # gnu builds require GLIBC 2.38+, older bases ship 2.35).
+            local q_musl="x86_64-unknown-linux-musl"
+            [ -n "${ARCH_MUSL:-}" ] && q_musl="${ARCH_MUSL}"
+            local urls=(
+                "https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${q_musl}.tar.gz"
+                "https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
+            )
+            local installed=0 u
+            for u in "${urls[@]}"; do
+                probe_url "${u}" || continue
+                if fetch "${u}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                    if seal_binary "${INSTALL_DIR}/qdrant" \
+                       && "${INSTALL_DIR}/qdrant" --version >/dev/null 2>&1; then
+                        installed=1
+                        ok "Qdrant ${TAG} installed ($(basename "${u%%.tar.gz}") style)."
+                        break
+                    fi
+                    rm -f "${INSTALL_DIR}/qdrant"
+                fi
+            done
+            [ "${installed}" = "1" ] || warn "Qdrant ${TAG} could not be provisioned compatibly; baked binary (if any) will serve."
         fi
         ;;
 
