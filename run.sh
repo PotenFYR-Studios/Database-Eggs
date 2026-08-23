@@ -341,7 +341,13 @@ verify_running_version() {
 
     export EFFECTIVE_DB_VERSION="${actual}"
     local req_major="${req%%.*}" act_major="${actual%%.*}"
-    # Installer runs as a subshell: it flags CDN substitution via marker file
+    # Installer runs as a subshell: substitution decisions reach us via marker
+    # files, never environment variables.
+    if [ -f "${SERVER_DIR}/bin/.versions/${PROJECT_TYPE}-system-fallback" ]; then
+        warn "Running container-provided ${PROJECT_TYPE} ${actual}: the pinned version '${req}' could not be provisioned in this environment (see logs/installer.log)."
+        warn "Exact-version service resumes automatically once provisioning becomes possible (build tools, root, or reachable upstream)."
+        return 0
+    fi
     if [ "${PROJECT_TYPE}" = "mysql" ] \
        && [ "${CDN_FALLBACK_SYSTEM:-0}" = "1" ] \
        && [ -f "${SERVER_DIR}/bin/.versions/mysql-cdn-fallback" ]; then
