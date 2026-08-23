@@ -1,4 +1,4 @@
-name: Build & Publish Multi-Variant Container Images
+name: Build & Publish Universal Database Image
 
 on:
   push:
@@ -13,32 +13,12 @@ env:
   IMAGE_NAME: potenfyr-studios/database-eggs
 
 jobs:
-  build-variants:
-    name: Build ${{ matrix.tag }} (${{ matrix.variant }})
+  build-universal:
+    name: Build universal multi-database image
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - variant: all
-            tag: latest
-          - variant: mysql
-            tag: mysql
-          - variant: postgres
-            tag: postgres
-          - variant: mongodb
-            tag: mongodb
-          - variant: redis
-            tag: redis
-          - variant: meilisearch
-            tag: meilisearch
-          - variant: clickhouse
-            tag: clickhouse
-          - variant: sqlite
-            tag: sqlite
 
     steps:
       - name: Checkout repository
@@ -58,13 +38,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Compute tags
+      - name: Compute tags (single universal image)
         id: tags
         run: |
           IMAGE_URI="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
-          TAGS="${IMAGE_URI}:${{ matrix.tag }}"
-          if [ "${{ matrix.variant }}" = "all" ] && [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},${IMAGE_URI}:latest,${IMAGE_URI}:main"
+          TAGS="${IMAGE_URI}:latest"
+          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
+            TAGS="${TAGS},${IMAGE_URI}:main,${IMAGE_URI}:sha-${GITHUB_SHA::7}"
+          fi
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            TAGS="${TAGS},${IMAGE_URI}:${GITHUB_REF#refs/tags/}"
           fi
           echo "tags=${TAGS}" >> $GITHUB_OUTPUT
 
@@ -74,8 +57,25 @@ jobs:
           context: .
           platforms: linux/amd64,linux/arm64
           build-args: |
-            RUNTIME_VARIANT=${{ matrix.variant }}
+            RUNTIME_VARIANT=all
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha,scope=${{ matrix.variant }}
-          cache-to: type=gha,mode=max,scope=${{ matrix.variant }}
+          cache-from: type=gha,scope=universal
+          cache-to: type=gha,scope=universal,mode=max
+
+  registry-hygiene:
+    name: Clean stale package versions
+    needs: build-universal
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Remove old untagged container versions
+        uses: actions/delete-package-versions@v5
+        with:
+          package-name: database-eggs
+          package-type: container
+          min-versions-to-keep: 5
+          delete-only-untagged-versions: true
