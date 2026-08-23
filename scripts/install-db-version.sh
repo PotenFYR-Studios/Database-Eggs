@@ -139,6 +139,22 @@ no_arch_build_fallback() {
     exit 0
 }
 
+# Environmental impossibility (no compiler, no root, CDN blocked, etc.):
+# never brick the server. Warn loudly, mark the substitution so the launcher's
+# strict verifier announces it instead of failing, and continue with the
+# container-provided engine. Exact-version service resumes automatically in
+# environments where provisioning becomes possible.
+fallback_to_system() {
+    local reason="$1"
+    warn "${reason}"
+    warn "Falling back to the container-provided ${ENGINE}. Your pinned version '${VERSION}' could not be provisioned in this environment."
+    warn "To serve the exact version: run on a base image with build tools, grant root, or choose DB_VERSION=latest."
+    printf '%s\n' "${RESOLVED}" > "${stamp_dir}/${ENGINE}-system-fallback" 2>/dev/null || true
+    RESOLVED="${RESOLVED}-system-fallback"
+    stamp_ok
+    exit 0
+}
+
 _json_tags() { # Extract tag_name values without jq (first match wins upstream order)
     if have jq; then jq -r '.tag_name // .[0].tag_name // empty' 2>/dev/null; else
         grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
@@ -379,6 +395,8 @@ stamp_ok()      { printf '%s|%s|%s' "${RESOLVED:-${VERSION}}" "${ARCH_TYPE}" "$(
 stamp_matches() { [ -f "${stamp_dir}/${ENGINE}" ] && grep -q "^${RESOLVED:-${VERSION}}|" "${stamp_dir}/${ENGINE}" 2>/dev/null; }
 
 mark_engine_ready() {
+    # Successful provisioning clears any prior system-fallback substitution
+    rm -f "${stamp_dir}/${ENGINE}-system-fallback" 2>/dev/null || true
     stamp_ok
     ok "Engine '${ENGINE}' ${RESOLVED} ready (${INSTALL_DIR})"
 }
@@ -982,26 +1000,26 @@ install_redis_family() {
         redis)
             [ -x "${INSTALL_DIR}/redis-server" ] && return 0
             build_from_source "https://download.redis.io/releases/redis-${RESOLVED}.tar.gz" src/redis-server src/redis-cli \
-                || fail "Redis ${RESOLVED} build failed (needs gcc/make; root helps auto-install them). Use DB_VERSION=latest for the system Redis."
+                || fallback_to_system "Redis ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         valkey)
             [ -x "${INSTALL_DIR}/valkey-server" ] && return 0
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
             build_from_source "https://github.com/valkey-io/valkey/archive/refs/tags/${tag}.tar.gz" src/valkey-server src/valkey-cli \
-                || fail "Valkey ${RESOLVED} build failed. Use DB_VERSION=latest for the system engine."
+                || fallback_to_system "Valkey ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         keydb)
             [ -x "${INSTALL_DIR}/keydb-server" ] && return 0
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
             build_from_source "https://github.com/EQ-Alpha/KeyDB/archive/refs/tags/${tag}.tar.gz" keydb-server keydb-cli \
-                || warn "KeyDB ${RESOLVED} build failed; falling back to system KeyDB if present."
+                || fallback_to_system "KeyDB ${RESOLVED} cannot be compiled here."
             ;;
         memcached)
             [ -x "${INSTALL_DIR}/memcached" ] && return 0
             apt_try_install libevent-dev || true
             ldconfig 2>/dev/null || true
             build_from_source "https://memcached.org/files/memcached-${RESOLVED}.tar.gz" memcached \
-                || warn "memcached ${RESOLVED} build failed (libevent-dev required); using system memcached if present."
+                || fallback_to_system "memcached ${RESOLVED} cannot be compiled here (libevent-dev missing)."
             ;;
         dragonfly)
             [ -x "${INSTALL_DIR}/dragonfly" ] && return 0
