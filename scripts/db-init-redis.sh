@@ -28,6 +28,25 @@ init_redis_family() {
     else
         export TUNED_REDIS_MAXMEMORY="${SERVER_MEMORY:-1024}mb"
         export TUNED_REDIS_IO_THREADS="2"
+        export TUNED_REDIS_TCP_BACKLOG="511"
+        export TUNED_REDIS_ACTIVE_DEFRAG="no"
+    fi
+
+    # activedefrag requires jemalloc-with-defrag builds. Our provisioned
+    # source builds support it; distro packages (Ubuntu redis 6.x) do NOT and
+    # treat the directive as FATAL. Emit it only when we own the binary.
+    local defrag_bin=""
+    case "${PROJECT_TYPE}" in
+        valkey)      defrag_bin="${SERVER_DIR}/bin/valkey-server" ;;
+        keydb)       defrag_bin="${SERVER_DIR}/bin/keydb-server" ;;
+        *)           defrag_bin="${SERVER_DIR}/bin/redis-server" ;;
+    esac
+    local defrag_line=""
+    if [ -x "${defrag_bin}" ] && [ "${TUNED_REDIS_ACTIVE_DEFRAG:-no}" = "yes" ]; then
+        defrag_line="activedefrag yes
+active-defrag-ignore-bytes 100mb
+active-defrag-threshold-lower 10
+active-defrag-threshold-upper 100"
     fi
 
     if [ ! -f "${redis_conf}" ]; then
@@ -52,13 +71,7 @@ maxmemory-samples 7
 io-threads ${TUNED_REDIS_IO_THREADS}
 io-threads-do-reads yes
 tcp-backlog ${TUNED_REDIS_TCP_BACKLOG:-511}
-
-# Memory fragmentation (auto on >=1GB boxes)
-activedefrag ${TUNED_REDIS_ACTIVE_DEFRAG:-no}
-active-defrag-ignore-bytes 100mb
-active-defrag-threshold-lower 10
-active-defrag-threshold-upper 100
-
+${defrag_line}
 # Non-Blocking Background Deletion (High Performance)
 lazyfree-lazy-eviction yes
 lazyfree-lazy-expire yes
@@ -87,8 +100,12 @@ EOF
         ok "Created performance-tuned ${redis_conf}"
     else
         sed -i "s/^port .*/port ${SERVER_PORT}/g" "${redis_conf}" 2>/dev/null || true
-        sed -i "/^activedefrag/d" "${redis_conf}" 2>/dev/null || true
-        sed -i "/^active-defrag/d" "${redis_conf}" 2>/dev/null || true
+        # Keep defrag directives in sync with the binary that will run:
+        # strip always, re-add only when our jemalloc build is in use.
+        sed -i "/^activedefrag/d; /^active-defrag-/d" "${redis_conf}" 2>/dev/null || true
+        if [ -x "${defrag_bin}" ] && [ "${TUNED_REDIS_ACTIVE_DEFRAG:-no}" = "yes" ]; then
+            printf '\nactivedefrag yes\nactive-defrag-ignore-bytes 100mb\nactive-defrag-threshold-lower 10\nactive-defrag-threshold-upper 100\n' >> "${redis_conf}"
+        fi
         if [ -n "${DB_PASSWORD:-}" ]; then
             if grep -q "^requirepass" "${redis_conf}"; then
                 sed -i "s/^requirepass .*/requirepass ${DB_PASSWORD}/g" "${redis_conf}" 2>/dev/null || true
