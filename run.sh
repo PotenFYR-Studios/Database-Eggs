@@ -13,62 +13,41 @@ C_YELLOW='\033[33m'
 C_RED='\033[31m'
 C_MAGENTA='\033[35m'
 C_DIM='\033[2m'
+export C_RESET C_BOLD C_CYAN C_GREEN C_YELLOW C_RED C_MAGENTA C_DIM
+
+# -----------------------------------------------------------------------------
+# Central Diagnostics Library (unified logging, traces, crash safety)
+# -----------------------------------------------------------------------------
+PF_COMPONENT="launcher"
+PF_FAIL_SLEEP=5
+_LIB_CANDIDATES=(
+    "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/scripts/lib-diagnostics.sh"
+    "/usr/local/bin/lib-diagnostics.sh"
+    "/tmp/.database-runtime/lib-diagnostics.sh"
+    "${SERVER_DIR:-}/scripts/lib-diagnostics.sh"
+    "./lib-diagnostics.sh"
+)
+_pf_lib_loaded=0
+for _lib in "${_LIB_CANDIDATES[@]}"; do
+    if [ -f "${_lib}" ]; then
+        # shellcheck source=/dev/null
+        source "${_lib}" && _pf_lib_loaded=1 && break
+    fi
+done
+unset _lib _LIB_CANDIDATES
+
+if [ "${_pf_lib_loaded}" != "1" ]; then
+    # Absolute last-resort fallback so the launcher is never speechless
+    log()   { printf '[launcher] %s\n' "$*"; }
+    ok()    { printf '[launcher][ok] %s\n' "$*"; }
+    warn()  { printf '[launcher][warn] %s\n' "$*" >&2; }
+    error() { printf '[launcher][error] %s\n' "$*" >&2; }
+    fail()  { printf '[launcher][FATAL] %s\n' "$*" >&2; sleep 8; exit 1; }
+fi
 
 PANEL_NAME="${PANEL_NAME:-${P_SERVER_UUID:+pterodactyl}}"
 PANEL_NAME="${PANEL_NAME:-panel}"
-
-log()   { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_BOLD}%s${C_RESET}\n" "$*"; }
-ok()    { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_GREEN}${C_BOLD}[ok]${C_RESET} %s\n" "$*"; }
-warn()  { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_YELLOW}${C_BOLD}[warn]${C_RESET} %s\n" "$*"; }
-error() { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*" >&2; }
-fail()  {
-    printf "\n${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[fatal error]${C_RESET} %s\n\n" "$*" >&2
-    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
-    printf '[%s] FATAL: %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*" >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
-    sleep 8
-    exit 1
-}
-
-# Diagnostic Error Trap
-print_crash_diagnostics() {
-    local exit_code=$1
-    local line_no=$2
-    local last_cmd="$3"
-
-    if [ ${exit_code} -ne 0 ] && [ ${exit_code} -ne 130 ] && [ ${exit_code} -ne 143 ]; then
-        printf "\n${C_RED}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n" >&2
-        printf "${C_RED}${C_BOLD}│  ✗ CRITICAL DATABASE CRASH DIAGNOSTIC REPORT                │${C_RESET}\n" >&2
-        printf "${C_RED}${C_BOLD}├─────────────────────────────────────────────────────────────┤${C_RESET}\n" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Exit Code" "${exit_code}" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Source Line" "run.sh:L${line_no}" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Failed Command" "${last_cmd:0:36}" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Memory Limit" "${SERVER_MEMORY:-?} MB" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Allocated Port" "${SERVER_PORT:-?}" >&2
-        printf "${C_RED}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : %-36s ${C_RED}${C_BOLD}│${C_RESET}\n" "Diagnostic Log" "logs/startup_error.log" >&2
-        printf "${C_RED}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n" >&2
-
-        mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
-        {
-            printf '=== CRASH DIAGNOSTICS (%s) ===\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
-            printf 'Exit Code: %s\nLine: %s\nCommand: %s\n' "${exit_code}" "${line_no}" "${last_cmd}"
-            printf 'Engine: %s (v%s)\nPort: %s\nMemory: %s MB\n' "${PROJECT_TYPE}" "${DB_VERSION}" "${SERVER_PORT:-?}" "${SERVER_MEMORY:-?}"
-            printf 'Disk Space:\n%s\n' "$(df -h "${SERVER_DIR}" 2>/dev/null || true)"
-            printf 'Recent Logs:\n'
-            for lf in "${SERVER_DIR}/logs"/*.log; do
-                if [ -f "${lf}" ]; then
-                    printf '--- %s ---\n' "$(basename "${lf}")"
-                    tail -n 20 "${lf}" 2>/dev/null || true
-                fi
-            done
-            printf '=======================================\n'
-        } >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
-
-        # 5-second console grace period for panel stream synchronization
-        sleep 5
-    fi
-}
-trap 'print_crash_diagnostics $? $LINENO "${BASH_COMMAND}"' ERR
+export PANEL_NAME
 
 # Universal UID/GID Mapping (Resolves 'initdb: could not look up effective user ID <UID>: user does not exist')
 CURRENT_UID=$(id -u 2>/dev/null || echo "988")
@@ -303,14 +282,19 @@ prepare_data_instance
 verify_running_version() {
     local req="${DB_VERSION:-latest}"
     [ "${req}" = "latest" ] && return 0
+    [ "${req}" = "stable" ] && return 0
     local bin_name="" actual=""
     case "${PROJECT_TYPE}" in
         postgresql)
             local pb; pb=$(find_pg_bin "postgres" 2>/dev/null) && actual=$("${pb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             ;;
-        mariadb)  command -v mariadbd >/dev/null 2>&1 && actual=$(mariadbd --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        mariadb)
+            local mb="${SERVER_DIR}/opt/mariadb/bin/mariadbd"
+            [ -x "${mb}" ] || mb="$(command -v mariadbd 2>/dev/null || true)"
+            [ -n "${mb}" ] && actual=$("${mb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
         mysql)
-            local mb="${SERVER_DIR}/opt/mysql/bin/mysqld"
+            mb="${SERVER_DIR}/opt/mysql/bin/mysqld"
             [ -x "${mb}" ] || mb="$(command -v mysqld 2>/dev/null || true)"
             [ -n "${mb}" ] && actual=$("${mb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             ;;
@@ -319,7 +303,10 @@ verify_running_version() {
             [ -n "${mo}" ] && actual=$("${mo}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             ;;
         redis)     command -v redis-server >/dev/null 2>&1 && actual=$(redis-server --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
-        valkey)    command -v valkey-server >/dev/null 2>&1 && actual=$(valkey-server --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        valkey)
+            local vk="${SERVER_DIR}/bin/valkey-server"; [ -x "${vk}" ] || vk="$(command -v valkey-server 2>/dev/null || true)"
+            [ -n "${vk}" ] && actual=$("${vk}" --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
         dragonfly) [ -x "${SERVER_DIR}/bin/dragonfly" ] && actual=$("${SERVER_DIR}/bin/dragonfly" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
         *) return 0 ;;
     esac

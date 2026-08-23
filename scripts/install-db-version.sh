@@ -23,69 +23,27 @@ INSTALL_DIR="${3:-${SERVER_DIR:-$(pwd)}/bin}"
 
 mkdir -p "${INSTALL_DIR}" "${INSTALL_DIR}/.versions" "${SERVER_DIR:-.}/logs" 2>/dev/null || true
 
+# -----------------------------------------------------------------------------
+# Central Diagnostics Library (unified logging, traces, crash safety)
+# -----------------------------------------------------------------------------
+PF_COMPONENT="version-installer"
+PANEL_NAME="${PANEL_NAME:-version-installer}"
+PF_FAIL_FAST=1
+PF_FAIL_SLEEP=0
 PF_LOG_FILE="${SERVER_DIR:-.}/logs/installer.log"
+PF_INSTALLER_LOG="${PF_LOG_FILE}"
+source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-diagnostics.sh" 2>/dev/null \
+    || source /usr/local/bin/lib-diagnostics.sh 2>/dev/null \
+    || source ./lib-diagnostics.sh 2>/dev/null
 
-# -----------------------------------------------------------------------------
-# Logging + deep diagnostics (trace-level, sanitized, crash-safe)
-# -----------------------------------------------------------------------------
-_ts() { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
-
-_diag() { printf '[%s] [%s] %s\n' "$(_ts)" "${2:-INFO}" "$*" >> "${PF_LOG_FILE}" 2>/dev/null || true; }
-
-log()  { echo -e "\033[1m\033[36m[version-installer]\033[0m $*"; _diag "${*}" INFO; }
-ok()   { echo -e "\033[1m\033[32m[version-installer][OK]\033[0m $*"; _diag "${*}" OK; }
-warn() { echo -e "\033[1m\033[33m[version-installer][warn]\033[0m $*" >&2; _diag "${*}" WARN; }
-err()  { echo -e "\033[1m\033[31m[version-installer][ERROR]\033[0m $*" >&2; _diag "${*}" ERROR; }
-
-sanitize_line() { # Mask anything that looks like a credential
-    printf '%s' "$1" | sed -E \
-        -e 's/(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|MASTER_KEY|AUTH)([A-Z_]*=)[^ ]+/\1\2<masked>/gI' \
-        -e 's#(://[^:/@]+):[^@]{4,}@#\1:<masked>@#g'
-}
-
-dump_installer_trace() {
-    local reason="$1" exit_code="${2:-1}"
-    {
-        printf '\n=== INSTALLER FAILURE REPORT (%s) ===\n' "$(_ts)"
-        printf 'Reason      : %s\n' "${reason}"
-        printf 'Exit Code   : %s\n' "${exit_code}"
-        printf 'Engine      : %s\n' "${ENGINE}"
-        printf 'Requested   : %s\n' "${VERSION}"
-        printf 'Resolved    : %s\n' "${RESOLVED:-<unresolved>}"
-        printf 'Install Dir : %s\n' "${INSTALL_DIR}"
-        printf 'Arch        : %s (%s)\n' "${ARCH}" "${ARCH_TYPE:-?}"
-        printf 'Privileged  : %s\n' "$( [ "$(id -u 2>/dev/null || echo 1)" = "0" ] && echo root || echo unprivileged )"
-        printf 'Call Stack  :\n'
-        local i=0
-        while [ ${i} -lt ${#FUNCNAME[@]} ]; do
-            [ ${i} -eq 0 ] && { i=$((i+1)); continue; }
-            printf '  #%d %s (line %s)\n' "$((i-1))" "${FUNCNAME[${i}]:-<main>}" "${BASH_LINENO[$((i-1))]:-?}" 2>/dev/null || break
-            i=$((i+1))
-        done
-        printf 'Last Command: %s\n' "$(sanitize_line "${BASH_COMMAND:-?}")"
-        printf 'Free Disk   : %s\n' "$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{print $4" free"}')"
-        printf 'Memory      : %s\n' "$(free -h 2>/dev/null | awk '/^Mem/{print "used "$3" / "$2}')"
-        printf 'Network     : %s\n' "$(probe_url "https://api.github.com" >/dev/null 2>&1 && echo reachable || echo UNREACHABLE)"
-        printf '==============================================\n'
-    } >> "${PF_LOG_FILE}" 2>/dev/null || true
-}
-
-fail() {
-    err "$*"
-    dump_installer_trace "$*" 1
-    exit 1
-}
-
-# Global safety net: any unexpected non-zero still produces a trace
-installer_err_trap() {
-    local ec=$?
-    trap - ERR
-    [ ${ec} -eq 0 ] && return 0
-    dump_installer_trace "Unhandled installer error" "${ec}"
-    err "Unexpected failure (exit ${ec}) at line ${BASH_LINENO[0]:-?}. Full trace: ${PF_LOG_FILE}"
-    exit "${ec}"
-}
-trap 'installer_err_trap' ERR
+if [ "${PF_DIAG_VERSION:-}" != "1.0" ]; then
+    # Minimal fallback if library unavailable
+    log()  { echo "[version-installer] $*"; }
+    ok()   { echo "[version-installer][OK] $*"; }
+    warn() { echo "[version-installer][warn] $*" >&2; }
+    err()  { echo "[version-installer][ERROR] $*" >&2; }
+    fail() { err "$*"; exit 1; }
+fi
 
 # -----------------------------------------------------------------------------
 # Tooling & architecture
@@ -98,11 +56,34 @@ _json_tags() { # Extract tag_name values without jq (first match wins upstream o
     fi
 }
 
-gh_latest_tag() { # gh_latest_tag <owner/repo>
-    local tag
-    tag=$(fetch "https://api.github.com/repos/${1}/releases/latest" - 2>/dev/null | _json_tags)
-    [ -z "${tag}" ] && tag=$(fetch "https://api.github.com/repos/${1}/releases?per_page=5" - 2>/dev/null | _json_tags)
+gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
+    local repo="$1" pre="${2:-0}" tag=""
+    if [ "${pre}" = "1" ]; then
+        # Newest release of ANY kind (beta/alpha/rc/nightly included)
+        tag=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=10" - 2>/dev/null | \
+            if have jq; then jq -r '[.[].tag_name][0] // empty'; else
+                grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+            fi)
+    else
+        tag=$(fetch "https://api.github.com/repos/${1}/releases/latest" - 2>/dev/null | _json_tags)
+        [ -z "${tag}" ] && tag=$(fetch "https://api.github.com/repos/${1}/releases?per_page=5" - 2>/dev/null | _json_tags)
+    fi
     printf '%s' "${tag}"
+}
+
+# Validate user-supplied version input; reject injection/garbage early with
+# actionable guidance. Accepts: latest|stable|beta|alpha|nightly|edge|default,
+# x / x.y / x.y.z, optional v prefix, or full https URLs.
+validate_version_input() {
+    local v="${VERSION}"
+    case "${v}" in
+        ""|latest|stable|beta|alpha|nightly|edge|dev|default) return 0 ;;
+        https://*|http://*) return 0 ;;
+        v[0-9]*|[0-9]*) [[ "${v#[v]}" =~ ^[0-9]+(\.[0-9]+){0,3}([-._]?[A-Za-z0-9]+)*$ ]] && return 0 ;;
+    esac
+    fail "Invalid DB_VERSION '${v}'. Valid forms: latest | stable | beta | alpha |
+  nightly | a major (18), series (11.4), exact version (8.0.45, v2.1.0),
+  or a direct download URL."
 }
 
 ARCH=$(uname -m)
@@ -278,11 +259,44 @@ system_version_satisfies() { # system_version_satisfies <binary> <wanted_major>
 # Version Resolution: 'latest' | major ('18') | series ('8.4') | full ('8.4.5') | URL
 # -----------------------------------------------------------------------------
 resolve_version() {
+    validate_version_input
     case "${VERSION}" in https://*|http://*) RESOLVED="${VERSION}"; return 0 ;; esac
     local req="${VERSION:-latest}"
     req=$(echo "${req}" | tr '[:upper:]' '[:lower:]')
 
-    if [ "${req}" = "latest" ] || [ "${req}" = "default" ] || [ "${req}" = "stable" ]; then
+    # Release channels: stable == latest stable; beta/alpha/nightly resolve to
+    # the newest prerelease when available, else fall back to stable.
+    if [ "${req}" = "beta" ] || [ "${req}" = "alpha" ] || [ "${req}" = "nightly" ] || [ "${req}" = "edge" ] || [ "${req}" = "dev" ]; then
+        local pre_tag=""
+        case "${ENGINE}" in
+            postgresql)                pre_tag=$(gh_latest_tag "theseus-rs/postgresql-binaries" 1) ;;
+            pocketbase)                pre_tag=$(gh_latest_tag "pocketbase/pocketbase" 1); v=${pre_tag#v} ;;
+            surrealdb|surreal)         pre_tag=$(gh_latest_tag "surrealdb/surrealdb" 1) ;;
+            meilisearch)               pre_tag=$(gh_latest_tag "getmeili/meilisearch" 1) ;;
+            qdrant)                    pre_tag=$(gh_latest_tag "qdrant/qdrant" 1) ;;
+            typesense)                 pre_tag=$(gh_latest_tag "typesense/typesense" 1); v=${pre_tag#v} ;;
+            ferretdb)                  pre_tag=$(gh_latest_tag "FerretDB/FerretDB" 1); v=${pre_tag#v} ;;
+            dragonfly)                 pre_tag=$(gh_latest_tag "dragonflydb/dragonfly" 1); v=${pre_tag#v} ;;
+            valkey)                    pre_tag=$(gh_latest_tag "valkey-io/valkey" 1); v=${pre_tag#v} ;;
+        esac
+        # Normalize to bare version where handlers expect it
+        if [ -n "${pre_tag}" ]; then
+            case "${ENGINE}" in
+                pocketbase|typesense|ferretdb|dragonfly|valkey) RESOLVED="${v:-${pre_tag#v}}" ;;
+                *) RESOLVED="${pre_tag#v}" ;;
+            esac
+            log "'${req}' channel resolved for ${ENGINE} -> ${RESOLVED}"
+            return 0
+        fi
+        warn "No '${req}' prerelease published for ${ENGINE}; falling back to stable."
+        req="latest"
+    fi
+
+    if [ "${req}" = "stable" ]; then
+        req="latest"
+    fi
+
+    if [ "${req}" = "latest" ] || [ "${req}" = "default" ]; then
         local v=""
         case "${ENGINE}" in
             postgresql)                v=$(eofl_resolve "postgresql" "") ;;
