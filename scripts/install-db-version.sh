@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 # =============================================================================
 #  PotenFYR Studios - Universal Multi-Database Version Downloader & Installer
 #  Installs ANY specific version (or dynamically-resolved 'latest') for 55+
@@ -188,15 +188,42 @@ fi
 IS_ROOT=0
 [ "$(id -u 2>/dev/null || echo 1)" = "0" ] && IS_ROOT=1
 
-fetch() { # fetch <url> <outfile|->
+fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
     local url="$1" out="$2"
     if [ "${out}" = "-" ]; then
         curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 "${url}" 2>/dev/null \
             || wget -qO- --tries=3 --timeout=20 "${url}" 2>/dev/null
-    else
-        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${out}" "${url}" 2>/dev/null \
-            || wget -qO "${out}" --tries=3 --timeout=20 "${url}" 2>/dev/null
+        return
     fi
+    local tmp_out="${out}.dl.$$"
+    rm -f "${tmp_out}"
+    if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${tmp_out}" "${url}" 2>/dev/null \
+       || wget -qO "${tmp_out}" --tries=3 --timeout=20 "${url}" 2>/dev/null; then
+        if [ -s "${tmp_out}" ]; then
+            mv -f "${tmp_out}" "${out}"
+            return 0
+        fi
+    fi
+    rm -f "${tmp_out}"
+    return 1
+}
+
+# Candidate downloader: HEAD probes first (fast); when a CDN blocks or lies
+# about HEAD (Akamai et al.), falls back to bounded real GET attempts.
+try_fetch_candidates() { # try_fetch_candidates <outfile> <url> [url...]
+    local out="$1"; shift
+    local u n=0
+    for u in "$@"; do
+        probe_url "${u}" || continue
+        if fetch "${u}" "${out}" && [ -s "${out}" ]; then printf '%s' "${u}"; return 0; fi
+    done
+    for u in "$@"; do
+        n=$((n + 1)); [ ${n} -gt 4 ] && break
+        rm -f "${out}"
+        if fetch "${u}" "${out}" && [ -s "${out}" ]; then printf '%s' "${u}"; return 0; fi
+    done
+    rm -f "${out}"
+    return 1
 }
 
 probe_url() { curl -fsIL --retry 1 --connect-timeout 10 --max-time 25 -o /dev/null "$1" 2>/dev/null; }
@@ -653,17 +680,19 @@ install_mariadb() {
     local ad="bintar-linux-systemd-x86_64"
     [ "${ARCH_TYPE}" = "arm64" ] && ad="bintar-linux-systemd-aarch64"
 
-    local url="" v
+    local urls=() v
     for v in "${candidates[@]}"; do
-        local candidate="https://archive.mariadb.org/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${ARCH_ALT}.tar.gz"
-        if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break; fi
+        urls+=("https://archive.mariadb.org/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${ARCH_ALT}.tar.gz")
     done
-    [ -z "${url}" ] && fail "No MariaDB binary build found near '${RESOLVED}' for ${ARCH_TYPE}."
 
     disk_preflight_mb 1600
-    log "Downloading MariaDB ${RESOLVED} bintar..."
+    log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     local tmp_tar; tmp_tar=$(mktemp)
-    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    local hit
+    hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
+        || { rm -f "${tmp_tar}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
+    RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
+    log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"
     tar -xzf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
     rm -f "${tmp_tar}"
@@ -716,19 +745,21 @@ install_mysql() {
         for p in "${patches[@]}"; do candidates+=("${series}.${p}"); done
     fi
 
-    local url="" v pat candidate
+    local urls=() v pat
     for v in "${candidates[@]}"; do
         for pat in "${patterns[@]}"; do
-            candidate="https://cdn.mysql.com/Downloads/${dir}/mysql-${v}-${pat}.tar.xz"
-            if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break 2; fi
+            urls+=("https://cdn.mysql.com/Downloads/${dir}/mysql-${v}-${pat}.tar.xz")
         done
     done
-    [ -z "${url}" ] && fail "No MySQL minimal build located for series '${series}' on ${ARCH_TYPE}."
 
     disk_preflight_mb 1200
-    log "Downloading MySQL ${RESOLVED} minimal tarball..."
+    log "Probing MySQL builds (HEAD + direct-download fallback for CDN HEAD-blocking)..."
     local tmp_tar; tmp_tar=$(mktemp)
-    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    local hit
+    hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
+        || { rm -f "${tmp_tar}"; fail "No downloadable MySQL minimal build located for series '${series}' on ${ARCH_TYPE}."; }
+    RESOLVED="$(basename "${hit}" | sed -E 's/mysql-([0-9.]+)-linux.*/\1/')"
+    log "Downloading MySQL ${RESOLVED} minimal tarball succeeded."
     mkdir -p "${base}"
     tar -xJf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
     rm -f "${tmp_tar}"
@@ -827,20 +858,22 @@ install_mongodb() {
         candidates+=("${RESOLVED}")
     fi
 
-    local url="" v dt candidate
+    local urls=() v dt
     for v in "${candidates[@]}"; do
         for dt in "${distros[@]}"; do
             # ARCH_ALT covers x86_64 / aarch64 / s390x exactly as fastdl names them
-            candidate="https://fastdl.mongodb.org/linux/mongodb-linux-${ARCH_ALT}-${dt}-${v}.tgz"
-            if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break 2; fi
+            urls+=("https://fastdl.mongodb.org/linux/mongodb-linux-${ARCH_ALT}-${dt}-${v}.tgz")
         done
     done
-    [ -z "${url}" ] && fail "No MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE} (supported: 4.4-8.x)."
 
     disk_preflight_mb 700
-    log "Downloading MongoDB ${RESOLVED}..."
+    log "Probing MongoDB builds (HEAD + direct-download fallback)..."
     local tmp_tar; tmp_tar=$(mktemp)
-    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    local hit
+    hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
+        || { rm -f "${tmp_tar}"; fail "No downloadable MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE}."; }
+    RESOLVED="$(basename "${hit}" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+)\.tgz$/\1/')"
+    log "Downloading MongoDB ${RESOLVED} succeeded."
     local ext="${INSTALL_DIR}/.mgx.$$"
     mkdir -p "${ext}"
     tar -xzf "${tmp_tar}" -C "${ext}" --strip-components=1 || { rm -rf "${ext}" "${tmp_tar}"; fail "Extraction failed."; }
@@ -986,7 +1019,7 @@ case "${ENGINE}" in
                 unzip -q -o "${tmp_zip}" -d "${INSTALL_DIR}/"
                 seal_binary "${INSTALL_DIR}/pocketbase"
                 ok "PocketBase v${TAG} installed."
-            else warn "PocketBase v${TAG} download failed."; fi
+            else rm -f "${INSTALL_DIR}/pocketbase"; warn "PocketBase v${TAG} download failed; baked binary (if any) will serve."; fi
             rm -f "${tmp_zip}"
         fi
         ;;
@@ -1023,7 +1056,10 @@ case "${ENGINE}" in
                 seal_binary "${INSTALL_DIR}/meilisearch" \
                     || { rm -f "${INSTALL_DIR}/meilisearch"; warn "Meilisearch seal failed."; }
                 ok "Meilisearch ${TAG} installed."
-            else warn "Meilisearch ${TAG} download failed."; fi
+            else
+                rm -f "${INSTALL_DIR}/meilisearch"
+                warn "Meilisearch ${TAG} download failed; container-baked binary (if any) will serve."
+            fi
         fi
         ;;
 
@@ -1037,7 +1073,7 @@ case "${ENGINE}" in
             if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
                 seal_binary "${INSTALL_DIR}/qdrant"
                 ok "Qdrant ${TAG} installed."
-            else warn "Qdrant ${TAG} download failed."; fi
+            else rm -f "${INSTALL_DIR}/qdrant"; warn "Qdrant ${TAG} download failed; baked binary (if any) will serve."; fi
         fi
         ;;
 
@@ -1050,7 +1086,7 @@ case "${ENGINE}" in
             if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
                 seal_binary "${INSTALL_DIR}/typesense-server"
                 ok "Typesense v${TAG} installed."
-            else warn "Typesense v${TAG} download failed."; fi
+            else rm -f "${INSTALL_DIR}/typesense-server"; warn "Typesense v${TAG} download failed; baked binary (if any) will serve."; fi
         fi
         ;;
 
@@ -1061,7 +1097,7 @@ case "${ENGINE}" in
             if fetch "${URL}" "${INSTALL_DIR}/minio"; then
                 seal_binary "${INSTALL_DIR}/minio"
                 ok "MinIO ${RESOLVED} installed."
-            else warn "MinIO download failed."; fi
+            else rm -f "${INSTALL_DIR}/minio"; warn "MinIO download failed; baked binary (if any) will serve."; fi
         fi
         ;;
 
