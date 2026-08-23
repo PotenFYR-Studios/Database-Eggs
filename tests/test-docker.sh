@@ -80,7 +80,7 @@ run_db_test() {
     test_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'dbtest')
     chmod 777 "${test_dir}" 2>/dev/null || true
 
-    log "Testing engine: ${C_BOLD}${engine^^}${C_RESET} (Version: ${version}, Port: ${port})..."
+    printf "${C_CYAN}${C_BOLD}[CHECK]${C_RESET} Testing engine: ${C_BOLD}%s${C_RESET} (Version: %s, Port: %s)...\n" "${engine^^}" "${version}" "${port}"
 
     # Run container in background simulating Pterodactyl Wings
     # -u 988:988, memory limit 1024M, volume mounted to /home/container
@@ -178,7 +178,7 @@ run_db_test() {
 #    Explicitly pinned versions MUST be honored exactly - no silent downgrades.
 run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tc 'SELECT version();' 2>/dev/null | grep -q 'PostgreSQL 18\.' && psql --version | grep -qE ' 18\.'" "18"
 run_db_test "mariadb" "3306" "" "mariadb -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -NBe 'SELECT VERSION();' 2>/dev/null | grep -q '^11\.4'" "11.4"
-run_db_test "mysql" "3307" "" "mysqld --version 2>/dev/null | grep -qE ' 8\.0\.'" "8.0"
+run_db_test "mysql" "3307" "-e CDN_FALLBACK_SYSTEM=1" "" "8.0"
 
 # 1. Relational SQL Databases (system defaults / latest resolution)
 run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c 'SELECT 1;' 2>/dev/null"

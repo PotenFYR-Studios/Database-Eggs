@@ -76,7 +76,7 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
     fi; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "meilisearch" ]; then \
         for i in 1 2 3; do \
-            curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/getmeili/meilisearch/releases/download/v1.12.0/meilisearch-linux-${arch_alt}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
+            curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/meilisearch/meilisearch/releases/download/v1.53.1/meilisearch-linux-${arch_type}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
         done; \
         chmod +x /usr/local/bin/meilisearch 2>/dev/null || true; \
     fi; \

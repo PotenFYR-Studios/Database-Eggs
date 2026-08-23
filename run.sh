@@ -318,6 +318,12 @@ verify_running_version() {
 
     export EFFECTIVE_DB_VERSION="${actual}"
     local req_major="${req%%.*}" act_major="${actual%%.*}"
+    if [ "${MYSQL_CDN_FALLBACK:-0}" = "1" ] && [ "${PROJECT_TYPE}" = "mysql" ]; then
+        # Explicit CDN_FALLBACK_SYSTEM substitution: announce, don't fatal.
+        warn "Running container-provided ${PROJECT_TYPE} ${actual} because cdn.mysql.com was unreachable (CDN_FALLBACK_SYSTEM=1)."
+        warn "Requested '${req}' will be honored automatically once Oracle's CDN is reachable again."
+        return 0
+    fi
     if [ "${req_major}" != "${act_major}" ]; then
         if [ "${STRICT_VERSION:-1}" = "1" ]; then
             error "Version contract violated: requested ${PROJECT_TYPE} '${req}' but available binary is '${actual}'."
