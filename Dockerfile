@@ -75,7 +75,10 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
         arch_type="arm64"; arch_alt="aarch64"; arch_gnu="aarch64-unknown-linux-gnu"; \
     fi; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "meilisearch" ]; then \
-        curl -fsSL -o /usr/local/bin/meilisearch "https://github.com/meilisearch/meilisearch/releases/download/v1.12.0/meilisearch-linux-${arch_alt}" || true; \
+        for i in 1 2 3; do \
+            curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/getmeili/meilisearch/releases/download/v1.12.0/meilisearch-linux-${arch_alt}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
+        done; \
+        chmod +x /usr/local/bin/meilisearch 2>/dev/null || true; \
     fi; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "clickhouse" ]; then \
         curl -fsSL https://clickhouse.com/ | sh && (mv clickhouse /usr/local/bin/clickhouse 2>/dev/null || true) || true; \
