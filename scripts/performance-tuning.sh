@@ -153,10 +153,11 @@ tune_mongodb() {
     calculate_system_specs
     local mem_mb="${MEM_TOTAL_MB}"
 
-    # WiredTiger cache: 50% of (RAM - 1GB headroom), min 0.25GB, max ~60GB
+    # WiredTiger cache: 50% of (RAM - 1GB headroom).
+    # mongod hard-requires cacheSizeGB >= 0.25 - never emit less.
     local avail_mb=$(( mem_mb - 1024 ))
     if [ "${avail_mb}" -lt 256 ]; then avail_mb=256; fi
-    local cache_gb=$(awk "BEGIN {printf \"%.2f\", (${avail_mb} * 0.5) / 1024}")
+    local cache_gb=$(awk "BEGIN {v=(${avail_mb} * 0.5) / 1024; if (v < 0.25) v = 0.25; printf \"%.2f\", v}")
 
     export TUNED_MONGO_CACHE_GB="${cache_gb}"
 }
