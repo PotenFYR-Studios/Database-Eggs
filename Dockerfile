@@ -13,7 +13,7 @@
 
 FROM ubuntu:22.04
 
-LABEL maintainer="PotenFYR Studios <support@potenfyr.com>" \
+LABEL author="PotenFYR Studios" maintainer="support@potenfyr.in" \
       org.opencontainers.image.title="PotenFYR Multi-Variant Database Runtime" \
       org.opencontainers.image.description="Dedicated lean & universal database container runtimes with companion injection for Pterodactyl, Pelican, Feather, Wisp, and Docker." \
       org.opencontainers.image.source="https://github.com/PotenFYR-Studios/Database-Eggs" \
