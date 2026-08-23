@@ -190,14 +190,15 @@ IS_ROOT=0
 
 fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
     local url="$1" out="$2"
+    local UA="PotenFYR-Installer/1.0 (+https://github.com/PotenFYR-Studios/Database-Eggs)"
     if [ "${out}" = "-" ]; then
-        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 "${url}" 2>/dev/null \
-            || wget -qO- --tries=3 --timeout=20 "${url}" 2>/dev/null
+        curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 "${url}" 2>/dev/null \
+            || wget -qO- --tries=3 --timeout=20 -U "${UA}" "${url}" 2>/dev/null
         return
     fi
     local tmp_out="${out}.dl.$$"
     rm -f "${tmp_out}"
-    if curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${tmp_out}" "${url}" 2>/dev/null \
+    if curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${tmp_out}" "${url}" 2>/dev/null \
        || wget -qO "${tmp_out}" --tries=3 --timeout=20 "${url}" 2>/dev/null; then
         if [ -s "${tmp_out}" ]; then
             mv -f "${tmp_out}" "${out}"
@@ -226,7 +227,11 @@ try_fetch_candidates() { # try_fetch_candidates <outfile> <url> [url...]
     return 1
 }
 
-probe_url() { curl -fsIL --retry 1 --connect-timeout 10 --max-time 25 -o /dev/null "$1" 2>/dev/null; }
+# Some CDNs (Akamai-fronted hosts like cdn.mysql.com) reject tool-default
+# user agents from datacenter IPs; present an honest client UA everywhere.
+PF_CURL_UA="${PF_CURL_UA:-PotenFYR-Installer/1.0 (+https://github.com/PotenFYR-Studios/Database-Eggs)}"
+
+probe_url() { curl -fsIL -A "${PF_CURL_UA}" --retry 1 --connect-timeout 10 --max-time 25 -o /dev/null "$1" 2>/dev/null; }
 
 # shellcheck disable=SC2120
 eofl_resolve() { # eofl_resolve <product> <prefix>
