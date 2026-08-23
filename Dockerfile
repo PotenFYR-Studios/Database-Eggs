@@ -88,15 +88,17 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
         curl -fsSL -o /usr/local/bin/minio "https://dl.min.io/server/minio/release/linux-${arch_type}/minio" || true; \
         curl -fsSL -o /tmp/pb.zip "https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_${arch_type}.zip" && unzip -q /tmp/pb.zip -d /tmp/pb && mv /tmp/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /tmp/pb* || true; \
         curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v1.12.1/qdrant-${arch_gnu}.tar.gz" 2>/dev/null | tar -xz -C /usr/local/bin/ 2>/dev/null || true; \
-        apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential && \
-        curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" && \
-        tar -xzf /tmp/valkey.tar.gz -C /tmp && \
-        (cd /tmp/valkey-8.1.3 && make MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1) \
-            && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
-            && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
-            || true; \
-        rm -rf /tmp/valkey*; \
-        apt-get purge -y --auto-remove build-essential -qq 2>/dev/null || true; \
+        if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential && \
+            curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" && \
+            tar -xzf /tmp/valkey.tar.gz -C /tmp && \
+            (cd /tmp/valkey-8.1.3 && make MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1) \
+                && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
+                && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
+                || true; \
+            rm -rf /tmp/valkey*; \
+            apt-get purge -y --auto-remove build-essential -qq 2>/dev/null || true; \
+        fi; \
     fi; \
     chmod +x /usr/local/bin/* 2>/dev/null || true
 

@@ -50,6 +50,95 @@ fi
 # -----------------------------------------------------------------------------
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# -----------------------------------------------------------------------------
+# Architecture matrix: panels run everywhere; resolve canonical names once.
+#   ARCH_TYPE : asset suffix style (amd64/arm64/arm/s390x/ppc64le/riscv64/386)
+#   ARCH_ALT  : legacy suffix style (x86_64/aarch64/arm/s390x/ppc64le/riscv64/i686)
+#   ARCH_GNU  : rust-style target triple for standalone builds
+#   ARCH_DEB  : debian pool suffix for runtime-lib bundling
+# -----------------------------------------------------------------------------
+ARCH=$(uname -m)
+case "${ARCH}" in
+    x86_64|amd64)
+        ARCH_TYPE="amd64"; ARCH_ALT="x86_64"; ARCH_DEB="amd64"
+        ARCH_GNU="x86_64-unknown-linux-gnu"; ARCH_MUSL="x86_64-unknown-linux-musl" ;;
+    aarch64|arm64)
+        ARCH_TYPE="arm64"; ARCH_ALT="aarch64"; ARCH_DEB="arm64"
+        ARCH_GNU="aarch64-unknown-linux-gnu"; ARCH_MUSL="aarch64-unknown-linux-musl" ;;
+    armv7l|armv7|armv6l|armhf)
+        ARCH_TYPE="arm"; ARCH_ALT="arm"; ARCH_DEB="armhf"
+        ARCH_GNU="arm-unknown-linux-gnueabihf"; ARCH_MUSL="arm-unknown-linux-musleabihf" ;;
+    s390x)
+        ARCH_TYPE="s390x"; ARCH_ALT="s390x"; ARCH_DEB="s390x"
+        ARCH_GNU="s390x-unknown-linux-gnu"; ARCH_MUSL="s390x-unknown-linux-musl" ;;
+    ppc64le|ppc64)
+        ARCH_TYPE="ppc64le"; ARCH_ALT="ppc64le"; ARCH_DEB="ppc64el"
+        ARCH_GNU="powerpc64le-unknown-linux-gnu"; ARCH_MUSL="powerpc64le-unknown-linux-musl" ;;
+    riscv64)
+        ARCH_TYPE="riscv64"; ARCH_ALT="riscv64"; ARCH_DEB="riscv64"
+        ARCH_GNU="riscv64-unknown-linux-gnu"; ARCH_MUSL="riscv64-unknown-linux-musl" ;;
+    i386|i486|i586|i686)
+        ARCH_TYPE="386"; ARCH_ALT="i686"; ARCH_DEB="i386"
+        ARCH_GNU="i686-unknown-linux-gnu"; ARCH_MUSL="i686-unknown-linux-musl" ;;
+    *)
+        # Unknown future architectures: fall back to closest common naming,
+        # every installer probes URLs before trusting them anyway.
+        warn "Unrecognized architecture '${ARCH}'; assuming 64-bit little-endian."
+        ARCH_TYPE="amd64"; ARCH_ALT="x86_64"; ARCH_DEB="amd64"
+        ARCH_GNU="x86_64-unknown-linux-gnu"; ARCH_MUSL="x86_64-unknown-linux-musl" ;;
+esac
+
+# Which engines publish binaries for THIS architecture? Prevents pointless
+# network probing and enables transparent system-engine fallback elsewhere.
+engine_supports_arch() {
+    local want="${ARCH_TYPE}"
+    local e="$1"
+    case "${e}:${want}" in
+        postgresql:amd64|postgresql:arm64|postgresql:arm)      return 0 ;;
+        mariadb:amd64|mariadb:arm64)                            return 0 ;;
+        mysql:amd64|mysql:arm64)                                return 0 ;;
+        mongodb:amd64|mongodb:arm64|mongodb:s390x)              return 0 ;;
+        dragonfly:amd64|dragonfly:arm64)                        return 0 ;;
+        ferretdb:amd64|ferretdb:arm64)                          return 0 ;;
+        clickhouse:amd64|clickhouse:arm64)                      return 0 ;;
+        influxdb:amd64|influxdb:arm64|influxdb:arm)             return 0 ;;
+        victoriametrics:amd64|victoriametrics:arm64|\
+        victoriametrics:arm|victoriametrics:ppc64le|\
+        victoriametrics:386)                                    return 0 ;;
+        pocketbase:amd64|pocketbase:arm64)                      return 0 ;;
+        meilisearch:amd64|meilisearch:arm64)                    return 0 ;;
+        qdrant:amd64|qdrant:arm64)                              return 0 ;;
+        typesense:amd64|typesense:arm64)                        return 0 ;;
+        minio:amd64|minio:arm64|minio:ppc64le|minio:s390x)      return 0 ;;
+        cockroachdb:amd64|cockroachdb:arm64)                    return 0 ;;
+        tidb:amd64|tidb:arm64)                                  return 0 ;;
+        dolt:amd64|dolt:arm64)                                  return 0 ;;
+        *)
+            case "${e}" in
+                etcd|nats|immudb|dgraph|seaweedfs|weaviate|quickwit|milvus|libsql|sqld|garage|manticoresearch|manticore|yugabytedb|yugabyte|arangodb|ravendb|orientdb|elasticsearch|opensearch|solr|cassandra|aerospike|questdb|neo4j|rethinkdb|keydb|valkey|redis|memcached|custom)
+                    # Source-built, Java-based, tarball-distributed or
+                    # deb-extracted engines: attempt regardless of arch.
+                    return 0 ;;
+                *)
+                    # Single-binary GitHub releases: assume amd64/arm64 only.
+                    case "${want}" in amd64|arm64) return 0 ;; *) return 1 ;; esac
+                    ;;
+            esac
+            ;;
+    esac
+}
+
+# Transparent fallback when upstream simply does not ship our architecture.
+# Policy: warn loudly, stamp, and let the container-provided engine serve.
+# STRICT_VERSION still applies whenever an upstream build DOES exist.
+no_arch_build_fallback() {
+    warn "Upstream ${ENGINE} does not publish ${ARCH_TYPE} binaries."
+    warn "Falling back to the container-provided ${ENGINE}. Version pins resume on amd64/arm64 hosts."
+    RESOLVED="${RESOLVED}-system-${ARCH_TYPE}"
+    stamp_ok
+    exit 0
+}
+
 _json_tags() { # Extract tag_name values without jq (first match wins upstream order)
     if have jq; then jq -r '.tag_name // .[0].tag_name // empty' 2>/dev/null; else
         grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
@@ -87,11 +176,14 @@ validate_version_input() {
 }
 
 ARCH=$(uname -m)
-case "${ARCH}" in
-    x86_64|amd64) ARCH_TYPE="amd64"; ARCH_ALT="x86_64"; ARCH_GNU="x86_64-unknown-linux-gnu" ;;
-    aarch64|arm64) ARCH_TYPE="arm64"; ARCH_ALT="aarch64"; ARCH_GNU="aarch64-unknown-linux-gnu" ;;
-    *) fail "Unsupported architecture: ${ARCH}" ;;
-esac
+# (Architecture canonicalization lives in the full matrix above.)
+
+# Libc family: gnu builds need glibc; musl builds target Alpine-like hosts.
+if command -v ldd >/dev/null 2>&1 && ldd --version 2>&1 | grep -qi musl; then
+    PF_LIBC="musl"
+else
+    PF_LIBC="gnu"
+fi
 
 IS_ROOT=0
 [ "$(id -u 2>/dev/null || echo 1)" = "0" ] && IS_ROOT=1
@@ -173,8 +265,7 @@ apt_try_install() {
 extract_libaio() { # bundle libaio.so.1 + libnuma.so.1 beside daemons that link them (MariaDB/MySQL bintars)
     local dest="$1"
     mkdir -p "${dest}"
-    local arch_deb="amd64"
-    [ "${ARCH_TYPE}" = "arm64" ] && arch_deb="arm64"
+    local arch_deb="${ARCH_DEB}"
     local u tmp_deb need=0
 
     [ -e "${dest}/libaio.so.1" ] || need=1
@@ -482,7 +573,21 @@ install_postgresql() {
 
     disk_preflight_mb 400
     log "Installing standalone PostgreSQL ${tag}..."
-    local url="https://github.com/theseus-rs/postgresql-binaries/releases/download/${tag}/postgresql-${tag}-${ARCH_GNU}.tar.gz"
+    # Match libc family (musl hosts get musl builds); cross-fallback probe
+    local pg_target="${ARCH_GNU}"
+    if [ "${PF_LIBC:-gnu}" = "musl" ] && [ -n "${ARCH_MUSL:-}" ]; then
+        pg_target="${ARCH_MUSL}"
+    fi
+    local url="https://github.com/theseus-rs/postgresql-binaries/releases/download/${tag}/postgresql-${tag}-${pg_target}.tar.gz"
+    if ! probe_url "${url}"; then
+        if [ "${pg_target}" = "${ARCH_GNU}" ] && [ -n "${ARCH_MUSL:-}" ]; then
+            pg_target="${ARCH_MUSL}"
+        else
+            pg_target="${ARCH_GNU}"
+        fi
+        url="https://github.com/theseus-rs/postgresql-binaries/releases/download/${tag}/postgresql-${tag}-${pg_target}.tar.gz"
+        probe_url "${url}" || no_arch_build_fallback
+    fi
     local tmp_tar; tmp_tar=$(mktemp)
     if ! fetch "${url}" "${tmp_tar}"; then
         rm -f "${tmp_tar}"
@@ -520,6 +625,11 @@ install_postgresql() {
 install_mariadb() {
     local base="${SERVER_DIR:-$(pwd)}/opt/mariadb"
     [ -x "${base}/bin/mariadbd" ] && { log "MariaDB ${RESOLVED} already installed."; return 0; }
+
+    # Official bintars link glibc: musl hosts (Alpine) use the system engine
+    if [ "${PF_LIBC:-gnu}" = "musl" ]; then
+        no_arch_build_fallback
+    fi
 
     # Lightweight path: system binary already provides the requested series
     if system_version_satisfies mariadbd "${RESOLVED}"; then
@@ -569,6 +679,11 @@ install_mariadb() {
 install_mysql() {
     local base="${SERVER_DIR:-$(pwd)}/opt/mysql"
     [ -x "${base}/bin/mysqld" ] && { log "MySQL ${RESOLVED} already installed."; return 0; }
+
+    # Official generic builds link glibc: musl hosts (Alpine) use system engine
+    if [ "${PF_LIBC:-gnu}" = "musl" ]; then
+        no_arch_build_fallback
+    fi
 
     # Lightweight path: system binary already provides the requested series
     if system_version_satisfies mysqld "${RESOLVED}"; then
@@ -643,8 +758,7 @@ bundle_deb_libs() { # bundle_deb_libs <dest_dir> <deb_url...>  (extract shared l
 bundle_pg_runtime_libs() {
     local dest="$1"
     [ -e "${dest}/libxml2.so.2" ] && return 0
-    local arch="amd64"
-    [ "${ARCH_TYPE}" = "arm64" ] && arch="arm64"
+    local arch="${ARCH_DEB}"
     local pools=(
         "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2"
         "http://security.ubuntu.com/ubuntu/pool/main/libx/libxml2"
@@ -716,11 +830,8 @@ install_mongodb() {
     local url="" v dt candidate
     for v in "${candidates[@]}"; do
         for dt in "${distros[@]}"; do
-            if [ "${ARCH_TYPE}" = "arm64" ]; then
-                candidate="https://fastdl.mongodb.org/linux/mongodb-linux-aarch64-${dt}-${v}.tgz"
-            else
-                candidate="https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-${dt}-${v}.tgz"
-            fi
+            # ARCH_ALT covers x86_64 / aarch64 / s390x exactly as fastdl names them
+            candidate="https://fastdl.mongodb.org/linux/mongodb-linux-${ARCH_ALT}-${dt}-${v}.tgz"
             if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break 2; fi
         done
     done
@@ -853,6 +964,17 @@ install_redis_family() {
 # -----------------------------------------------------------------------------
 # Engine dispatch
 # -----------------------------------------------------------------------------
+# Architecture capability gate: binary-publishing engines get a fast, honest
+# fallback on architectures upstream does not ship (source-built, Java-based,
+# tarball and deb-extracted engines always attempt below).
+case "${ENGINE}" in
+    postgresql|mariadb|mysql|mongodb|meilisearch|qdrant|pocketbase|typesense|\
+minio|dragonfly|ferretdb|victoriametrics|cockroachdb|cockroach|tidb|dolt|\
+clickhouse|influxdb)
+        engine_supports_arch "${ENGINE}" || no_arch_build_fallback
+        ;;
+esac
+
 case "${ENGINE}" in
     pocketbase)
         TAG="${RESOLVED#v}"; [ -z "${TAG}" -o "${TAG}" = "latest" ] && TAG=$(gh_latest_tag "pocketbase/pocketbase" | sed 's/^v//')
@@ -1069,6 +1191,10 @@ case "${ENGINE}" in
 
     aerospike)
         as_base="${SERVER_DIR:-$(pwd)}/opt/aerospike"
+        case "${ARCH_TYPE}" in amd64|arm64) : ;; *)
+            warn "Aerospike publishes binaries for amd64/arm64 only; skipping on ${ARCH_TYPE}."
+            mark_engine_ready; exit 0 ;;
+        esac
         if [ ! -x "${as_base}/bin/aerospike" ]; then
             AV="${RESOLVED}"
             downloaded=0
@@ -1313,6 +1439,10 @@ case "${ENGINE}" in
         if [ ! -x "${rt_base}/rethinkdb" ]; then
             RTV="${RESOLVED}"
             deb_suffix="amd64~jammy"; [ "${ARCH_TYPE}" = "arm64" ] && deb_suffix="arm64~jammy"
+            case "${ARCH_TYPE}" in amd64|arm64) : ;; *)
+                warn "RethinkDB publishes packages for amd64/arm64 only; skipping on ${ARCH_TYPE}."
+                mark_engine_ready; exit 0 ;;
+            esac
             deb_url="https://download.rethinkdb.com/repository/ubuntu-22.04/pool/r/rethinkdb/rethinkdb_${RTV}_${deb_suffix}.deb"
             tmp_deb=$(mktemp)
             if fetch "${deb_url}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${rt_base}/.rdx"; then
