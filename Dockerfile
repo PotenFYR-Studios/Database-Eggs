@@ -11,7 +11,7 @@
 #  - RUNTIME_VARIANT=sqlite       (SQLite3 + Litestream Replication)
 # =============================================================================
 
-FROM --platform=$TARGETPLATFORM ubuntu:22.04
+FROM ubuntu:22.04
 
 LABEL maintainer="PotenFYR Studios <support@potenfyr.com>" \
       org.opencontainers.image.title="PotenFYR Multi-Variant Database Runtime" \
@@ -91,8 +91,10 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
         apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential && \
         curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" && \
         tar -xzf /tmp/valkey.tar.gz -C /tmp && \
-        (cd /tmp/valkey-8.1.3 && make MALLOC=libc -j$$(nproc) valkey-server valkey-cli >/dev/null 2>&1 || make MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1) && \
-        cp -f /tmp/valkey-8.1.3/src/valkey-server /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ || true; \
+        (cd /tmp/valkey-8.1.3 && make MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1) \
+            && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
+            && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
+            || true; \
         rm -rf /tmp/valkey*; \
         apt-get purge -y --auto-remove build-essential -qq 2>/dev/null || true; \
     fi; \
