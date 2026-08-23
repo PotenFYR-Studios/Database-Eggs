@@ -772,6 +772,8 @@ install_mysql() {
             warn "CDN_FALLBACK_SYSTEM=1: serving the container-provided MySQL-compatible daemon for series '${series}'."
             warn "This is a SUBSTITUTION, not a match. Remove CDN_FALLBACK_SYSTEM or fix egress for exact-version service."
             export MYSQL_CDN_FALLBACK=1
+            # Subprocess boundary: launcher reads the marker file, not this env
+            printf '%s\n' "${RESOLVED}" > "${stamp_dir}/mysql-cdn-fallback" 2>/dev/null || true
             RESOLVED="${RESOLVED}-cdn-unreachable"
             return 0
         fi
