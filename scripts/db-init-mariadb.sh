@@ -88,6 +88,12 @@ innodb_log_file_size=${TUNED_INNODB_LOG_FILE_SIZE}
 innodb_log_buffer_size=16M
 innodb_flush_log_at_trx_commit=2
 innodb_file_per_table=1
+innodb_flush_neighbors=0
+innodb_io_capacity=2000
+innodb_io_capacity_max=4000
+join_buffer_size=1M
+sort_buffer_size=2M
+read_rnd_buffer_size=1M
 
 # Connections & Caches
 max_connections=${TUNED_MYSQL_MAX_CONN}

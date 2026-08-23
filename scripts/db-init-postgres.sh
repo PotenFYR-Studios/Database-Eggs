@@ -126,6 +126,14 @@ init_postgres() {
     local initdb_bin
     initdb_bin=$(find_pg_bin "initdb")
 
+    # Bundled runtime libs (libxml2/icu/libossp-uuid) must be visible to the
+    # server AND every backend that loads contrib extensions (uuid-ossp).
+    local _pg_home=""
+    _pg_home="$(dirname "$(dirname "${initdb_bin}")" 2>/dev/null || true)"
+    if [ -d "${_pg_home}/lib-extra" ]; then
+        export LD_LIBRARY_PATH="${_pg_home}/lib-extra:${LD_LIBRARY_PATH:-}"
+    fi
+
     local first_run=0
     if [ ! -f "${data_dir}/PG_VERSION" ]; then
         first_run=1
@@ -270,20 +278,35 @@ shared_buffers = ${TUNED_PG_SHARED_BUFFERS:-128MB}
 effective_cache_size = ${TUNED_PG_EFFECTIVE_CACHE:-512MB}
 maintenance_work_mem = ${TUNED_PG_MAINT_WORK_MEM:-64MB}
 work_mem = ${TUNED_PG_WORK_MEM:-4MB}
+hash_mem_multiplier = 2.0
 max_connections = ${TUNED_PG_MAX_CONNECTIONS:-100}
+max_worker_processes = ${TUNED_PG_MAX_WORKERS:-8}
+max_parallel_workers = ${TUNED_PG_MAX_WORKERS:-8}
+max_parallel_workers_per_gather = ${TUNED_PG_WORKERS_PER_GATHER:-2}
+jit = off
 
-# Checkpoints & WAL
+# Checkpoints & WAL (scaled to RAM; SSD/NVMe cadence)
 wal_buffers = 16MB
-min_wal_size = 512MB
-max_wal_size = 2GB
+min_wal_size = ${TUNED_PG_MIN_WAL:-512MB}
+max_wal_size = ${TUNED_PG_MAX_WAL:-2GB}
 checkpoint_completion_target = 0.9
-checkpoint_timeout = 10min
+checkpoint_timeout = 15min
+checkpoint_flush_after = 256kB
+wal_compression = lz4
+wal_writer_flush_after = 1MB
+
+# Autovacuum (production cluster profile)
+autovacuum = on
+autovacuum_max_workers = ${TUNED_PG_AV_WORKERS:-3}
+autovacuum_naptime = ${TUNED_PG_AV_NAPTIME:-30}s
+autovacuum_vacuum_cost_limit = ${TUNED_PG_AV_COST:-200}
+autovacuum_vacuum_scale_factor = 0.05
+autovacuum_analyze_scale_factor = 0.02
 
 # Query Planner (SSD / NVMe tuned)
 random_page_cost = 1.1
 effective_io_concurrency = 200
 default_statistics_target = 100
-max_parallel_workers_per_gather = ${TUNED_PG_WORKERS:-2}
 EOF
         fi
 
@@ -336,13 +359,22 @@ EOSQL
             ok "Created database '${DB_NAME}' owned by '${db_owner}'"
         fi
 
-        # Load standard extensions if available
-        psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d "${DB_NAME:-postgres}" >/dev/null 2>&1 <<EOSQL || true
-CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-CREATE EXTENSION IF NOT EXISTS "pg_trgm";
-CREATE EXTENSION IF NOT EXISTS "vector";
-EOSQL
-        ok "Loaded standard PostgreSQL extensions (uuid-ossp, pg_trgm, vector if available)."
+        # Load standard extensions - each independently, only if the build
+        # provides it (zero error spam on minimal/standalone builds)
+        local ext
+        for ext in pg_trgm uuid-ossp vector; do
+            if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d postgres -Atc \
+                "SELECT 1 FROM pg_available_extensions WHERE name='${ext}'" 2>/dev/null | grep -q 1; then
+                if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d "${DB_NAME:-postgres}" \
+                    -c "CREATE EXTENSION IF NOT EXISTS \"${ext}\";" >/dev/null 2>&1; then
+                    ok "Extension ready: ${ext}"
+                else
+                    warn "Extension ${ext} available but CREATE failed (see postgres logs)."
+                fi
+            else
+                log "Extension '${ext}' not present in this PostgreSQL build - skipped."
+            fi
+        done
 
         log "Shutting down temporary PostgreSQL daemon..."
         "${pg_ctl_bin}" -D "${data_dir}" -w stop >/dev/null 2>&1 || true

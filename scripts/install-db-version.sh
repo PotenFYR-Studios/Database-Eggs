@@ -827,21 +827,31 @@ bundle_deb_libs() { # bundle_deb_libs <dest_dir> <deb_url...>  (extract shared l
 # Bundle runtime libs required by theseus-rs PostgreSQL gnu builds on jammy
 bundle_pg_runtime_libs() {
     local dest="$1"
-    [ -e "${dest}/libxml2.so.2" ] && return 0
-    local arch="${ARCH_DEB}"
-    local pools=(
-        "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2"
-        "http://security.ubuntu.com/ubuntu/pool/main/libx/libxml2"
-    )
-    local p
-    for p in "${pools[@]}"; do
+    # libxml2 + icu: required by the postgres binary itself
+    if [ ! -e "${dest}/libxml2.so.2" ]; then
+        local arch="${ARCH_DEB}"
+        local pools=(
+            "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2"
+            "http://security.ubuntu.com/ubuntu/pool/main/libx/libxml2"
+        )
+        local p
+        for p in "${pools[@]}"; do
+            bundle_deb_libs "${dest}" \
+                "${p}/libxml2_2.9.13+dfsg-1ubuntu0.12_${arch}.deb" \
+                "${p}/libxml2_2.9.13+dfsg-1build1_${arch}.deb"
+            [ -e "${dest}/libxml2.so.2" ] && break
+        done
         bundle_deb_libs "${dest}" \
-            "${p}/libxml2_2.9.13+dfsg-1ubuntu0.12_${arch}.deb" \
-            "${p}/libxml2_2.9.13+dfsg-1build1_${arch}.deb"
-        [ -e "${dest}/libxml2.so.2" ] && break
-    done
-    bundle_deb_libs "${dest}" \
-        "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_${arch}.deb"
+            "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_${arch}.deb"
+    fi
+    # libossp-uuid.so.16: required by the uuid-ossp contrib extension
+    if [ ! -e "${dest}/libossp-uuid.so.16" ]; then
+        bundle_deb_libs "${dest}" \
+            "https://archive.ubuntu.com/ubuntu/pool/universe/o/ossp-uuid/libossp-uuid16_1.6.2-1.5build9_${ARCH_DEB}.deb" \
+            "https://archive.ubuntu.com/ubuntu/pool/universe/o/ossp-uuid/libossp-uuid16_1.6.6-1build1_${ARCH_DEB}.deb"
+        [ -e "${dest}/libossp-uuid.so.16" ] && ok "Bundled libossp-uuid (uuid-ossp extension ready)."
+    fi
+    return 0
 }
 
 # -----------------------------------------------------------------------------

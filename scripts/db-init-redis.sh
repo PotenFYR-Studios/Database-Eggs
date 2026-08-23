@@ -51,6 +51,13 @@ maxmemory-samples 7
 # Multi-Threading & I/O Performance
 io-threads ${TUNED_REDIS_IO_THREADS}
 io-threads-do-reads yes
+tcp-backlog ${TUNED_REDIS_TCP_BACKLOG:-511}
+
+# Memory fragmentation (auto on >=1GB boxes)
+activedefrag ${TUNED_REDIS_ACTIVE_DEFRAG:-no}
+active-defrag-ignore-bytes 100mb
+active-defrag-threshold-lower 10
+active-defrag-threshold-upper 100
 
 # Non-Blocking Background Deletion (High Performance)
 lazyfree-lazy-eviction yes
@@ -58,7 +65,7 @@ lazyfree-lazy-expire yes
 lazyfree-lazy-server-del yes
 replica-lazy-flush yes
 
-# Persistence (RDB & AOF)
+# Persistence (RDB & AOF) - save cadence scaled to instance size
 save 900 1
 save 300 10
 save 60 10000
