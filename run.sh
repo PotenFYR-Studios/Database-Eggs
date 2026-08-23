@@ -186,7 +186,7 @@ data_notice() { # data_notice <title> <line1> [line2] ...
 prepare_data_instance() {
     # Respect explicit user-provided DATA_DIR without modification
     if [ -n "${DATA_DIR:-}" ]; then
-        export ACTIVE_DATA_DIR="${DATA_DIR}"
+        export DATA_DIR="${DATA_DIR}"; export ACTIVE_DATA_DIR="${ACTIVE_DATA_DIR:-${DATA_DIR}}"
         return 0
     fi
 
@@ -207,25 +207,41 @@ prepare_data_instance() {
     local target="${root}/${pt}/${series}"
     local stamp="${target}/.potenfyr-instance"
 
+    # Legacy = anything at data/ root that is NOT a hidden marker or a known
+    # engine instance folder. Classic flat-format markers count too.
     legacy_data_present() {
+        local e
+        while IFS= read -r e; do
+            [ -z "${e}" ] && continue
+            case "${e}" in
+                .*|postgresql|mariadb|mysql|mongodb|redis|valkey|keydb|dragonfly|memcached|\
+cassandra|aerospike|cockroachdb|tidb|yugabytedb|meilisearch|qdrant|typesense|\
+pocketbase|minio|influxdb|clickhouse|victoriametrics|surrealdb|neo4j|dgraph|\
+garage|seaweedfs|questdb|elasticsearch|opensearch|solr|manticoresearch|milvus|\
+weaviate|quickwit|arangodb|orientdb|ravendb|etcd|nats|immudb|dolt|sqld|\
+ferretdb|rethinkdb|custom)
+                    continue ;;
+                *)
+                    return 0 ;;   # unknown entry => genuine legacy content
+            esac
+        done < <(ls -A "${root}" 2>/dev/null)
         [ -e "${root}/PG_VERSION" ] || [ -d "${root}/mysql" ] \
             || [ -f "${root}/WiredTiger" ] || [ -f "${root}/dump.rdb" ] \
-            || [ -d "${root}/pb_data" ] || [ -n "$(ls -A "${root}" 2>/dev/null | grep -vE '^(\.potenfyr|'$(
-                printf '%s' "postgresql|mariadb|mysql|mongodb|redis|valkey|keydb|dragonfly|memcached|cassandra|aerospike|cockroachdb|tidb|yugabytedb"
-            )')$')" ]
+            || [ -d "${root}/pb_data" ] && return 0
+        return 1
     }
 
     mkdir -p "${target}"
 
     if [ -f "${stamp}" ]; then
         # Known instance -> reuse silently
-        export ACTIVE_DATA_DIR="${target}"
+        export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
         return 0
     fi
 
     if ! legacy_data_present; then
         printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
-        export ACTIVE_DATA_DIR="${target}"
+        export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
         return 0
     fi
 
@@ -237,7 +253,7 @@ prepare_data_instance() {
             if [ -n "${legacy_major}" ] && [ "${legacy_major}" = "${series}" ]; then
                 # Non-breaking: adopt existing cluster as the official instance
                 printf 'engine=%s series=%s adopted=legacy\n' "${pt}" "${series}" > "${root}/.potenfyr-instance"
-                export ACTIVE_DATA_DIR="${root}"
+                export DATA_DIR="${root}"; export ACTIVE_DATA_DIR="${root}"
                 data_notice "DATA INSTANCE ADOPTED" \
                     "Existing PostgreSQL ${legacy_major} data reused as-is." \
                     "Instance path: ./data (future v${series} clusters share it)."
@@ -245,7 +261,7 @@ prepare_data_instance() {
             fi
             # Breaking major switch -> brand new isolated instance, old data untouched
             printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
-            export ACTIVE_DATA_DIR="${target}"
+            export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
             data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
                 "Requested PostgreSQL v${series}; old cluster is v${legacy_major:-unknown}." \
                 "A FRESH instance was created at: ./data/postgresql/${series}" \
@@ -256,7 +272,7 @@ prepare_data_instance() {
         mariadb|mysql|mongodb|cassandra|aerospike|cockroachdb)
             # Cross-major unsafe formats -> never mix; isolate new instance
             printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
-            export ACTIVE_DATA_DIR="${target}"
+            export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
             data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
                 "Fresh ${pt} v${series} instance: ./data/${pt}/${series}" \
                 "Legacy files in ./data are PRESERVED (not deleted)." \
@@ -266,7 +282,7 @@ prepare_data_instance() {
         *)
             # Self-contained formats (redis RDB, pocketbase, minio, qdrant...) adopt safely
             printf 'engine=%s series=%s adopted=legacy\n' "${pt}" "${series}" > "${root}/.potenfyr-instance"
-            export ACTIVE_DATA_DIR="${root}"
+            export DATA_DIR="${root}"; export ACTIVE_DATA_DIR="${root}"
             data_notice "DATA INSTANCE ADOPTED" \
                 "Existing ${pt} data in ./data continues to be used." \
                 "Future instances live under: ./data/${pt}/<version>"
@@ -318,8 +334,10 @@ verify_running_version() {
 
     export EFFECTIVE_DB_VERSION="${actual}"
     local req_major="${req%%.*}" act_major="${actual%%.*}"
-    if [ "${MYSQL_CDN_FALLBACK:-0}" = "1" ] && [ "${PROJECT_TYPE}" = "mysql" ]; then
-        # Explicit CDN_FALLBACK_SYSTEM substitution: announce, don't fatal.
+    # Installer runs as a subshell: it flags CDN substitution via marker file
+    if [ "${PROJECT_TYPE}" = "mysql" ] \
+       && [ "${CDN_FALLBACK_SYSTEM:-0}" = "1" ] \
+       && [ -f "${SERVER_DIR}/bin/.versions/mysql-cdn-fallback" ]; then
         warn "Running container-provided ${PROJECT_TYPE} ${actual} because cdn.mysql.com was unreachable (CDN_FALLBACK_SYSTEM=1)."
         warn "Requested '${req}' will be honored automatically once Oracle's CDN is reachable again."
         return 0
