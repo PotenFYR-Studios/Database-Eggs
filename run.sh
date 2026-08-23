@@ -153,9 +153,16 @@ ensure_engine_binary() {
         fi
     fi
 
-    if [ -n "${installer_bin}" ] && [ "${DB_VERSION}" != "latest" ] && [ "${DB_VERSION}" != "default" ]; then
-        log "Checking requested version for ${engine} (v${DB_VERSION})..."
-        "${installer_bin}" "${engine}" "${DB_VERSION}" "${SERVER_DIR}/bin" || true
+    # ALWAYS honor DB_VERSION - including 'latest'/'default'. Previously these
+    # keywords SKIPPED provisioning entirely, silently serving the distro's
+    # ancient pre-baked binary (e.g. Redis 6.0.16) instead of the newest
+    # upstream release. install-db-version.sh resolves latest dynamically and
+    # is idempotent, so existing correct installs cost one cheap feed lookup.
+    if [ -n "${installer_bin}" ]; then
+        log "Resolving ${engine} version request (v${DB_VERSION:-latest})..."
+        if ! "${installer_bin}" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin"; then
+            warn "Version provisioning failed for ${engine} - falling back to best-available binaries."
+        fi
     fi
 }
 
