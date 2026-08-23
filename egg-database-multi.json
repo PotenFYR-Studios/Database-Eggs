@@ -179,6 +179,36 @@
             "user_editable": true,
             "rules": "nullable|string|max:256",
             "field_type": "text"
+        },
+        {
+            "name": "Redis Overcommit Memory",
+            "description": "1 = attempt vm.overcommit_memory=1 on the host for safe Redis fork()/background saves (requires root; otherwise prints one guidance line). Set 0 to skip entirely.",
+            "env_variable": "REDIS_OVERCOMMIT_MEMORY",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Host Somaxconn",
+            "description": "Attempt net.core.somaxconn on the host for connection-heavy engines (0 = skip). Needs root; unprivileged runs print guidance only.",
+            "env_variable": "HOST_SOMAXCONN",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|numeric|min:0,max:65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Disable Transparent Huge Pages",
+            "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
+            "env_variable": "HOST_DISABLE_THP",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
         }
     ]
 }

@@ -116,6 +116,11 @@ if command -v load_companions >/dev/null 2>&1; then
     load_companions
 fi
 
+# Host kernel tunables (overcommit, somaxconn, THP) - best-effort, root-aware
+if command -v apply_host_tunables >/dev/null 2>&1; then
+    apply_host_tunables
+fi
+
 PROJECT_TYPE=$(echo "${DB_TYPE:-${DATABASE_TYPE:-mariadb}}" | tr '[:upper:]' '[:lower:]')
 DB_VERSION="${DB_VERSION:-latest}"
 
