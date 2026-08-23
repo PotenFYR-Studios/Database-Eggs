@@ -10,31 +10,35 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 
 ## Contents
 
-**Getting Started**
+#### Getting Started
+
 1. [What Is This?](#what-is-this)
 2. [Quick Start in 5 Minutes](#quick-start-in-5-minutes)
 3. [Choosing Your Database](#choosing-your-database)
 4. [Picking a Version](#picking-a-version)
 
-**Everyday Use**
-5. [Connecting to Your Database](#connecting-to-your-database)
-6. [Switching Engines or Versions Safely](#switching-engines-or-versions-safely)
-7. [All Startup Variables](#all-startup-variables)
+#### Everyday Use
 
-**Reliability & Operations**
-8. [Performance Auto-Tuning](#performance-auto-tuning)
-9. [Security Model](#security-model)
-10. [Architecture & OS Support](#architecture--os-support)
-11. [Panel Compatibility & Detection](#panel-compatibility--detection)
-12. [Troubleshooting Guide](#troubleshooting-guide)
+- [Connecting to Your Database](#connecting-to-your-database)
+- [Switching Engines or Versions Safely](#switching-engines-or-versions-safely)
+- [All Startup Variables](#all-startup-variables)
 
-**Expert Zone**
-13. [Advanced Configuration](#advanced-configuration)
-14. [Custom Engines & Binary URLs](#custom-engines--binary-urls)
-15. [Air-Gapped / Offline Fleets](#air-gapped--offline-fleets)
-16. [Testing Suite & CI/CD](#testing-suite--cicd)
-17. [Repository Layout](#repository-layout)
-18. [License](#license)
+#### Reliability & Operations
+
+- [Performance Auto-Tuning](#performance-auto-tuning)
+- [Security Model](#security-model)
+- [Architecture & OS Support](#architecture--os-support)
+- [Panel Compatibility & Detection](#panel-compatibility--detection)
+- [Troubleshooting Guide](#troubleshooting-guide)
+
+#### Expert Zone
+
+- [Advanced Configuration](#advanced-configuration)
+- [Custom Engines & Binary URLs](#custom-engines--binary-urls)
+- [Air-Gapped / Offline Fleets](#air-gapped--offline-fleets)
+- [Testing Suite & CI/CD](#testing-suite--cicd)
+- [Repository Layout](#repository-layout)
+- [License](#license)
 
 ---
 
