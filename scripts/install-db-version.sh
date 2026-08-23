@@ -761,8 +761,22 @@ install_mysql() {
     log "Probing MySQL builds (HEAD + direct-download fallback for CDN HEAD-blocking)..."
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
-    hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
-        || { rm -f "${tmp_tar}"; fail "No downloadable MySQL minimal build located for series '${series}' on ${ARCH_TYPE}."; }
+    if ! hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}"); then
+        rm -f "${tmp_tar}"
+        # Oracle's CDN (Akamai) hard-blocks some datacenter/CI egress ranges.
+        # Opt-in escape hatch: serve the container-provided MySQL-compatible
+        # daemon instead, loudly. Never silent; contract resumes when the CDN
+        # is reachable again.
+        if [ "${CDN_FALLBACK_SYSTEM:-0}" = "1" ] && { command -v mysqld >/dev/null 2>&1 || command -v mariadbd >/dev/null 2>&1; }; then
+            warn "cdn.mysql.com is unreachable from this network (blocked egress range)."
+            warn "CDN_FALLBACK_SYSTEM=1: serving the container-provided MySQL-compatible daemon for series '${series}'."
+            warn "This is a SUBSTITUTION, not a match. Remove CDN_FALLBACK_SYSTEM or fix egress for exact-version service."
+            export MYSQL_CDN_FALLBACK=1
+            RESOLVED="${RESOLVED}-cdn-unreachable"
+            return 0
+        fi
+        fail "No downloadable MySQL minimal build located for series '${series}' on ${ARCH_TYPE}."
+    fi
     RESOLVED="$(basename "${hit}" | sed -E 's/mysql-([0-9.]+)-linux.*/\1/')"
     log "Downloading MySQL ${RESOLVED} minimal tarball succeeded."
     mkdir -p "${base}"
@@ -1051,12 +1065,15 @@ case "${ENGINE}" in
         ;;
 
     meilisearch)
+        # Repo canonicalized to meilisearch/meilisearch; assets renamed to
+        # linux-amd64/linux-aarch64/linux-riscv64 (ARCH_TYPE matches exactly).
         TAG="${RESOLVED}"
-        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "getmeili/meilisearch")
-        [ -z "${TAG}" ] && TAG="v1.12.0"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "meilisearch/meilisearch")
+        [ -z "${TAG}" ] && TAG="v1.53.1"
         [[ "${TAG}" != v* ]] && TAG="v${TAG}"
         if [ ! -x "${INSTALL_DIR}/meilisearch" ]; then
-            URL="https://github.com/getmeili/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_ALT}"
+            URL="https://github.com/meilisearch/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_TYPE}"
+            probe_url "${URL}" || URL="https://github.com/getmeili/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_ALT}"
             if fetch "${URL}" "${INSTALL_DIR}/meilisearch"; then
                 seal_binary "${INSTALL_DIR}/meilisearch" \
                     || { rm -f "${INSTALL_DIR}/meilisearch"; warn "Meilisearch seal failed."; }
