@@ -29,6 +29,14 @@ start_search_family() {
                 fail "Meilisearch binary is unavailable."
             fi
 
+            # Self-heal: a valid Meili database always contains a VERSION file.
+            # If the instance dir holds foreign/partial residue (interrupted
+            # first boot, stale engine switch), clear it so a fresh DB initializes.
+            if [ -d "${data_dir}" ] && [ ! -f "${data_dir}/VERSION" ] && [ -n "$(ls -A "${data_dir}" 2>/dev/null)" ]; then
+                warn "Meilisearch instance dir has no VERSION marker; clearing stale residue for clean init."
+                rm -rf "${data_dir:?}/"* "${data_dir:?}"/.[!.]* 2>/dev/null || true
+            fi
+
             local cfg_arg=""
             [ -f "${SERVER_DIR}/config/meilisearch.toml" ] && cfg_arg="--config-file-path ${SERVER_DIR}/config/meilisearch.toml"
 

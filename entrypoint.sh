@@ -250,6 +250,16 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_PASSWORD:-}" ] || [ "${DB_PASSWORD}" = "auto" ] || [ "${DB_PASSWORD}" = "generate" ]; then
         DB_PASSWORD=$(gen_rand 32 urlsafe)
     fi
+    # Production floor: engines like Meilisearch reject master keys < 32 chars.
+    # Short user-supplied values are transparently upgraded to strong secrets.
+    if [ "${#DB_ROOT_PASSWORD}" -lt 32 ] 2>/dev/null; then
+        warn "DB_ROOT_PASSWORD shorter than 32 chars; upgrading to a cryptographically strong secret."
+        DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
+    fi
+    if [ "${#DB_PASSWORD}" -lt 32 ] 2>/dev/null; then
+        warn "DB_PASSWORD shorter than 32 chars; upgrading to a cryptographically strong secret."
+        DB_PASSWORD=$(gen_rand 32 urlsafe)
+    fi
 fi
 
 DB_USER="${DB_USER:-dbuser}"
