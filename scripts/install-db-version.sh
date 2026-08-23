@@ -618,6 +618,10 @@ install_postgresql() {
     local dest="${INSTALL_DIR}/pg-${tag%%.*}"
     if [ -x "${dest}/bin/postgres" ] && "${dest}/bin/postgres" --version 2>/dev/null | grep -qE " ${tag%%.*}[. ]"; then
         log "Standalone PostgreSQL ${tag%%.*}.x already installed."
+        # Idempotent: ensure extension/runtime libs exist even for installs
+        # provisioned before bundling was introduced (uuid-ossp needs
+        # libossp-uuid.so.16 at CREATE EXTENSION time).
+        bundle_pg_runtime_libs "${dest}/lib-extra"
         return 0
     fi
 
