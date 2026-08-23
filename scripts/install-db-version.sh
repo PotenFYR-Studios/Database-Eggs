@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+﻿#!/usr/bin/env bash
 # =============================================================================
 #  PotenFYR Studios - Universal Multi-Database Version Downloader & Installer
 #  Installs ANY specific version (or dynamically-resolved 'latest') for 55+
@@ -170,25 +170,57 @@ apt_try_install() {
     return 1
 }
 
-extract_libaio() { # bundle libaio.so.1 beside daemons that link it (MariaDB/MySQL bintars)
+extract_libaio() { # bundle libaio.so.1 + libnuma.so.1 beside daemons that link them (MariaDB/MySQL bintars)
     local dest="$1"
-    [ -e "${dest}/libaio.so.1" ] && return 0
     mkdir -p "${dest}"
     local arch_deb="amd64"
     [ "${ARCH_TYPE}" = "arm64" ] && arch_deb="arm64"
-    local u tmp_deb
+    local u tmp_deb need=0
+
+    [ -e "${dest}/libaio.so.1" ] || need=1
+    if [ "${need}" = "1" ]; then
+        for u in \
+            "https://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb" \
+            "https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb"; do
+            tmp_deb=$(mktemp)
+            if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.lx" 2>/dev/null; then
+                find "${dest}/.lx" -name 'libaio.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
+                rm -rf "${dest}/.lx" "${tmp_deb}"
+                [ -e "${dest}/libaio.so.1" ] && break
+            fi
+            rm -f "${tmp_deb}"
+        done
+    fi
+    [ -e "${dest}/libaio.so.1" ] || warn "Could not bundle libaio.so.1."
+
+    [ -e "${dest}/libnuma.so.1" ] && return 0
     for u in \
-        "https://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb" \
-        "https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb"; do
+        "https://archive.ubuntu.com/ubuntu/pool/main/n/numactl/libnuma1_2.0.14-3ubuntu2_${arch_deb}.deb" \
+        "https://archive.ubuntu.com/ubuntu/pool/main/n/numactl/libnuma1_2.0.18-1_${arch_deb}.deb"; do
         tmp_deb=$(mktemp)
-        if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.lx" 2>/dev/null; then
-            find "${dest}/.lx" -name 'libaio.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
-            rm -rf "${dest}/.lx" "${tmp_deb}"
-            [ -e "${dest}/libaio.so.1" ] && return 0
+        if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.nx" 2>/dev/null; then
+            find "${dest}/.nx" -name 'libnuma.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
+            rm -rf "${dest}/.nx" "${tmp_deb}"
+            [ -e "${dest}/libnuma.so.1" ] && break
         fi
         rm -f "${tmp_deb}"
     done
-    warn "Could not bundle libaio.so.1 (needed by MariaDB/MySQL generic builds)."
+    return 0
+}
+
+# Enforce executable bit + non-empty payload on every installed single binary.
+# Fixes rare Permission-denied exec failures regardless of umask/mount quirks.
+seal_binary() { # seal_binary <path>
+    local f="$1"
+    [ -f "${f}" ] || { warn "seal_binary: ${f} missing."; return 1; }
+    [ -s "${f}" ] || { warn "seal_binary: ${f} is empty."; return 1; }
+    chmod 755 "${f}" 2>/dev/null || true
+    chmod +x "${f}" 2>/dev/null || true
+    if [ ! -x "${f}" ]; then
+        err "Binary not executable after chmod: ${f}"
+        ls -la "$(dirname "${f}")" >&2 2>/dev/null | tail -n 5
+        return 1
+    fi
     return 0
 }
 
@@ -830,7 +862,7 @@ case "${ENGINE}" in
             tmp_zip=$(mktemp)
             if fetch "${URL}" "${tmp_zip}"; then
                 unzip -q -o "${tmp_zip}" -d "${INSTALL_DIR}/"
-                chmod +x "${INSTALL_DIR}/pocketbase"
+                seal_binary "${INSTALL_DIR}/pocketbase"
                 ok "PocketBase v${TAG} installed."
             else warn "PocketBase v${TAG} download failed."; fi
             rm -f "${tmp_zip}"
@@ -866,7 +898,8 @@ case "${ENGINE}" in
         if [ ! -x "${INSTALL_DIR}/meilisearch" ]; then
             URL="https://github.com/getmeili/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_ALT}"
             if fetch "${URL}" "${INSTALL_DIR}/meilisearch"; then
-                chmod +x "${INSTALL_DIR}/meilisearch"
+                seal_binary "${INSTALL_DIR}/meilisearch" \
+                    || { rm -f "${INSTALL_DIR}/meilisearch"; warn "Meilisearch seal failed."; }
                 ok "Meilisearch ${TAG} installed."
             else warn "Meilisearch ${TAG} download failed."; fi
         fi
@@ -880,7 +913,7 @@ case "${ENGINE}" in
         if [ ! -x "${INSTALL_DIR}/qdrant" ]; then
             URL="https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
             if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
-                chmod +x "${INSTALL_DIR}/qdrant"
+                seal_binary "${INSTALL_DIR}/qdrant"
                 ok "Qdrant ${TAG} installed."
             else warn "Qdrant ${TAG} download failed."; fi
         fi
@@ -893,7 +926,7 @@ case "${ENGINE}" in
         if [ ! -x "${INSTALL_DIR}/typesense-server" ]; then
             URL="https://dl.typesense.org/releases/${TAG}/typesense-server-${TAG}-linux-${ARCH_TYPE}.tar.gz"
             if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
-                chmod +x "${INSTALL_DIR}/typesense-server"
+                seal_binary "${INSTALL_DIR}/typesense-server"
                 ok "Typesense v${TAG} installed."
             else warn "Typesense v${TAG} download failed."; fi
         fi
@@ -904,7 +937,7 @@ case "${ENGINE}" in
             URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio"
             [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "latest" ] && URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/archive/minio.${RESOLVED}"
             if fetch "${URL}" "${INSTALL_DIR}/minio"; then
-                chmod +x "${INSTALL_DIR}/minio"
+                seal_binary "${INSTALL_DIR}/minio"
                 ok "MinIO ${RESOLVED} installed."
             else warn "MinIO download failed."; fi
         fi

@@ -52,8 +52,6 @@ net:
 
 storage:
   dbPath: ${data_dir}
-  journal:
-    enabled: true
   wiredTiger:
     engineConfig:
       cacheSizeGB: ${TUNED_MONGO_CACHE_GB}
@@ -75,6 +73,8 @@ EOF
         ok "Created performance-tuned ${mongod_conf}"
     else
         sed -i "s/port: .*/port: ${SERVER_PORT}/g" "${mongod_conf}" 2>/dev/null || true
+        # Migration: storage.journal.enabled was removed in MongoDB 6.1+
+        sed -i '/^  journal:$/,/^    enabled: true$/d' "${mongod_conf}" 2>/dev/null || true
     fi
 
     # Check if first run
