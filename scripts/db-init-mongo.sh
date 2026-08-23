@@ -2,7 +2,24 @@
 # =============================================================================
 #  PotenFYR Studios - MongoDB & FerretDB Engine Handler
 #  Includes WiredTiger Cache Optimization and Authentication Security
+#  Honors DB_VERSION: prefers the exact mongod provisioned into bin/.
 # =============================================================================
+
+find_mongo_bin() { # find_mongo_bin <mongod|mongosh>
+    local name="$1"
+    local p
+    for p in "${SERVER_DIR}/bin/${name}" "${SERVER_DIR}/.runtimes/bin/${name}"; do
+        [ -x "${p}" ] && { printf '%s' "${p}"; return 0; }
+    done
+    command -v "${name}" 2>/dev/null || return 1
+}
+
+mongo_shell() { # returns shell command usable for provisioning (mongosh preferred)
+    local sh_bin
+    if sh_bin=$(find_mongo_bin "mongosh"); then printf '%s' "${sh_bin}"; return 0; fi
+    if command -v mongo >/dev/null 2>&1; then command -v mongo; return 0; fi
+    return 1
+}
 
 init_mongo_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
@@ -66,9 +83,22 @@ EOF
         first_run=1
         log "First run detected. Initializing MongoDB authentication..."
 
+        local mongod_bin
+        mongod_bin=$(find_mongo_bin "mongod") || {
+            error "MongoDB daemon 'mongod' not found (installer failed?)."
+            fail "'mongod' is unavailable."
+        }
+
+        local msh
+        msh=$(mongo_shell) || {
+            warn "No mongo shell available - skipping credential provisioning."
+            warn "Provision manually later via EXTRA_RUNTIMES=mongosh."
+            return 0
+        }
+
         local init_log="${SERVER_DIR}/logs/mongod_init.log"
         # Start temporary mongod without auth bound strictly to local loopback
-        mongod --port "${SERVER_PORT}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --logpath "${init_log}" --fork >/dev/null 2>&1
+        "${mongod_bin}" --port "${SERVER_PORT}" --dbpath "${data_dir}" --bind_ip 127.0.0.1 --logpath "${init_log}" --fork >/dev/null 2>&1
         local fork_status=$?
 
         if [ ${fork_status} -ne 0 ]; then
@@ -78,7 +108,7 @@ EOF
         fi
 
         local retries=30
-        while ! mongosh --port "${SERVER_PORT}" --eval "db.adminCommand('ping')" >/dev/null 2>&1 && [ "${retries}" -gt 0 ]; do
+        while ! "${msh}" --quiet --port "${SERVER_PORT}" --eval "db.adminCommand('ping')" >/dev/null 2>&1 && [ "${retries}" -gt 0 ]; do
             sleep 1
             retries=$((retries - 1))
         done
@@ -93,7 +123,7 @@ EOF
         fi
 
         log "Creating admin superuser..."
-        mongosh --port "${SERVER_PORT}" admin >/dev/null 2>&1 <<EOSCRIPT
+        "${msh}" --quiet --port "${SERVER_PORT}" admin >/dev/null 2>&1 <<EOSCRIPT
 db.createUser({
   user: "root",
   pwd: "${DB_ROOT_PASSWORD}",
@@ -104,7 +134,7 @@ EOSCRIPT
 
         # Create application database and user
         if [ -n "${DB_NAME:-}" ] && [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
-            mongosh --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" "${DB_NAME}" >/dev/null 2>&1 <<EOSCRIPT
+            "${msh}" --quiet --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" "${DB_NAME}" >/dev/null 2>&1 <<EOSCRIPT
 db.createUser({
   user: "${DB_USER}",
   pwd: "${DB_PASSWORD}",
@@ -115,7 +145,7 @@ EOSCRIPT
         fi
 
         log "Shutting down temporary MongoDB instance..."
-        mongosh --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" --eval "db.adminCommand({shutdown: 1})" >/dev/null 2>&1 || true
+        "${msh}" --quiet --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" --eval "db.adminCommand({shutdown: 1})" >/dev/null 2>&1 || true
         sleep 2
         ok "MongoDB authentication initialized successfully."
     fi
@@ -133,20 +163,24 @@ start_mongo_family() {
     fi
 
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
-        if ! command -v ferretdb >/dev/null 2>&1; then
-            error "FerretDB binary not found in container PATH."
+        local fdb_bin
+        fdb_bin=$(find_mongo_bin "ferretdb") || {
+            error "FerretDB binary not found in container."
             fail "FerretDB binary is unavailable."
-        fi
+        }
         log "Starting FerretDB on 0.0.0.0:${SERVER_PORT}..."
-        exec ferretdb --listen-addr="0.0.0.0:${SERVER_PORT}" \
+        exec "${fdb_bin}" --listen-addr="0.0.0.0:${SERVER_PORT}" \
                       --handler="${FERRETDB_HANDLER:-sqlite}" \
                       --sqlite-url="${data_dir}/" ${EXTRA_ARGS:-}
     else
-        if ! command -v mongod >/dev/null 2>&1; then
-            error "MongoDB binary 'mongod' not found in container PATH."
+        local mongod_bin
+        mongod_bin=$(find_mongo_bin "mongod") || {
+            error "MongoDB binary 'mongod' not found in container."
             fail "MongoDB daemon 'mongod' is unavailable."
-        fi
-        log "Starting MongoDB on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
-        exec mongod --config "${mongod_conf}" ${EXTRA_ARGS:-}
+        }
+        local actual_version
+        actual_version=$("${mongod_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+        log "Starting MongoDB ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
+        exec "${mongod_bin}" --config "${mongod_conf}" ${EXTRA_ARGS:-}
     fi
 }

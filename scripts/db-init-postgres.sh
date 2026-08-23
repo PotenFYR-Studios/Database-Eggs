@@ -2,23 +2,101 @@
 # =============================================================================
 #  PotenFYR Studios - PostgreSQL Engine Handler
 #  Includes Automatic Performance Tuning and Production Security Hardening
+#  Honors the DB_VERSION startup variable exactly (13, 14, 15, 16, 17, 18,
+#  or 'latest' which resolves dynamically at boot).
 # =============================================================================
 
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${PATH}"
+export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:${PATH}"
+
+pg_requested_major() {
+    local v="${DB_VERSION:-latest}"
+    v=$(echo "${v}" | tr '[:upper:]' '[:lower:]')
+    case "${v}" in
+        latest|default|stable|"") echo "" ;;
+        *)
+            local major="${v%%.*}"
+            [[ "${major}" =~ ^[0-9]+$ ]] && echo "${major}" || echo ""
+            ;;
+    esac
+}
 
 find_pg_bin() {
     local bin_name="$1"
-    if command -v "${bin_name}" >/dev/null 2>&1; then
-        command -v "${bin_name}"
+    local req_major
+    req_major=$(pg_requested_major)
+
+    # 1) Exact standalone install provisioned by install-db-version.sh
+    if [ -n "${req_major}" ] && [ -x "${SERVER_DIR}/bin/pg-${req_major}/bin/${bin_name}" ]; then
+        echo "${SERVER_DIR}/bin/pg-${req_major}/bin/${bin_name}"
         return 0
     fi
+
+    # 2) Version-pinned system path (PGDG apt layout)
+    if [ -n "${req_major}" ] && [ -x "/usr/lib/postgresql/${req_major}/bin/${bin_name}" ]; then
+        echo "/usr/lib/postgresql/${req_major}/bin/${bin_name}"
+        return 0
+    fi
+
+    # 3) Any standalone install (newest first)
     local found
-    found=$(find /usr/lib/postgresql /usr/local/bin /usr/bin -name "${bin_name}" -type f 2>/dev/null | sort -V | tail -n 1)
+    found=$(ls -1d "${SERVER_DIR}"/bin/pg-*/bin/"${bin_name}" 2>/dev/null | sort -V | tail -n1)
     if [ -n "${found}" ] && [ -x "${found}" ]; then
         echo "${found}"
         return 0
     fi
-    echo "${bin_name}"
+
+    # 4) System paths (newest installed major wins)
+    found=$(ls -1d /usr/lib/postgresql/*/bin/"${bin_name}" 2>/dev/null | sort -V | tail -n1)
+    if [ -n "${found}" ] && [ -x "${found}" ]; then
+        echo "${found}"
+        return 0
+    fi
+
+    # 5) Generic PATH fallback
+    if command -v "${bin_name}" >/dev/null 2>&1; then
+        command -v "${bin_name}"
+        return 0
+    fi
+
+    echo ""
+    return 1
+}
+
+# Guard: refuse to boot an incompatible cluster instead of crashing cryptically.
+# Existing data initialized by a different major than explicitly requested is
+# the #1 cause of "version ignored" confusion - surface it clearly.
+guard_pg_data_compat() {
+    local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local pg_version_file="${data_dir}/PG_VERSION"
+    [ -f "${pg_version_file}" ] || return 0
+
+    local req_major existing_major
+    req_major=$(pg_requested_major)
+    existing_major=$(cat "${pg_version_file}" 2>/dev/null | tr -d '[:space:]')
+
+    # No explicit pin -> adopt whatever the data dir was created with (zero friction upgrades of running servers)
+    if [ -z "${req_major}" ] || [ "${req_major}" = "${existing_major}" ]; then
+        export PG_EFFECTIVE_MAJOR="${existing_major}"
+        return 0
+    fi
+
+    local _red="${C_RED:-\033[31m}" _bold="${C_BOLD:-\033[1m}" _rst="${C_RESET:-\033[0m}"
+    {
+        printf "\n${_red}${_bold}┌─────────────────────────────────────────────────────────────┐${_rst}\n"
+        printf "${_red}${_bold}│  ✗ POSTGRESQL VERSION MISMATCH - ACTION REQUIRED            │${_rst}\n"
+        printf "${_red}${_bold}├─────────────────────────────────────────────────────────────┤${_rst}\n"
+        printf "${_red}${_bold}│${_rst}  Startup variable DB_VERSION : %-28s ${_red}${_bold}│${_rst}\n" "${req_major}"
+        printf "${_red}${_bold}│${_rst}  Data directory was created  : PostgreSQL %-18s ${_red}${_bold}│${_rst}\n" "${existing_major}"
+        printf "${_red}${_bold}│${_rst}  Data directory path         : %-28s ${_red}${_bold}│${_rst}\n" "${data_dir}"
+        printf "${_red}${_bold}├─────────────────────────────────────────────────────────────┤${_rst}\n"
+        printf "${_red}${_bold}│${_rst}  PostgreSQL cannot read data files across major versions.   ${_red}${_bold}│${_rst}\n"
+        printf "${_red}${_bold}│${_rst}  Your existing data is SAFE. Choose ONE option:             ${_red}${_bold}│${_rst}\n"
+        printf "${_red}${_bold}│${_rst}   1) Keep data      -> set DB_VERSION=%-16s ${_red}${_bold}│${_rst}\n" "${existing_major}"
+        printf "${_red}${_bold}│${_rst}   2) Fresh v%-9s -> set DATA_DIR=data-v%-11s ${_red}${_bold}│${_rst}\n" "${req_major}" "${req_major}"
+        printf "${_red}${_bold}│${_rst}   3) Wipe & reinit  -> backup then empty the data folder    ${_red}${_bold}│${_rst}\n"
+        printf "${_red}${_bold}└─────────────────────────────────────────────────────────────┘${_rst}\n\n"
+    } >&2
+    fail "PostgreSQL ${req_major} cannot start on a v${existing_major} data directory."
 }
 
 init_postgres() {
@@ -29,6 +107,9 @@ init_postgres() {
     mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
     chmod 700 "${data_dir}" 2>/dev/null || true
     chmod 777 "${socket_dir}" 2>/dev/null || true
+
+    # Enforce version compatibility before touching anything
+    guard_pg_data_compat
 
     # Run performance auto-tuning
     if command -v tune_postgresql >/dev/null 2>&1; then
@@ -276,6 +357,9 @@ start_postgres() {
     mkdir -p "${socket_dir}"
     chmod 777 "${socket_dir}" 2>/dev/null || true
 
+    # Version compatibility guard (explicit DB_VERSION vs existing cluster)
+    guard_pg_data_compat
+
     # Self-healing check: if configuration is missing, run init
     if [ ! -f "${data_dir}/postgresql.conf" ] || [ ! -f "${data_dir}/PG_VERSION" ]; then
         warn "PostgreSQL cluster configuration missing in ${data_dir}. Initializing cluster..."
@@ -283,17 +367,33 @@ start_postgres() {
     fi
 
     local pg_bin
-    pg_bin=$(find_pg_bin "postgres")
-
-    if [ -z "${pg_bin}" ] || ! command -v "${pg_bin}" >/dev/null 2>&1; then
-        error "PostgreSQL daemon binary ('postgres') not found in container PATH."
-        error "Please ensure your server uses the universal image: ghcr.io/potenfyr-studios/database-eggs:latest"
+    pg_bin=$(find_pg_bin "postgres") || {
+        error "PostgreSQL daemon binary ('postgres') not found."
+        error "Ensure the official image is used: ghcr.io/potenfyr-studios/database-eggs:*"
         fail "PostgreSQL daemon binary is unavailable."
+    }
+
+    # Surface the ACTUAL binary version that will serve connections (no silent downgrades)
+    local actual_version
+    actual_version=$("${pg_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+    export PG_EFFECTIVE_VERSION="${actual_version:-unknown}"
+
+    local req_major
+    req_major=$(pg_requested_major)
+    if [ -n "${req_major}" ] && [ -n "${actual_version}" ] && [ "${actual_version%%.*}" != "${req_major}" ]; then
+        error "Requested PostgreSQL v${req_major} but resolved binary reports v${actual_version}."
+        error "Set STRICT_VERSION=0 to allow fallback, or fix installation (see logs/installer.log)."
+        fail "PostgreSQL version verification failed."
     fi
 
     mkdir -p "${socket_dir}"
     chmod 777 "${socket_dir}" 2>/dev/null || true
 
-    log "Starting PostgreSQL on 0.0.0.0:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."
-    exec "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "0.0.0.0" ${EXTRA_ARGS:-}
+    # Standalone installs may bundle extra libs (gnu builds) - prefer them
+    local pg_home
+    pg_home="$(dirname "$(dirname "${pg_bin}")")"
+    [ -d "${pg_home}/lib" ] && export LD_LIBRARY_PATH="${pg_home}/lib:${LD_LIBRARY_PATH:-}"
+
+    log "Starting PostgreSQL ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."
+    exec "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "${BIND_ADDRESS:-0.0.0.0}" ${EXTRA_ARGS:-}
 }

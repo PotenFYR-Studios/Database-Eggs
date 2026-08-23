@@ -2,7 +2,17 @@
 # =============================================================================
 #  PotenFYR Studios - In-Memory & Caching Engine Handler (Redis, Valkey, KeyDB, Dragonfly, Memcached)
 #  Includes Performance Multi-Threading, Memory Tuning, and Security Isolation
+#  Honors DB_VERSION: prefers exact binaries provisioned into bin/.
 # =============================================================================
+
+find_inmemory_bin() {
+    local name="$1"
+    local p
+    for p in "${SERVER_DIR}/bin/${name}"; do
+        [ -x "${p}" ] && { printf '%s' "${p}"; return 0; }
+    done
+    command -v "${name}" 2>/dev/null || return 1
+}
 
 init_redis_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
@@ -95,46 +105,55 @@ start_redis_family() {
 
     case "${PROJECT_TYPE}" in
         dragonfly)
-            if ! command -v dragonfly >/dev/null 2>&1; then
-                error "Dragonfly binary not found in container PATH."
+            local df_bin
+            df_bin=$(find_inmemory_bin "dragonfly") || {
+                error "Dragonfly binary not found."
                 fail "Dragonfly binary is unavailable."
-            fi
+            }
             local pw_arg=""
             [ -n "${DB_PASSWORD:-}" ] && pw_arg="--requirepass=${DB_PASSWORD}"
-            log "Starting Dragonfly on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB})..."
-            exec dragonfly --port="${SERVER_PORT}" --dir="${data_dir}" --maxmemory="${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB}" ${pw_arg} ${EXTRA_ARGS:-}
+            local actual_version
+            actual_version=$("${df_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            log "Starting Dragonfly ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB})..."
+            exec "${df_bin}" --port="${SERVER_PORT}" --dir="${data_dir}" --maxmemory="${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB}" ${pw_arg} ${EXTRA_ARGS:-}
             ;;
         keydb)
-            if ! command -v keydb-server >/dev/null 2>&1; then
-                error "KeyDB binary 'keydb-server' not found in container PATH."
+            local kd_bin
+            kd_bin=$(find_inmemory_bin "keydb-server") || {
+                error "KeyDB binary 'keydb-server' not found."
                 fail "KeyDB binary is unavailable."
-            fi
+            }
             log "Starting KeyDB on 0.0.0.0:${SERVER_PORT} (Threads: ${TUNED_REDIS_IO_THREADS:-2})..."
-            exec keydb-server "${redis_conf}" ${EXTRA_ARGS:-}
+            exec "${kd_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
         valkey)
-            if ! command -v valkey-server >/dev/null 2>&1; then
-                error "Valkey binary 'valkey-server' not found in container PATH."
+            local vk_bin
+            vk_bin=$(find_inmemory_bin "valkey-server") || {
+                error "Valkey binary 'valkey-server' not found."
                 fail "Valkey binary is unavailable."
-            fi
+            }
             log "Starting Valkey on 0.0.0.0:${SERVER_PORT}..."
-            exec valkey-server "${redis_conf}" ${EXTRA_ARGS:-}
+            exec "${vk_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
         memcached)
-            if ! command -v memcached >/dev/null 2>&1; then
-                error "Memcached binary not found in container PATH."
+            local mc_bin
+            mc_bin=$(find_inmemory_bin "memcached") || {
+                error "Memcached binary not found."
                 fail "Memcached binary is unavailable."
-            fi
+            }
             log "Starting Memcached on 0.0.0.0:${SERVER_PORT}..."
-            exec memcached -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" ${EXTRA_ARGS:-}
+            exec "${mc_bin}" -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" -u "$(id -un 2>/dev/null || echo container)" ${EXTRA_ARGS:-}
             ;;
         *) # redis
-            if ! command -v redis-server >/dev/null 2>&1; then
-                error "Redis binary 'redis-server' not found in container PATH."
+            local rs_bin
+            rs_bin=$(find_inmemory_bin "redis-server") || {
+                error "Redis binary 'redis-server' not found."
                 fail "Redis binary is unavailable."
-            fi
-            log "Starting Redis on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
-            exec redis-server "${redis_conf}" ${EXTRA_ARGS:-}
+            }
+            local actual_version
+            actual_version=$("${rs_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            log "Starting Redis ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
+            exec "${rs_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
             ;;
     esac
 }

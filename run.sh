@@ -182,6 +182,171 @@ ensure_engine_binary() {
 
 ensure_engine_binary "${PROJECT_TYPE}"
 
+# ---------------------------------------------------------------------------
+# Data Instance Manager (Non-Destructive Engine/Version Switching)
+# ---------------------------------------------------------------------------
+# Every engine+series gets an isolated instance folder under data/.
+# - Same-series restarts reuse the identical instance (zero friction).
+# - Breaking version switches NEVER touch old data: a fresh instance is
+#   created and the console clearly states where previous data is preserved.
+# - Explicit DATA_DIR overrides bypass this manager entirely (power users).
+# ---------------------------------------------------------------------------
+data_notice() { # data_notice <title> <line1> [line2] ...
+    local title="$1"; shift
+    local _yel="${C_YELLOW:-\033[33m}" _bold="${C_BOLD:-\033[1m}" _rst="${C_RESET:-\033[0m}"
+    printf "\n${_yel}${_bold}┌─────────────────────────────────────────────────────────────┐${_rst}\n" >&2
+    printf "${_yel}${_bold}│  ⚠ %-56s│${_rst}\n" "${title}" >&2
+    printf "${_yel}${_bold}├─────────────────────────────────────────────────────────────┤${_rst}\n" >&2
+    local l
+    for l in "$@"; do
+        printf "${_yel}${_bold}│${_rst}  %-58s ${_yel}${_bold}│${_rst}\n" "${l:0:57}" >&2
+    done
+    printf "${_yel}${_bold}└─────────────────────────────────────────────────────────────┘${_rst}\n\n" >&2
+}
+
+prepare_data_instance() {
+    # Respect explicit user-provided DATA_DIR without modification
+    if [ -n "${DATA_DIR:-}" ]; then
+        export ACTIVE_DATA_DIR="${DATA_DIR}"
+        return 0
+    fi
+
+    local root="${SERVER_DIR}/data"
+    local pt="${PROJECT_TYPE}"
+    local series="default"
+
+    case "${pt}" in
+        postgresql)                     series="${DB_VERSION%%.*}" ;;
+        mariadb|mysql|mongodb)          series="${DB_VERSION%%.*}" ;;
+        cassandra|aerospike|cockroachdb) series="${DB_VERSION%%.*}" ;;
+        tidb|yugabytedb)                series="${DB_VERSION%%.*}" ;;
+        redis|valkey|keydb|dragonfly)   series="${DB_VERSION%%.*}" ;;
+        *)                              series="default" ;;
+    esac
+    [[ "${series}" =~ ^[0-9]+$ ]] || [[ "${series}" =~ ^[0-9]+\.[0-9]+$ ]] || series="default"
+
+    local target="${root}/${pt}/${series}"
+    local stamp="${target}/.potenfyr-instance"
+
+    legacy_data_present() {
+        [ -e "${root}/PG_VERSION" ] || [ -d "${root}/mysql" ] \
+            || [ -f "${root}/WiredTiger" ] || [ -f "${root}/dump.rdb" ] \
+            || [ -d "${root}/pb_data" ] || [ -n "$(ls -A "${root}" 2>/dev/null | grep -vE '^(\.potenfyr|'$(
+                printf '%s' "postgresql|mariadb|mysql|mongodb|redis|valkey|keydb|dragonfly|memcached|cassandra|aerospike|cockroachdb|tidb|yugabytedb"
+            )')$')" ]
+    }
+
+    mkdir -p "${target}"
+
+    if [ -f "${stamp}" ]; then
+        # Known instance -> reuse silently
+        export ACTIVE_DATA_DIR="${target}"
+        return 0
+    fi
+
+    if ! legacy_data_present; then
+        printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
+        export ACTIVE_DATA_DIR="${target}"
+        return 0
+    fi
+
+    # Legacy flat ./data content exists and was never migrated.
+    case "${pt}" in
+        postgresql)
+            local legacy_major
+            legacy_major=$(cat "${root}/PG_VERSION" 2>/dev/null | tr -d '[:space:]')
+            if [ -n "${legacy_major}" ] && [ "${legacy_major}" = "${series}" ]; then
+                # Non-breaking: adopt existing cluster as the official instance
+                printf 'engine=%s series=%s adopted=legacy\n' "${pt}" "${series}" > "${root}/.potenfyr-instance"
+                export ACTIVE_DATA_DIR="${root}"
+                data_notice "DATA INSTANCE ADOPTED" \
+                    "Existing PostgreSQL ${legacy_major} data reused as-is." \
+                    "Instance path: ./data (future v${series} clusters share it)."
+                return 0
+            fi
+            # Breaking major switch -> brand new isolated instance, old data untouched
+            printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
+            export ACTIVE_DATA_DIR="${target}"
+            data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
+                "Requested PostgreSQL v${series}; old cluster is v${legacy_major:-unknown}." \
+                "A FRESH instance was created at: ./data/postgresql/${series}" \
+                "Previous data PRESERVED at: ./data  (delete manually when ready)." \
+                "To keep serving old data instead: set DB_VERSION=${legacy_major:-<old>}."
+            return 0
+            ;;
+        mariadb|mysql|mongodb|cassandra|aerospike|cockroachdb)
+            # Cross-major unsafe formats -> never mix; isolate new instance
+            printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
+            export ACTIVE_DATA_DIR="${target}"
+            data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
+                "Fresh ${pt} v${series} instance: ./data/${pt}/${series}" \
+                "Legacy files in ./data are PRESERVED (not deleted)." \
+                "Verify migrations, then remove ./data manually if unwanted."
+            return 0
+            ;;
+        *)
+            # Self-contained formats (redis RDB, pocketbase, minio, qdrant...) adopt safely
+            printf 'engine=%s series=%s adopted=legacy\n' "${pt}" "${series}" > "${root}/.potenfyr-instance"
+            export ACTIVE_DATA_DIR="${root}"
+            data_notice "DATA INSTANCE ADOPTED" \
+                "Existing ${pt} data in ./data continues to be used." \
+                "Future instances live under: ./data/${pt}/<version>"
+            return 0
+            ;;
+    esac
+}
+prepare_data_instance
+
+# ---------------------------------------------------------------------------
+# Strict Version Verification (no silent downgrades, ever)
+# ---------------------------------------------------------------------------
+verify_running_version() {
+    local req="${DB_VERSION:-latest}"
+    [ "${req}" = "latest" ] && return 0
+    local bin_name="" actual=""
+    case "${PROJECT_TYPE}" in
+        postgresql)
+            local pb; pb=$(find_pg_bin "postgres" 2>/dev/null) && actual=$("${pb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
+        mariadb)  command -v mariadbd >/dev/null 2>&1 && actual=$(mariadbd --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        mysql)
+            local mb="${SERVER_DIR}/opt/mysql/bin/mysqld"
+            [ -x "${mb}" ] || mb="$(command -v mysqld 2>/dev/null || true)"
+            [ -n "${mb}" ] && actual=$("${mb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
+        mongodb)
+            local mo="${SERVER_DIR}/bin/mongod"; [ -x "${mo}" ] || mo="$(command -v mongod 2>/dev/null || true)"
+            [ -n "${mo}" ] && actual=$("${mo}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
+        redis)     command -v redis-server >/dev/null 2>&1 && actual=$(redis-server --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        valkey)    command -v valkey-server >/dev/null 2>&1 && actual=$(valkey-server --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        dragonfly) [ -x "${SERVER_DIR}/bin/dragonfly" ] && actual=$("${SERVER_DIR}/bin/dragonfly" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        *) return 0 ;;
+    esac
+
+    if [ -z "${actual}" ]; then
+        warn "Could not verify installed ${PROJECT_TYPE} version against requested '${req}'."
+        return 0
+    fi
+
+    export EFFECTIVE_DB_VERSION="${actual}"
+    local req_major="${req%%.*}" act_major="${actual%%.*}"
+    if [ "${req_major}" != "${act_major}" ]; then
+        if [ "${STRICT_VERSION:-1}" = "1" ]; then
+            error "Version contract violated: requested ${PROJECT_TYPE} '${req}' but available binary is '${actual}'."
+            error "The server refuses to silently run a different version than requested."
+            error "Options: fix network/installer (logs/installer.log), set STRICT_VERSION=0 to allow fallback,"
+            error "or adjust DB_VERSION to match reality."
+            fail "Strict version verification failed (${req} != ${actual})."
+        else
+            warn "Running ${PROJECT_TYPE} ${actual} although '${req}' was requested (STRICT_VERSION=0)."
+        fi
+    else
+        log "Verified engine version: ${actual} (requested ${req})"
+    fi
+}
+verify_running_version
+
 # --- Connection Summary Helper (Strictly Masked - No Cleartext Passwords in Logs)
 print_connection_guide() {
     printf "\n"
@@ -238,7 +403,11 @@ print_connection_guide() {
             ;;
         minio)
             printf "   ${C_BOLD}S3 API         :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-9000}"
-            printf "   ${C_BOLD}Console        :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${CONSOLE_PORT:-$((SERVER_PORT + 1))}"
+            if [ -n "${CONSOLE_PORT:-}" ]; then
+                printf "   ${C_BOLD}Console        :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${CONSOLE_PORT}"
+            else
+                printf "   ${C_BOLD}Console        :${C_RESET} loopback-only (set CONSOLE_PORT to expose)\n"
+            fi
             ;;
         qdrant)
             printf "   ${C_BOLD}REST API       :${C_RESET} ${C_CYAN}http://%s:%s${C_RESET}\n" "${INTERNAL_IP:-127.0.0.1}" "${SERVER_PORT:-6333}"
@@ -275,12 +444,17 @@ case "${PROJECT_TYPE}" in
         print_connection_guide
         start_surreal_family
         ;;
-    meilisearch|typesense|qdrant)
+    cockroachdb|cockroach|tidb|dolt|sqld|libsql|etcd|nats|immudb|dgraph|arangodb|orientdb|ravendb|cassandra|aerospike|yugabytedb|yugabyte)
+        init_extra_engine
+        print_connection_guide
+        start_extra_engine
+        ;;
+    meilisearch|typesense|qdrant|elasticsearch|opensearch|solr|manticoresearch|manticore|milvus|weaviate|quickwit)
         init_search_family
         print_connection_guide
         start_search_family
         ;;
-    pocketbase|minio|influxdb|clickhouse|victoriametrics|couchdb|neo4j)
+    pocketbase|minio|influxdb|clickhouse|victoriametrics|couchdb|neo4j|questdb|seaweedfs|weed|garage)
         init_storage_family
         print_connection_guide
         start_storage_family
@@ -299,7 +473,7 @@ case "${PROJECT_TYPE}" in
             "${SERVER_DIR}/scripts/install-db-version.sh" "custom" "${CUSTOM_DOWNLOAD_URL}" "${SERVER_DIR}/bin" || true
         fi
 
-        local run_cmd="${CUSTOM_COMMAND:-${CUSTOM_STARTUP_CMD:-}}"
+        run_cmd="${CUSTOM_COMMAND:-${CUSTOM_STARTUP_CMD:-}}"
         if [ -z "${run_cmd}" ]; then
             if [ -n "${CUSTOM_BINARY_NAME:-}" ] && [ -x "${SERVER_DIR}/bin/${CUSTOM_BINARY_NAME}" ]; then
                 run_cmd="${SERVER_DIR}/bin/${CUSTOM_BINARY_NAME} ${CUSTOM_ARGS:-}"
