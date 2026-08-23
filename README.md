@@ -102,6 +102,21 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 
 > **Single-port policy**: panels allocate ONE port per server. Only each engine's primary protocol binds your allocation (`0.0.0.0`). Secondary services (admin UIs, consoles, cluster ports) default to `127.0.0.1` inside the container and can be exposed via explicit variables (`CONSOLE_PORT`, `TCP_PORT`, `NEO4J_HTTP_PORT`, etc.).
 
+### Architecture & OS Support
+
+| Host Architecture | Status | Notes |
+| :--- | :--- | :--- |
+| `amd64` (x86_64) | Full | Every engine, every version |
+| `arm64` (aarch64) | Full | Every engine; native builds everywhere upstream publishes them |
+| `arm/v7` (armhf 32-bit) | Broad | PostgreSQL via standalone builds; others fall back to system engines with a clear console notice |
+| `s390x` (IBM Z) | Broad | MongoDB official builds + system-engine fallback for the rest |
+| `ppc64le` (IBM Power) | Broad | MinIO, VictoriaMetrics + system-engine fallback |
+| `riscv64` | Emerging | Source-built and Java-based engines compile on demand |
+
+- Images publish as a multi-arch manifest: `docker pull` fetches the right variant automatically on any of the above.
+- Engines whose upstream simply does not ship a given architecture print one honest warning and serve the container-provided engine instead - never a silent version lie (`STRICT_VERSION` semantics preserved wherever a real build exists).
+- OS: any Linux container base works (glibc or musl auto-detected at runtime; musl hosts automatically receive musl-linked builds such as standalone PostgreSQL, while glibc-only tarballs like MariaDB/MySQL gracefully use system packages).
+
 ### Version Selection & Data Instance Safety
 
 - `DB_VERSION=latest` → newest upstream release, resolved fresh every boot.

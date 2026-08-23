@@ -16,9 +16,16 @@ load_companions() {
     arch=$(uname -m)
     local arch_type="amd64"
     local arch_alt="x86_64"
+    local arch_known=1
     case "${arch}" in
-        x86_64|amd64) arch_type="amd64"; arch_alt="x86_64" ;;
-        aarch64|arm64) arch_type="arm64"; arch_alt="aarch64" ;;
+        x86_64|amd64)  arch_type="amd64";   arch_alt="x86_64" ;;
+        aarch64|arm64) arch_type="arm64";   arch_alt="aarch64" ;;
+        armv7l|armv6l|armhf) arch_type="arm"; arch_alt="arm" ;;
+        s390x)         arch_type="s390x";   arch_alt="s390x" ;;
+        ppc64le|ppc64) arch_type="ppc64le"; arch_alt="ppc64le" ;;
+        riscv64)       arch_type="riscv64"; arch_alt="riscv64" ;;
+        i386|i686)     arch_type="386";     arch_alt="i686" ;;
+        *) arch_known=0 ;;
     esac
 
     # Split comma or space separated list
@@ -28,6 +35,21 @@ load_companions() {
     for tool in "${tools[@]}"; do
         tool=$(echo "${tool}" | tr '[:upper:]' '[:lower:]' | xargs)
         [ -z "${tool}" ] && continue
+
+        # Companion upstreams mostly publish amd64/arm64; skip cleanly elsewhere
+        if [ "${arch_known}" != "1" ]; then
+            warn "Architecture '${arch}' not recognized for companion '${tool}'; skipping."
+            continue
+        fi
+        case "${tool}:${arch_type}" in
+            python|uv|node|nodejs|bun|mongosh) : ;;
+            *)
+                case "${arch_type}" in
+                    amd64|arm64|x86_64|aarch64) : ;;
+                    *) warn "Companion '${tool}' has no ${arch_type} build; skipping."; continue ;;
+                esac
+                ;;
+        esac
 
         local target_dir="${runtimes_dir}/${tool}"
         local target_bin="${target_dir}/bin"
