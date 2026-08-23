@@ -103,13 +103,12 @@ RUN groupadd -g 988 container 2>/dev/null || true \
     && chmod -R 777 /home/container /mnt/server \
     && chmod 666 /etc/passwd /etc/group /etc/shadow 2>/dev/null || true
 
-# Copy entrypoint, launcher, installer, and modular scripts
+# Copy entrypoint, launcher, and modular scripts
 COPY entrypoint.sh /entrypoint.sh
 COPY run.sh /usr/local/bin/run.sh
-COPY install.sh /usr/local/bin/install.sh
 COPY scripts/ /usr/local/bin/
 
-RUN chmod +x /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/install.sh /usr/local/bin/*.sh 2>/dev/null || true
+RUN chmod +x /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/*.sh 2>/dev/null || true
 
 USER container
 ENV USER=container HOME=/home/container

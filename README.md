@@ -1,6 +1,6 @@
 # Database Eggs
 
-One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **55+ database engines** at **any upstream version** (SQL, NoSQL, In-Memory, Vector, Search, Graph, Time-Series, Object Storage) — versions install isolated inside your container on demand from startup variables. Switching engine or major version never deletes previous data. Cryptographically strong automated secrets, dynamic performance auto-tuning, automatic panel detection, deep crash diagnostics, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Convoy, Cytopanel, Jexactyl, PufferPanel**, Kubernetes/OpenShift, and native Docker.
+One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **55+ database engines** at **any upstream version** (SQL, NoSQL, In-Memory, Vector, Search, Graph, Time-Series, Object Storage) - versions install isolated inside your container on demand from startup variables. Switching engine or major version never deletes previous data. Cryptographically strong automated secrets, dynamic performance auto-tuning, automatic panel detection, deep crash diagnostics, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Convoy, Cytopanel, Jexactyl, PufferPanel**, Kubernetes/OpenShift, and native Docker.
 
 ```text
    __  ___      ____  _       ____  ____     
@@ -36,8 +36,8 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 
 ## Features
 
-- **Universal Single Egg (`egg-database-multi.json`) + Single Image**: One egg, one container image. Pick any of 55+ engines via `DATABASE_TYPE`; everything installs inside your own container volume — nothing touches the host.
-- **Exact-Version Contract (`DB_VERSION`)**: Set `18`, `11.4`, `8.0`, `latest`, or a full version — the runtime provisions exactly that engine version and **refuses to silently run a different one** (`STRICT_VERSION=1` default). `latest` resolves dynamically upstream at every boot; series like `16` auto-resolve to the newest patch.
+- **Universal Single Egg (`egg-database-multi.json`) + Single Image**: One egg, one container image. Pick any of 55+ engines via `DATABASE_TYPE`; everything installs inside your own container volume - nothing touches the host.
+- **Exact-Version Contract (`DB_VERSION`)**: Set `18`, `11.4`, `8.0`, `latest`, or a full version - the runtime provisions exactly that engine version and **refuses to silently run a different one** (`STRICT_VERSION=1` default). `latest` resolves dynamically upstream at every boot; series like `16` auto-resolve to the newest patch.
 - **Non-Destructive Version Switching**: Data lives in per-instance folders (`data/<engine>/<version>/`). Same-series boots reuse the identical instance; breaking major switches create a fresh instance and clearly print where old data is preserved. Nothing is ever deleted automatically.
 - **Automatic Panel Detection**: Identifies Pterodactyl, Pelican, Feather/Wings-family, Wisp, Convoy, Kubernetes/OpenShift, or plain Docker from environment signals and shows it on the startup card.
 - **Deep Crash Diagnostics**: Any failure writes a sanitized crash report (stack trace, last command, env snapshot with secrets masked, recent engine logs, disk/network state) to `logs/startup_error.log` / `logs/installer.log`.
@@ -107,7 +107,7 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 - `DB_VERSION=latest` → newest upstream release, resolved fresh every boot.
 - `DB_VERSION=18` or `11.4` → newest patch of that series.
 - `DB_VERSION=8.0.45` → exact version.
-- Data instances are isolated: `data/<engine>/<series>/`. Switching majors creates a NEW instance — old data stays untouched and the console tells you its path so you can migrate or delete it manually when ready.
+- Data instances are isolated: `data/<engine>/<series>/`. Switching majors creates a NEW instance - old data stays untouched and the console tells you its path so you can migrate or delete it manually when ready.
 
 ---
 
@@ -259,8 +259,8 @@ Database-Eggs/
 ├── Dockerfile                      # Multi-arch universal container image
 ├── entrypoint.sh                   # Entrypoint: panel detection, secrets, crash diagnostics
 ├── run.sh                          # Universal launcher: version contract + data instances
-├── install.sh                      # Universal installation script
 ├── scripts/                        # Modular engine & tuning handlers
+│   ├── lib-diagnostics.sh          # Central logging, traces, crash-safety library
 │   ├── password-gen.sh             # Cryptographic secret & password generator
 │   ├── performance-tuning.sh       # Dynamic RAM & CPU performance auto-tuner
 │   ├── install-db-version.sh       # 55+ engine version installer (latest resolver)
@@ -272,9 +272,8 @@ Database-Eggs/
 │   ├── db-init-search.sh           # Meili, Typesense, Qdrant, ES, OpenSearch, Solr...
 │   ├── db-init-storage.sh          # PocketBase, MinIO, ClickHouse, QuestDB, Garage...
 │   └── db-init-extra.sh            # CockroachDB, TiDB, Dolt, Etcd, NATS, Cassandra...
-├── tests/                          # Automated Docker verification suites
-│   ├── test-docker.sh              # Universal bash Docker verification test suite
-│   └── test-docker.ps1             # PowerShell Docker test runner for Windows
+├── tests/
+│   └── test-docker.sh              # Universal bash Docker verification test suite
 ├── .github/workflows/
 │   ├── docker-image.yml            # CI/CD: Builds multi-arch images (GHCR)
 │   ├── validate-eggs.yml           # CI: Validates egg JSON and shell syntax
