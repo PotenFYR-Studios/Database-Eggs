@@ -1,35 +1,109 @@
 #!/usr/bin/env bash
 # =============================================================================
 #  PotenFYR Studios - Universal Multi-Database Version Downloader & Installer
-#  Downloads and installs ANY specific version or custom URL for any database engine.
+#  Installs ANY specific version (or dynamically-resolved 'latest') for 55+
+#  database engines. Fully unprivileged-capable (installs under server bin/),
+#  checksum-verifying, disk-aware, cached, and air-gap friendly.
+#
+#  Usage:
+#    install-db-version.sh <engine> <version|latest|URL> <install_dir>
+#
+#  Environment switches:
+#    SKIP_VERSION_INSTALL=1   Bypass all downloads (use system binaries only)
+#    VERIFY_CHECKSUMS=1       Enforce sha256 sidecar checks (default: auto)
+#    PF_INSTALLER_DEBUG=1     Verbose installer trace
+#
+#  Exit codes: 0 success | 1 requested explicit version unavailable
 # =============================================================================
+set -u
 
 ENGINE="${1:-${DATABASE_TYPE:-mariadb}}"
 VERSION="${2:-${DB_VERSION:-latest}}"
 INSTALL_DIR="${3:-${SERVER_DIR:-$(pwd)}/bin}"
 
-mkdir -p "${INSTALL_DIR}"
+mkdir -p "${INSTALL_DIR}" "${INSTALL_DIR}/.versions" "${SERVER_DIR:-.}/logs" 2>/dev/null || true
 
-log()  { echo -e "\033[1m\033[36m[version-installer]\033[0m $*"; }
-ok()   { echo -e "\033[1m\033[32m[version-installer][OK]\033[0m $*"; }
-warn() { echo -e "\033[1m\033[33m[version-installer][warn]\033[0m $*"; }
+PF_LOG_FILE="${SERVER_DIR:-.}/logs/installer.log"
+
+# -----------------------------------------------------------------------------
+# Logging + deep diagnostics (trace-level, sanitized, crash-safe)
+# -----------------------------------------------------------------------------
+_ts() { date -u +'%Y-%m-%dT%H:%M:%SZ'; }
+
+_diag() { printf '[%s] [%s] %s\n' "$(_ts)" "${2:-INFO}" "$*" >> "${PF_LOG_FILE}" 2>/dev/null || true; }
+
+log()  { echo -e "\033[1m\033[36m[version-installer]\033[0m $*"; _diag "${*}" INFO; }
+ok()   { echo -e "\033[1m\033[32m[version-installer][OK]\033[0m $*"; _diag "${*}" OK; }
+warn() { echo -e "\033[1m\033[33m[version-installer][warn]\033[0m $*" >&2; _diag "${*}" WARN; }
+err()  { echo -e "\033[1m\033[31m[version-installer][ERROR]\033[0m $*" >&2; _diag "${*}" ERROR; }
+
+sanitize_line() { # Mask anything that looks like a credential
+    printf '%s' "$1" | sed -E \
+        -e 's/(PASSWORD|PASSWD|SECRET|TOKEN|API_KEY|APIKEY|MASTER_KEY|AUTH)([A-Z_]*=)[^ ]+/\1\2<masked>/gI' \
+        -e 's#(://[^:/@]+):[^@]{4,}@#\1:<masked>@#g'
+}
+
+dump_installer_trace() {
+    local reason="$1" exit_code="${2:-1}"
+    {
+        printf '\n=== INSTALLER FAILURE REPORT (%s) ===\n' "$(_ts)"
+        printf 'Reason      : %s\n' "${reason}"
+        printf 'Exit Code   : %s\n' "${exit_code}"
+        printf 'Engine      : %s\n' "${ENGINE}"
+        printf 'Requested   : %s\n' "${VERSION}"
+        printf 'Resolved    : %s\n' "${RESOLVED:-<unresolved>}"
+        printf 'Install Dir : %s\n' "${INSTALL_DIR}"
+        printf 'Arch        : %s (%s)\n' "${ARCH}" "${ARCH_TYPE:-?}"
+        printf 'Privileged  : %s\n' "$( [ "$(id -u 2>/dev/null || echo 1)" = "0" ] && echo root || echo unprivileged )"
+        printf 'Call Stack  :\n'
+        local i=0
+        while [ ${i} -lt ${#FUNCNAME[@]} ]; do
+            [ ${i} -eq 0 ] && { i=$((i+1)); continue; }
+            printf '  #%d %s (line %s)\n' "$((i-1))" "${FUNCNAME[${i}]:-<main>}" "${BASH_LINENO[$((i-1))]:-?}" 2>/dev/null || break
+            i=$((i+1))
+        done
+        printf 'Last Command: %s\n' "$(sanitize_line "${BASH_COMMAND:-?}")"
+        printf 'Free Disk   : %s\n' "$(df -h "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{print $4" free"}')"
+        printf 'Memory      : %s\n' "$(free -h 2>/dev/null | awk '/^Mem/{print "used "$3" / "$2}')"
+        printf 'Network     : %s\n' "$(probe_url "https://api.github.com" >/dev/null 2>&1 && echo reachable || echo UNREACHABLE)"
+        printf '==============================================\n'
+    } >> "${PF_LOG_FILE}" 2>/dev/null || true
+}
+
 fail() {
-    echo -e "\033[1m\033[31m[version-installer][ERROR]\033[0m $*" >&2
-    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
-    printf '[%s] INSTALLER ERROR: %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*" >> "${SERVER_DIR:-.}/logs/installer.log" 2>/dev/null || true
+    err "$*"
+    dump_installer_trace "$*" 1
     exit 1
 }
 
-# Diagnostic Error Trap
-error_trap() {
-    local exit_code=$?
-    local line_no=$1
-    local last_cmd="${BASH_COMMAND}"
-    if [ ${exit_code} -ne 0 ]; then
-        printf "\n\033[1;31m[version-installer] ERROR at Line %s (Exit Code: %s, Command: %s)\033[0m\n" "${line_no}" "${exit_code}" "${last_cmd}" >&2
+# Global safety net: any unexpected non-zero still produces a trace
+installer_err_trap() {
+    local ec=$?
+    trap - ERR
+    [ ${ec} -eq 0 ] && return 0
+    dump_installer_trace "Unhandled installer error" "${ec}"
+    err "Unexpected failure (exit ${ec}) at line ${BASH_LINENO[0]:-?}. Full trace: ${PF_LOG_FILE}"
+    exit "${ec}"
+}
+trap 'installer_err_trap' ERR
+
+# -----------------------------------------------------------------------------
+# Tooling & architecture
+# -----------------------------------------------------------------------------
+have() { command -v "$1" >/dev/null 2>&1; }
+
+_json_tags() { # Extract tag_name values without jq (first match wins upstream order)
+    if have jq; then jq -r '.tag_name // .[0].tag_name // empty' 2>/dev/null; else
+        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
     fi
 }
-trap 'error_trap $LINENO' ERR
+
+gh_latest_tag() { # gh_latest_tag <owner/repo>
+    local tag
+    tag=$(fetch "https://api.github.com/repos/${1}/releases/latest" - 2>/dev/null | _json_tags)
+    [ -z "${tag}" ] && tag=$(fetch "https://api.github.com/repos/${1}/releases?per_page=5" - 2>/dev/null | _json_tags)
+    printf '%s' "${tag}"
+}
 
 ARCH=$(uname -m)
 case "${ARCH}" in
@@ -38,204 +112,1183 @@ case "${ARCH}" in
     *) fail "Unsupported architecture: ${ARCH}" ;;
 esac
 
-log "Configuring: ${ENGINE} (Target Version: ${VERSION}, Arch: ${ARCH_TYPE})"
+IS_ROOT=0
+[ "$(id -u 2>/dev/null || echo 1)" = "0" ] && IS_ROOT=1
 
-# ---------------------------------------------------------------------------
-# Direct Custom URL or GitHub Release handling
-# ---------------------------------------------------------------------------
-if [[ "${VERSION}" =~ ^https?:// ]] || [[ -n "${CUSTOM_DOWNLOAD_URL:-}" && "${ENGINE}" = "custom" ]]; then
-    DL_URL="${CUSTOM_DOWNLOAD_URL:-${VERSION}}"
-    log "Downloading custom database/binary from URL: ${DL_URL}..."
+fetch() { # fetch <url> <outfile|->
+    local url="$1" out="$2"
+    if [ "${out}" = "-" ]; then
+        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 "${url}" 2>/dev/null \
+            || wget -qO- --tries=3 --timeout=20 "${url}" 2>/dev/null
+    else
+        curl -fsSL --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${out}" "${url}" 2>/dev/null \
+            || wget -qO "${out}" --tries=3 --timeout=20 "${url}" 2>/dev/null
+    fi
+}
+
+probe_url() { curl -fsIL --retry 1 --connect-timeout 10 --max-time 25 -o /dev/null "$1" 2>/dev/null; }
+
+# shellcheck disable=SC2120
+eofl_resolve() { # eofl_resolve <product> <prefix>
+    local product="$1" prefix="${2:-}"
+    local cache_file="/tmp/.eofl-cache-${product}.json"
+    if [ ! -s "${cache_file}" ]; then
+        fetch "https://endoflife.date/api/${product}.json" "${cache_file}" || true
+    fi
+    [ -s "${cache_file}" ] || return 1
+
+    if have jq; then
+        if [ -n "${prefix}" ]; then
+            jq -r --arg p "${prefix}" '[.[] | select(.cycle | startswith($p))][0].latest // empty' "${cache_file}" 2>/dev/null
+        else
+            jq -r '.[0].latest // empty' "${cache_file}" 2>/dev/null
+        fi
+    else
+        # jq-less fallback: pair up cycle/latest fields in document order
+        paste \
+            <(grep -oE '"cycle"[[:space:]]*:[[:space:]]*"[^"]*"' "${cache_file}" | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/') \
+            <(grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]*"' "${cache_file}" | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/') \
+        | awk -F'\t' -v p="${prefix}" '
+            NF<2 {next}
+            p=="" && !done {print $2; done=1; exit}
+            index($1, p)==1 {print $2; exit}'
+    fi
+}
+
+verify_checksum() { # verify_checksum <file> <sidecar_url>
+    local f="$1" sidecar="$2"
+    [ -z "${sidecar}" ] && return 0
+    have sha256sum || return 0
+    local expected actual
+    expected=$(fetch "${sidecar}" - 2>/dev/null | awk '{print $1}' | head -n1)
+    [ -z "${expected}" ] && return 0
+    actual=$(sha256sum "${f}" 2>/dev/null | awk '{print $1}')
+    if [ -n "${actual}" ] && [ "${actual}" = "${expected}" ]; then return 0; fi
+    err "SHA256 verification FAILED for $(basename "${f}") (corrupt or tampered download)"
+    return 1
+}
+
+disk_preflight_mb() { # warn when less than <mb> available
+    local need_mb="${1:-1024}" avail_kb
+    avail_kb=$(df -Pk "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{print $4}')
+    if [ -n "${avail_kb}" ] && [ "${avail_kb}" -lt $((need_mb * 1024)) ]; then
+        warn "Low disk: ${ENGINE} ${RESOLVED} wants ~${need_mb}MB; only $((avail_kb / 1024))MB free."
+        return 1
+    fi
+    return 0
+}
+
+apt_try_install() {
+    # Container isolation guarantee: system package installation ONLY happens
+    # when the operator explicitly opts in via ALLOW_SYSTEM_APT=1 AND we run as root.
+    [ "${ALLOW_SYSTEM_APT:-0}" = "1" ] || return 1
+    if [ "${IS_ROOT}" = "1" ] && have apt-get; then
+        DEBIAN_FRONTEND=noninteractive apt-get update -qq 2>/dev/null || true
+        DEBIAN_FRONTEND=noninteractive apt-get install -y -qq --no-install-recommends "$@" 2>/dev/null && return 0
+    fi
+    return 1
+}
+
+extract_libaio() { # bundle libaio.so.1 beside daemons that link it (MariaDB/MySQL bintars)
+    local dest="$1"
+    [ -e "${dest}/libaio.so.1" ] && return 0
+    mkdir -p "${dest}"
+    local arch_deb="amd64"
+    [ "${ARCH_TYPE}" = "arm64" ] && arch_deb="arm64"
+    local u tmp_deb
+    for u in \
+        "https://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb" \
+        "https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb"; do
+        tmp_deb=$(mktemp)
+        if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.lx" 2>/dev/null; then
+            find "${dest}/.lx" -name 'libaio.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
+            rm -rf "${dest}/.lx" "${tmp_deb}"
+            [ -e "${dest}/libaio.so.1" ] && return 0
+        fi
+        rm -f "${tmp_deb}"
+    done
+    warn "Could not bundle libaio.so.1 (needed by MariaDB/MySQL generic builds)."
+    return 0
+}
+
+ensure_java() { # Temurin JRE 17 for Java-hosted engines (Neo4j, Cassandra, Solr, OrientDB...)
+    if have java && java -version 2>&1 | grep -qE 'version "(17|18|19|20|21|22)'; then
+        export JAVA_HOME="${JAVA_HOME:-$(dirname "$(dirname "$(command -v java)")")}"
+        return 0
+    fi
+    local jdir="${SERVER_DIR:-${HOME}}/.runtimes/jdk17"
+    if [ -x "${jdir}/bin/java" ]; then
+        export JAVA_HOME="${jdir}"; export PATH="${jdir}/bin:${PATH}"
+        ok "Reusing bundled JRE 17."
+        return 0
+    fi
+    log "Installing Temurin JRE 17 (${ENGINE} requirement)..."
+    local jarch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && jarch="aarch64"
+    mkdir -p "${jdir}"
+    local tmp_tar; tmp_tar=$(mktemp)
+    if fetch "https://api.adoptium.net/v3/binary/latest/17/ga/linux/${jarch}/jre/hotspot/normal/eclipse?project=jdk" "${tmp_tar}" \
+       && tar -xzf "${tmp_tar}" -C "${jdir}" --strip-components=1 2>/dev/null; then
+        rm -f "${tmp_tar}"
+        export JAVA_HOME="${jdir}"; export PATH="${jdir}/bin:${PATH}"
+        ok "JRE 17 installed."
+        return 0
+    fi
+    rm -f "${tmp_tar}"
+    warn "Automatic JRE installation failed; ${ENGINE} may require manual Java 17+."
+    return 1
+}
+
+stamp_dir="${INSTALL_DIR}/.versions"
+stamp_ok()      { printf '%s|%s|%s' "${RESOLVED:-${VERSION}}" "${ARCH_TYPE}" "$(date -u +%s)" > "${stamp_dir}/${ENGINE}" 2>/dev/null || true; }
+stamp_matches() { [ -f "${stamp_dir}/${ENGINE}" ] && grep -q "^${RESOLVED:-${VERSION}}|" "${stamp_dir}/${ENGINE}" 2>/dev/null; }
+
+mark_engine_ready() {
+    stamp_ok
+    ok "Engine '${ENGINE}' ${RESOLVED} ready (${INSTALL_DIR})"
+}
+
+# Lightweight mode: strip docs/tests/benchmarks/static archives after extraction
+# (saves 30-60% disk per engine without affecting runtime binaries)
+prune_extracted() {
+    local root="${1:-}"
+    [ -z "${root}" ] || [ ! -d "${root}" ] && return 0
+    local p
+    for p in \
+        mysql-test sql-bench share/doc man docs benchmark \
+        lib/*.a lib64/*.a \
+        modules/x-pack/sql/driver; do
+        rm -rf "${root:?}"/"${p}" 2>/dev/null || true
+    done
+    find "${root}" -name '*.a' -type f -delete 2>/dev/null || true
+    find "${root}" -name '*.pdb' -type f -delete 2>/dev/null || true
+    return 0
+}
+
+system_version_satisfies() { # system_version_satisfies <binary> <wanted_major>
+    local bin="$1" want="$2"
+    [ -n "${want}" ] || return 1
+    command -v "${bin}" >/dev/null 2>&1 || return 1
+    local got
+    got="$("${bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -n1)"
+    [ -n "${got}" ] || return 1
+    [ "${got%%.*}" = "${want%%.*}" ]
+}
+
+# -----------------------------------------------------------------------------
+# Version Resolution: 'latest' | major ('18') | series ('8.4') | full ('8.4.5') | URL
+# -----------------------------------------------------------------------------
+resolve_version() {
+    case "${VERSION}" in https://*|http://*) RESOLVED="${VERSION}"; return 0 ;; esac
+    local req="${VERSION:-latest}"
+    req=$(echo "${req}" | tr '[:upper:]' '[:lower:]')
+
+    if [ "${req}" = "latest" ] || [ "${req}" = "default" ] || [ "${req}" = "stable" ]; then
+        local v=""
+        case "${ENGINE}" in
+            postgresql)                v=$(eofl_resolve "postgresql" "") ;;
+            mariadb)                   v=$(eofl_resolve "mariadb" "") ;;
+            mysql)                     v=$(eofl_resolve "mysql" "") ;;
+            mongodb)                   v=$(eofl_resolve "mongodb" "") ;;
+            redis)                     v=$(eofl_resolve "redis" "") ;;
+            valkey)                    v=$(eofl_resolve "valkey" "") ;;
+            memcached)                 v=$(eofl_resolve "memcached" "") ;;
+            dragonfly)                 v=$(gh_latest_tag "dragonflydb/dragonfly"); v=${v#v} ;;
+            keydb)                     v=$(gh_latest_tag "EQ-Alpha/KeyDB"); v=${v#v} ;;
+            ferretdb)                  v=$(gh_latest_tag "FerretDB/FerretDB"); v=${v#v} ;;
+            cockroachdb|cockroach)     v=$(eofl_resolve "cockroachdb" "") ;;
+            yugabytedb|yugabyte)       v=$(gh_latest_tag "yugabyte/yugabyte-db"); v=${v#v} ;;
+            tidb)                      v=$(eofl_resolve "tidb" ""); [ -z "${v}" ] && { v=$(gh_latest_tag "pingcap/tidb"); v=${v#v}; } ;;
+            dolt)                      v=$(gh_latest_tag "dolthub/dolt"); v=${v#v} ;;
+            etcd)                      v=$(gh_latest_tag "etcd-io/etcd"); v=${v#v} ;;
+            nats)                      v=$(gh_latest_tag "nats-io/nats-server"); v=${v#v} ;;
+            immudb)                    v=$(gh_latest_tag "codenotary/immudb"); v=${v#v} ;;
+            aerospike)                 v=$(eofl_resolve "aerospike" "") ;;
+            cassandra)                 v=$(eofl_resolve "cassandra" "") ;;
+            arangodb)                  v=$(gh_latest_tag "arangodb/arangodb"); v=${v#v} ;;
+            orientdb)                  v=$(gh_latest_tag "orientechnologies/orientdb"); v=${v#v} ;;
+            ravendb)                   v=$(gh_latest_tag "ravendb/ravendb"); v=${v#v} ;;
+            dgraph)                    v=$(gh_latest_tag "dgraph-io/dgraph"); v=${v#v} ;;
+            neo4j)                     v=$(eofl_resolve "neo4j" "") ;;
+            couchdb)                   v=$(eofl_resolve "couchdb" "") ;;
+            influxdb)                  v=$(eofl_resolve "influxdb" "") ;;
+            clickhouse)                v=$(eofl_resolve "clickhouse" "") ;;
+            victoriametrics)           v=$(gh_latest_tag "VictoriaMetrics/VictoriaMetrics"); v=${v#v} ;;
+            elasticsearch)             v=$(eofl_resolve "elasticsearch" "") ;;
+            opensearch)                v=$(eofl_resolve "opensearch" "") ;;
+            solr)                      v=$(eofl_resolve "solr" "") ;;
+            manticoresearch|manticore) v=$(gh_latest_tag "manticoresoftware/manticoresearch"); v=${v#v} ;;
+            milvus)                    v=$(gh_latest_tag "milvus-io/milvus"); v=${v#v} ;;
+            weaviate)                  v=$(gh_latest_tag "weaviate-io/weaviate"); v=${v#v} ;;
+            quickwit)                  v=$(gh_latest_tag "quickwit-oss/quickwit"); v=${v#v} ;;
+            questdb)                   v=$(gh_latest_tag "questdb/questdb"); v=${v#v} ;;
+            seaweedfs|weed)            v=$(gh_latest_tag "seaweedfs/seaweedfs"); v=${v#v} ;;
+            garage)                    v=$(gh_latest_tag "dxflrs/garage"); v=${v#v} ;;
+            libsql|sqld)               v=$(gh_latest_tag "tursodatabase/libsql"); v=${v#v} ;;
+            surrealdb)                 v=$(gh_latest_tag "surrealdb/surrealdb") ;;
+            pocketbase)                v=$(gh_latest_tag "pocketbase/pocketbase"); v=${v#v} ;;
+            meilisearch)               v=$(gh_latest_tag "getmeili/meilisearch") ;;
+            qdrant)                    v=$(gh_latest_tag "qdrant/qdrant") ;;
+            typesense)                 v=$(gh_latest_tag "typesense/typesense"); v=${v#v} ;;
+            rethinkdb)                 v=$(gh_latest_tag "rethinkdb/rethinkdb"); v=${v#v} ;;
+        esac
+        if [ -n "${v}" ]; then
+            RESOLVED="${v}"
+            log "'latest' resolved for ${ENGINE} -> ${RESOLVED}"
+        else
+            RESOLVED="latest"
+            warn "Upstream version lookup failed for '${ENGINE}'; using best-available strategy."
+        fi
+        return 0
+    fi
+
+    # Series/major expansion via endoflife.date (newest patch of that cycle)
+    if [[ "${req}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+        local product="" v=""
+        case "${ENGINE}" in
+            postgresql) product="postgresql" ;; mariadb) product="mariadb" ;;
+            mysql) product="mysql" ;;         mongodb) product="mongodb" ;;
+            redis) product="redis" ;;         valkey) product="valkey" ;;
+            memcached) product="memcached" ;; cassandra) product="cassandra" ;;
+            clickhouse) product="clickhouse" ;; cockroachdb|cockroach) product="cockroachdb" ;;
+            neo4j) product="neo4j" ;;         influxdb) product="influxdb" ;;
+            elasticsearch) product="elasticsearch" ;; opensearch) product="opensearch" ;;
+            solr) product="solr" ;;           couchdb) product="couchdb" ;;
+            tidb) product="tidb" ;;           aerospike) product="aerospike" ;;
+        esac
+        if [ -n "${product}" ]; then
+            v=$(eofl_resolve "${product}" "${req}")
+            if [ -n "${v}" ]; then
+                RESOLVED="${v}"
+                log "Series '${req}' -> newest patch ${RESOLVED}"
+                return 0
+            fi
+        fi
+    fi
+
+    RESOLVED="${req}"
+    return 0
+}
+resolve_version
+
+if [ "${PF_INSTALLER_DEBUG:-0}" = "1" ]; then
+    set -x
+fi
+
+if [ "${SKIP_VERSION_INSTALL:-0}" = "1" ]; then
+    warn "SKIP_VERSION_INSTALL=1 detected. Using container-provided binaries only."
+    stamp_ok
+    exit 0
+fi
+
+# -----------------------------------------------------------------------------
+# Custom URL passthrough
+# -----------------------------------------------------------------------------
+if [[ "${RESOLVED}" =~ ^https?:// ]] || [[ -n "${CUSTOM_DOWNLOAD_URL:-}" && "${ENGINE}" = "custom" ]]; then
+    DL_URL="${CUSTOM_DOWNLOAD_URL:-${RESOLVED}}"
+    log "Downloading custom binary/package: ${DL_URL}"
     filename=$(basename "${DL_URL}" | sed 's/[?].*//')
     tmp_dl=$(mktemp)
-
-    if curl -fsSL --retry 3 -o "${tmp_dl}" "${DL_URL}"; then
+    if fetch "${DL_URL}" "${tmp_dl}"; then
         case "${filename}" in
-            *.tar.gz|*.tgz)
-                tar -xzf "${tmp_dl}" -C "${INSTALL_DIR}/"
-                ;;
-            *.tar.xz)
-                tar -xJf "${tmp_dl}" -C "${INSTALL_DIR}/"
-                ;;
-            *.zip)
-                unzip -q -o "${tmp_dl}" -d "${INSTALL_DIR}/"
-                ;;
-            *)
-                target_name="${CUSTOM_BINARY_NAME:-${filename}}"
-                cp -f "${tmp_dl}" "${INSTALL_DIR}/${target_name}"
-                ;;
+            *.tar.gz|*.tgz) tar -xzf "${tmp_dl}" -C "${INSTALL_DIR}/" ;;
+            *.tar.xz)       tar -xJf "${tmp_dl}" -C "${INSTALL_DIR}/" ;;
+            *.tar.bz2)      tar -xjf "${tmp_dl}" -C "${INSTALL_DIR}/" ;;
+            *.zip)          unzip -q -o "${tmp_dl}" -d "${INSTALL_DIR}/" ;;
+            *) cp -f "${tmp_dl}" "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-${filename}}" ;;
         esac
         rm -f "${tmp_dl}"
-        find "${INSTALL_DIR}" -type f -exec chmod +x {} + 2>/dev/null || true
-        ok "Custom binary/package installed into ${INSTALL_DIR}"
+        find "${INSTALL_DIR}" -maxdepth 2 -type f -exec chmod +x {} + 2>/dev/null || true
+        ok "Custom binary installed into ${INSTALL_DIR}"
     else
-        warn "Failed to download custom binary from ${DL_URL}"
+        warn "Download failed: ${DL_URL}"
     fi
     exit 0
 fi
 
-# ---------------------------------------------------------------------------
-# Engine Specific Version Handlers
-# ---------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# PostgreSQL 13-18+: standalone gnu builds (theseus-rs) + PGDG apt fallback
+# -----------------------------------------------------------------------------
+install_postgresql() {
+    local want_major=""
+    [ "${RESOLVED}" != "latest" ] && want_major="${RESOLVED%%.*}"
+
+    if [ -n "${want_major}" ] && [ -x "/usr/lib/postgresql/${want_major}/bin/postgres" ]; then
+        log "PostgreSQL ${want_major} present in system paths."
+        echo "/usr/lib/postgresql/${want_major}/bin" > "${INSTALL_DIR}/.versions/postgresql-path"
+        return 0
+    fi
+
+    local tag=""
+    tag=$(gh_latest_tag "theseus-rs/postgresql-binaries")
+    if [ -n "${want_major}" ]; then
+        if [ -z "${tag}" ] || ! [[ "${tag}" =~ ^${want_major}\. ]]; then
+            tag=$(fetch "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=60" - | \
+                  jq -r --arg m "${want_major}" '[.[].tag_name | select(startswith($m ++ "."))][0] // empty' 2>/dev/null)
+        fi
+    fi
+    [ -z "${tag}" ] && fail "No PostgreSQL build located matching '${RESOLVED}'. Valid majors: 13-18."
+
+    local dest="${INSTALL_DIR}/pg-${tag%%.*}"
+    if [ -x "${dest}/bin/postgres" ] && "${dest}/bin/postgres" --version 2>/dev/null | grep -qE " ${tag%%.*}[. ]"; then
+        log "Standalone PostgreSQL ${tag%%.*}.x already installed."
+        return 0
+    fi
+
+    disk_preflight_mb 400
+    log "Installing standalone PostgreSQL ${tag}..."
+    local url="https://github.com/theseus-rs/postgresql-binaries/releases/download/${tag}/postgresql-${tag}-${ARCH_GNU}.tar.gz"
+    local tmp_tar; tmp_tar=$(mktemp)
+    if ! fetch "${url}" "${tmp_tar}"; then
+        rm -f "${tmp_tar}"
+        # Opt-in root fallback only (default: fully isolated container installs)
+        if [ "${ALLOW_SYSTEM_APT:-0}" = "1" ] && [ "${IS_ROOT}" = "1" ] && have apt-get && [ -n "${want_major}" ]; then
+            log "Falling back to PGDG apt repository (PostgreSQL ${want_major})..."
+            apt-get install -y -qq curl ca-certificates gnupg lsb-release 2>/dev/null || true
+            local coden
+            coden=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-jammy}")
+            fetch "https://www.postgresql.org/media/keys/ACCC4CF8.asc" - | gpg --dearmor > /usr/share/keyrings/pgdg.gpg 2>/dev/null || true
+            printf 'deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "${coden}" > /etc/apt/sources.list.d/pgdg.list 2>/dev/null || true
+            apt-get update -qq 2>/dev/null || true
+            apt-get install -y -qq "postgresql-${want_major}" "postgresql-client-${want_major}" 2>/dev/null && return 0
+        fi
+        fail "PostgreSQL ${RESOLVED} installation failed (download + fallback exhausted)."
+    fi
+    verify_checksum "${tmp_tar}" "${url}.sha256" || { rm -f "${tmp_tar}"; fail "Checksum mismatch for PostgreSQL archive."; }
+    mkdir -p "${dest}"
+    tar -xzf "${tmp_tar}" -C "${dest}" --strip-components=1 2>/dev/null || tar -xzf "${tmp_tar}" -C "${dest}"
+    rm -f "${tmp_tar}"
+    chmod +x "${dest}/bin/"* 2>/dev/null || true
+    bundle_pg_runtime_libs "${dest}/lib-extra"
+    if [ -e "${dest}/lib-extra/libxml2.so.2" ]; then
+        export LD_LIBRARY_PATH="${dest}/lib-extra:${LD_LIBRARY_PATH:-}"
+        log "Bundled PostgreSQL runtime libraries (libxml2/icu)."
+    fi
+    LD_LIBRARY_PATH="${dest}/lib-extra:${LD_LIBRARY_PATH:-}" \
+        "${dest}/bin/postgres" --version >/dev/null 2>&1 || fail "Installed PostgreSQL binary failed self-check."
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# MariaDB: official bintar builds (archive.mariadb.org)
+# -----------------------------------------------------------------------------
+install_mariadb() {
+    local base="${SERVER_DIR:-$(pwd)}/opt/mariadb"
+    [ -x "${base}/bin/mariadbd" ] && { log "MariaDB ${RESOLVED} already installed."; return 0; }
+
+    # Lightweight path: system binary already provides the requested series
+    if system_version_satisfies mariadbd "${RESOLVED}"; then
+        log "System mariadbd matches requested series (${RESOLVED}); skipping download."
+        return 0
+    fi
+
+    if ! [[ "${RESOLVED}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        err "MariaDB requires a concrete x.y.z version (resolver produced '${RESOLVED}')."
+        err "Set DB_VERSION to e.g. 11.4, 11.8, latest, or a full x.y.z."
+        return 1
+    fi
+
+    local candidates=("$(printf '%s' "${RESOLVED}")")
+    local series="${RESOLVED%.*}" p cand
+    for p in 6 5 4 3 2 1 0; do
+        cand="${series}.${p}"
+        [ "${cand}" != "${RESOLVED}" ] && candidates+=("${cand}")
+    done
+
+    local ad="bintar-linux-systemd-x86_64"
+    [ "${ARCH_TYPE}" = "arm64" ] && ad="bintar-linux-systemd-aarch64"
+
+    local url="" v
+    for v in "${candidates[@]}"; do
+        local candidate="https://archive.mariadb.org/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${ARCH_ALT}.tar.gz"
+        if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break; fi
+    done
+    [ -z "${url}" ] && fail "No MariaDB binary build found near '${RESOLVED}' for ${ARCH_TYPE}."
+
+    disk_preflight_mb 1600
+    log "Downloading MariaDB ${RESOLVED} bintar..."
+    local tmp_tar; tmp_tar=$(mktemp)
+    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    mkdir -p "${base}"
+    tar -xzf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
+    rm -f "${tmp_tar}"
+    chmod +x "${base}/bin/"* 2>/dev/null || true
+    extract_libaio "${base}/lib-extra"
+    prune_extracted "${base}"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# MySQL: official minimal generic tarballs (cdn.mysql.com)
+# -----------------------------------------------------------------------------
+install_mysql() {
+    local base="${SERVER_DIR:-$(pwd)}/opt/mysql"
+    [ -x "${base}/bin/mysqld" ] && { log "MySQL ${RESOLVED} already installed."; return 0; }
+
+    # Lightweight path: system binary already provides the requested series
+    if system_version_satisfies mysqld "${RESOLVED}"; then
+        log "System mysqld matches requested series (${RESOLVED}); skipping download."
+        return 0
+    fi
+
+    local series="${RESOLVED%.*}"
+    [[ "${series}" =~ ^[0-9]+$ ]] && series="${series}.0"
+    [[ "${series}" =~ ^[0-9]+\.[0-9]+$ ]] || { err "MySQL version '${RESOLVED}' unclear."; return 1; }
+    local dir="MySQL-${series%%.*}"
+
+    local patterns
+    if [ "${ARCH_TYPE}" = "arm64" ]; then
+        patterns=("linux-glibc2.28-aarch64-minimal" "linux-glibc2.17-aarch64-minimal")
+    else
+        patterns=("linux-glibc2.28-x86_64-minimal" "linux-glibc2.17-x86_64-minimal")
+    fi
+
+    local candidates=()
+    if [[ "${RESOLVED}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        candidates+=("${RESOLVED}")
+    else
+        local patches p
+        case "${series}" in
+            8.0) patches=(46 45 44 43 42 41 40 39 37 36 35) ;;
+            8.4) patches=(11 10 9 8 7 6 5 4 3 2 1) ;;
+            *)   patches=(9 7 5 3 1 0) ;;
+        esac
+        for p in "${patches[@]}"; do candidates+=("${series}.${p}"); done
+    fi
+
+    local url="" v pat candidate
+    for v in "${candidates[@]}"; do
+        for pat in "${patterns[@]}"; do
+            candidate="https://cdn.mysql.com/Downloads/${dir}/mysql-${v}-${pat}.tar.xz"
+            if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break 2; fi
+        done
+    done
+    [ -z "${url}" ] && fail "No MySQL minimal build located for series '${series}' on ${ARCH_TYPE}."
+
+    disk_preflight_mb 1200
+    log "Downloading MySQL ${RESOLVED} minimal tarball..."
+    local tmp_tar; tmp_tar=$(mktemp)
+    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    mkdir -p "${base}"
+    tar -xJf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
+    rm -f "${tmp_tar}"
+    chmod +x "${base}/bin/"* 2>/dev/null || true
+    extract_libaio "${base}/lib-extra"
+    prune_extracted "${base}"
+    return 0
+}
+
+bundle_deb_libs() { # bundle_deb_libs <dest_dir> <deb_url...>  (extract shared libs beside engines)
+    local dest="$1"; shift
+    mkdir -p "${dest}"
+    local u tmp_deb
+    for u in "$@"; do
+        probe_url "${u}" || continue
+        tmp_deb=$(mktemp)
+        if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.bx" 2>/dev/null; then
+            find "${dest}/.bx" -name '*.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
+        fi
+        rm -rf "${dest}/.bx" "${tmp_deb}"
+    done
+    find "${dest}" -maxdepth 1 -name '*.so*' ! -name '*-*' -exec chmod 644 {} + 2>/dev/null || true
+    return 0
+}
+
+# Bundle runtime libs required by theseus-rs PostgreSQL gnu builds on jammy
+bundle_pg_runtime_libs() {
+    local dest="$1"
+    [ -e "${dest}/libxml2.so.2" ] && return 0
+    local arch="amd64"
+    [ "${ARCH_TYPE}" = "arm64" ] && arch="arm64"
+    local pools=(
+        "https://archive.ubuntu.com/ubuntu/pool/main/libx/libxml2"
+        "http://security.ubuntu.com/ubuntu/pool/main/libx/libxml2"
+    )
+    local p
+    for p in "${pools[@]}"; do
+        bundle_deb_libs "${dest}" \
+            "${p}/libxml2_2.9.13+dfsg-1ubuntu0.12_${arch}.deb" \
+            "${p}/libxml2_2.9.13+dfsg-1build1_${arch}.deb"
+        [ -e "${dest}/libxml2.so.2" ] && break
+    done
+    bundle_deb_libs "${dest}" \
+        "https://archive.ubuntu.com/ubuntu/pool/main/i/icu/libicu70_70.1-2_${arch}.deb"
+}
+
+# -----------------------------------------------------------------------------
+# MongoDB (+ mongosh companion for first-run provisioning)
+# -----------------------------------------------------------------------------
+ensure_mongosh() {
+    have mongosh && return 0
+    [ -x "${INSTALL_DIR}/mongosh" ] && return 0
+    log "Fetching mongosh companion (provisioning shell)..."
+    local url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${ARCH_ALT}.tgz"
+    local tmp_tar; tmp_tar=$(mktemp)
+    if fetch "${url}" "${tmp_tar}"; then
+        local ext="${INSTALL_DIR}/.msh.$$"
+        mkdir -p "${ext}"
+        tar -xzf "${tmp_tar}" -C "${ext}" 2>/dev/null || true
+        find "${ext}" -type f -name mongosh -exec cp -f {} "${INSTALL_DIR}/mongosh" \; 2>/dev/null || true
+        rm -rf "${ext}" "${tmp_tar}"
+        chmod +x "${INSTALL_DIR}/mongosh" 2>/dev/null || true
+        ok "mongosh companion ready."
+    else
+        rm -f "${tmp_tar}"
+        warn "mongosh download failed; provisioning will be skipped this boot."
+    fi
+    return 0
+}
+
+install_mongodb() {
+    [ -x "${INSTALL_DIR}/mongod" ] && { log "MongoDB already present."; ensure_mongosh; return 0; }
+
+    # Lightweight path: system binary already provides the requested series
+    if [ -n "${RESOLVED}" ] && system_version_satisfies mongod "${RESOLVED}"; then
+        log "System MongoDB matches requested series (${RESOLVED}); skipping download."
+        ensure_mongosh
+        return 0
+    fi
+
+    local distros=("ubuntu2204" "ubuntu2404")
+    if grep -q 'VERSION_ID="24' /etc/os-release 2>/dev/null; then distros=("ubuntu2404" "ubuntu2204"); fi
+
+    local candidates=()
+    if [[ "${RESOLVED}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+        candidates+=("${RESOLVED}")
+    elif [[ "${RESOLVED}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        local patches p
+        case "${RESOLVED}" in
+            8.0) patches=(12 10 9 8 7 6 5 4 3 2 1 0) ;;
+            7.0) patches=(14 12 11 10 9 8 5 3 2 0) ;;
+            6.0) patches=(16 14 13 12 11 10 8 7 5 4 3 2 0) ;;
+            *)   patches=(9 7 5 3 1 0) ;;
+        esac
+        for p in "${patches[@]}"; do candidates+=("${RESOLVED}.${p}"); done
+    else
+        candidates+=("${RESOLVED}")
+    fi
+
+    local url="" v dt candidate
+    for v in "${candidates[@]}"; do
+        for dt in "${distros[@]}"; do
+            if [ "${ARCH_TYPE}" = "arm64" ]; then
+                candidate="https://fastdl.mongodb.org/linux/mongodb-linux-aarch64-${dt}-${v}.tgz"
+            else
+                candidate="https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-${dt}-${v}.tgz"
+            fi
+            if probe_url "${candidate}"; then url="${candidate}"; RESOLVED="${v}"; break 2; fi
+        done
+    done
+    [ -z "${url}" ] && fail "No MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE} (supported: 4.4-8.x)."
+
+    disk_preflight_mb 700
+    log "Downloading MongoDB ${RESOLVED}..."
+    local tmp_tar; tmp_tar=$(mktemp)
+    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; fail "Download failed: ${url}"; }
+    local ext="${INSTALL_DIR}/.mgx.$$"
+    mkdir -p "${ext}"
+    tar -xzf "${tmp_tar}" -C "${ext}" --strip-components=1 || { rm -rf "${ext}" "${tmp_tar}"; fail "Extraction failed."; }
+    cp -f "${ext}/bin/mongod" "${INSTALL_DIR}/mongod"
+    [ -f "${ext}/bin/mongos" ] && cp -f "${ext}/bin/mongos" "${INSTALL_DIR}/mongos"
+    rm -rf "${ext}" "${tmp_tar}"
+    chmod +x "${INSTALL_DIR}/mongod"
+    "${INSTALL_DIR}/mongod" --version >/dev/null 2>&1 || fail "MongoDB binary failed self-check."
+    ensure_mongosh
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Source builds (Redis-family) + generic GitHub release helper
+# -----------------------------------------------------------------------------
+build_from_source() {
+    local url="$1"; shift
+    have make || apt_try_install build-essential || true
+    have make || { warn "'make' unavailable (no root?). Cannot compile."; return 1; }
+    have cc || have gcc || { warn "No C compiler present. Cannot compile."; return 1; }
+    disk_preflight_mb 600
+    local tmp_tar; tmp_tar=$(mktemp)
+    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; warn "Source fetch failed: ${url}"; return 1; }
+    local bd; bd=$(mktemp -d)
+    tar -xzf "${tmp_tar}" -C "${bd}" --strip-components=1 || { rm -rf "${bd}" "${tmp_tar}"; return 1; }
+    rm -f "${tmp_tar}"
+    ( cd "${bd}" && make MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" ${MAKE_ARGS:-} ) >&2 || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
+    local b
+    for b in "$@"; do
+        [ -f "${bd}/${b}" ] && cp -f "${bd}/${b}" "${INSTALL_DIR}/${b##*/}"
+    done
+    rm -rf "${bd}"
+    find "${INSTALL_DIR}" -maxdepth 1 -type f -exec chmod +x {} + 2>/dev/null || true
+    return 0
+}
+
+gh_release_install() { # gh_release_install <repo> <asset_regex> <inner_name> <final_name>
+    local repo="$1" regex="$2" inner="$3" final="$4"
+    [ -x "${INSTALL_DIR}/${final}" ] && { log "${final} already present."; return 0; }
+    local asset_url
+    asset_url=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=30" - | \
+        jq -r --arg re "${regex}" '[.[].assets[].browser_download_url | select(test($re))][0] // empty' 2>/dev/null)
+    [ -z "${asset_url}" ] && { warn "No release asset matched '${regex}' for ${repo}."; return 1; }
+    log "Fetching $(basename "${asset_url}") ..."
+    local tmp_dl; tmp_dl=$(mktemp)
+    fetch "${asset_url}" "${tmp_dl}" || { rm -f "${tmp_dl}"; warn "Download failed."; return 1; }
+    local fname; fname=$(basename "${asset_url}")
+    case "${fname}" in
+        *.tar.gz|*.tgz)
+            local ext="${INSTALL_DIR}/.ghx.$$"; mkdir -p "${ext}"
+            tar -xzf "${tmp_dl}" -C "${ext}" 2>/dev/null || { rm -rf "${ext}" "${tmp_dl}"; warn "Extract failed."; return 1; }
+            local found; found=$(find "${ext}" -type f -name "${inner}" | head -n1)
+            [ -n "${found}" ] && cp -f "${found}" "${INSTALL_DIR}/${final}"
+            rm -rf "${ext}"
+            ;;
+        *.zip)
+            local ext="${INSTALL_DIR}/.ghx.$$"; mkdir -p "${ext}"
+            unzip -q -o "${tmp_dl}" -d "${ext}" 2>/dev/null || true
+            local found; found=$(find "${ext}" -type f -name "${inner}" | head -n1)
+            [ -n "${found}" ] && cp -f "${found}" "${INSTALL_DIR}/${final}"
+            rm -rf "${ext}"
+            ;;
+        *) cp -f "${tmp_dl}" "${INSTALL_DIR}/${final}" ;;
+    esac
+    rm -f "${tmp_dl}"
+    chmod +x "${INSTALL_DIR}/${final}" 2>/dev/null || true
+    [ -x "${INSTALL_DIR}/${final}" ] || { warn "Verification failed for ${final}."; return 1; }
+    return 0
+}
+
+install_redis_family() {
+    local sysbin=""
+    case "${ENGINE}" in
+        redis) sysbin="redis-server" ;;
+        valkey) sysbin="valkey-server" ;;
+        keydb) sysbin="keydb-server" ;;
+        memcached) sysbin="memcached" ;;
+        dragonfly) sysbin="" ;;
+    esac
+    if [ -n "${sysbin}" ] && system_version_satisfies "${sysbin}" "${RESOLVED}"; then
+        log "System ${sysbin} matches requested series (${RESOLVED}); skipping source build."
+        return 0
+    fi
+    case "${ENGINE}" in
+        redis)
+            [ -x "${INSTALL_DIR}/redis-server" ] && return 0
+            build_from_source "https://download.redis.io/releases/redis-${RESOLVED}.tar.gz" src/redis-server src/redis-cli \
+                || fail "Redis ${RESOLVED} build failed (needs gcc/make; root helps auto-install them). Use DB_VERSION=latest for the system Redis."
+            ;;
+        valkey)
+            [ -x "${INSTALL_DIR}/valkey-server" ] && return 0
+            local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
+            build_from_source "https://github.com/valkey-io/valkey/archive/refs/tags/${tag}.tar.gz" src/valkey-server src/valkey-cli \
+                || fail "Valkey ${RESOLVED} build failed. Use DB_VERSION=latest for the system engine."
+            ;;
+        keydb)
+            [ -x "${INSTALL_DIR}/keydb-server" ] && return 0
+            local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
+            build_from_source "https://github.com/EQ-Alpha/KeyDB/archive/refs/tags/${tag}.tar.gz" keydb-server keydb-cli \
+                || warn "KeyDB ${RESOLVED} build failed; falling back to system KeyDB if present."
+            ;;
+        memcached)
+            [ -x "${INSTALL_DIR}/memcached" ] && return 0
+            apt_try_install libevent-dev || true
+            ldconfig 2>/dev/null || true
+            build_from_source "https://memcached.org/files/memcached-${RESOLVED}.tar.gz" memcached \
+                || warn "memcached ${RESOLVED} build failed (libevent-dev required); using system memcached if present."
+            ;;
+        dragonfly)
+            [ -x "${INSTALL_DIR}/dragonfly" ] && return 0
+            local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
+            local asset="dragonfly-x86_64.tar.gz"
+            [ "${ARCH_TYPE}" = "arm64" ] && asset="dragonfly-aarch64.tar.gz"
+            gh_release_install "dragonflydb/dragonfly" "${tag}/${asset//./\\.}" dragonfly dragonfly \
+                || warn "Dragonfly ${tag} download failed."
+            ;;
+    esac
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# Engine dispatch
+# -----------------------------------------------------------------------------
 case "${ENGINE}" in
     pocketbase)
-        TAG="${VERSION#v}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/pocketbase/pocketbase/releases/latest 2>/dev/null | jq -r '.tag_name // "v0.25.0"' 2>/dev/null | sed 's/^v//')
-            [ -z "${TAG}" ] && TAG="0.25.0"
-        fi
-        log "Installing PocketBase v${TAG}..."
-        URL="https://github.com/pocketbase/pocketbase/releases/download/v${TAG}/pocketbase_${TAG}_linux_${ARCH_TYPE}.zip"
-        tmp_zip=$(mktemp)
-        if curl -fsSL --retry 3 -o "${tmp_zip}" "${URL}"; then
-            unzip -q -o "${tmp_zip}" -d "${INSTALL_DIR}/"
+        TAG="${RESOLVED#v}"; [ -z "${TAG}" -o "${TAG}" = "latest" ] && TAG=$(gh_latest_tag "pocketbase/pocketbase" | sed 's/^v//')
+        [ -z "${TAG}" ] && TAG="0.25.0"
+        if [ ! -x "${INSTALL_DIR}/pocketbase" ]; then
+            URL="https://github.com/pocketbase/pocketbase/releases/download/v${TAG}/pocketbase_${TAG}_linux_${ARCH_TYPE}.zip"
+            tmp_zip=$(mktemp)
+            if fetch "${URL}" "${tmp_zip}"; then
+                unzip -q -o "${tmp_zip}" -d "${INSTALL_DIR}/"
+                chmod +x "${INSTALL_DIR}/pocketbase"
+                ok "PocketBase v${TAG} installed."
+            else warn "PocketBase v${TAG} download failed."; fi
             rm -f "${tmp_zip}"
-            chmod +x "${INSTALL_DIR}/pocketbase"
-            ok "PocketBase v${TAG} installed successfully."
-        else
-            warn "Failed to download PocketBase v${TAG}. Checking local fallback..."
         fi
         ;;
 
     surrealdb|surreal)
-        TAG="${VERSION}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/surrealdb/surrealdb/releases/latest 2>/dev/null | jq -r '.tag_name // "v2.0.4"' 2>/dev/null)
-            [ -z "${TAG}" ] && TAG="v2.0.4"
-        fi
-        [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
-        log "Installing SurrealDB ${TAG}..."
-        URL="https://github.com/surrealdb/surrealdb/releases/download/${TAG}/surreal-${TAG}.${ARCH_GNU}.tar.gz"
-        if curl -fsSL "${URL}" 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
-            chmod +x "${INSTALL_DIR}/surreal"
-            ok "SurrealDB ${TAG} installed successfully."
-        else
-            warn "Could not fetch specific SurrealDB release tarball. Using install script fallback..."
-            curl -fsSL https://install.surrealdb.com | sh
-            [ -f /root/.surrealdb/surreal ] && cp /root/.surrealdb/surreal "${INSTALL_DIR}/surreal"
-            chmod +x "${INSTALL_DIR}/surreal" 2>/dev/null || true
+        TAG="${RESOLVED}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "surrealdb/surrealdb")
+        [ -z "${TAG}" ] && TAG="v2.0.4"
+        [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        if [ ! -x "${INSTALL_DIR}/surreal" ]; then
+            URL="https://github.com/surrealdb/surrealdb/releases/download/${TAG}/surreal-${TAG}.${ARCH_GNU}.tar.gz"
+            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/surreal"
+                ok "SurrealDB ${TAG} installed."
+            else
+                warn "Tarball fetch failed; trying official installer..."
+                curl -fsSL https://install.surrealdb.com 2>/dev/null | sh >&2 || true
+                for src in /root/.surrealdb/surreal "${HOME}/.surrealdb/surreal" /usr/local/bin/surreal; do
+                    [ -f "${src}" ] && cp -f "${src}" "${INSTALL_DIR}/surreal" && break
+                done
+                chmod +x "${INSTALL_DIR}/surreal" 2>/dev/null || true
+            fi
         fi
         ;;
 
     meilisearch)
-        TAG="${VERSION}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/meilisearch/meilisearch/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.0"' 2>/dev/null)
-            [ -z "${TAG}" ] && TAG="v1.12.0"
-        fi
-        [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
-        log "Installing Meilisearch ${TAG}..."
-        URL="https://github.com/meilisearch/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_TYPE}"
-        if curl -fsSL --retry 3 -o "${INSTALL_DIR}/meilisearch" "${URL}"; then
-            chmod +x "${INSTALL_DIR}/meilisearch"
-            ok "Meilisearch ${TAG} installed successfully."
-        else
-            warn "Direct tag download failed. Invoking official Meilisearch installer..."
-            curl -fsSL https://get.meilisearch.com | sh
-            [ -f meilisearch ] && mv meilisearch "${INSTALL_DIR}/meilisearch"
-            chmod +x "${INSTALL_DIR}/meilisearch" 2>/dev/null || true
+        TAG="${RESOLVED}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "getmeili/meilisearch")
+        [ -z "${TAG}" ] && TAG="v1.12.0"
+        [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        if [ ! -x "${INSTALL_DIR}/meilisearch" ]; then
+            URL="https://github.com/getmeili/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_ALT}"
+            if fetch "${URL}" "${INSTALL_DIR}/meilisearch"; then
+                chmod +x "${INSTALL_DIR}/meilisearch"
+                ok "Meilisearch ${TAG} installed."
+            else warn "Meilisearch ${TAG} download failed."; fi
         fi
         ;;
 
     qdrant)
-        TAG="${VERSION}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/qdrant/qdrant/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.12.1"' 2>/dev/null)
-            [ -z "${TAG}" ] && TAG="v1.12.1"
+        TAG="${RESOLVED}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "qdrant/qdrant")
+        [ -z "${TAG}" ] && TAG="v1.12.1"
+        [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        if [ ! -x "${INSTALL_DIR}/qdrant" ]; then
+            URL="https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
+            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/qdrant"
+                ok "Qdrant ${TAG} installed."
+            else warn "Qdrant ${TAG} download failed."; fi
         fi
-        [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
-        log "Installing Qdrant ${TAG}..."
-        URL="https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
-        if curl -fsSL "${URL}" | tar -xz -C "${INSTALL_DIR}/"; then
-            chmod +x "${INSTALL_DIR}/qdrant"
-            ok "Qdrant ${TAG} installed successfully."
+        ;;
+
+    typesense)
+        TAG="${RESOLVED#v}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "typesense/typesense" | sed 's/^v//')
+        [ -z "${TAG}" ] && TAG="27.0"
+        if [ ! -x "${INSTALL_DIR}/typesense-server" ]; then
+            URL="https://dl.typesense.org/releases/${TAG}/typesense-server-${TAG}-linux-${ARCH_TYPE}.tar.gz"
+            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/typesense-server"
+                ok "Typesense v${TAG} installed."
+            else warn "Typesense v${TAG} download failed."; fi
         fi
         ;;
 
     minio)
-        TAG="${VERSION}"
-        log "Installing MinIO (${TAG})..."
-        URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio"
-        [ "${TAG}" != "latest" ] && URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/archive/minio.${TAG}"
-        curl -fsSL --retry 3 -o "${INSTALL_DIR}/minio" "${URL}"
-        chmod +x "${INSTALL_DIR}/minio"
-        ok "MinIO installed successfully."
-        ;;
-
-    typesense)
-        TAG="${VERSION#v}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG="27.0"
-        fi
-        log "Installing Typesense v${TAG}..."
-        URL="https://dl.typesense.org/releases/${TAG}/typesense-server-${TAG}-linux-${ARCH_TYPE}.tar.gz"
-        if curl -fsSL "${URL}" 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
-            chmod +x "${INSTALL_DIR}/typesense-server"
-            ok "Typesense v${TAG} installed successfully."
-        fi
-        ;;
-
-    clickhouse)
-        TAG="${VERSION#v}"
-        log "Installing ClickHouse standalone binary..."
-        if curl -fsSL https://clickhouse.com/ | sh; then
-            [ -f ./clickhouse ] && mv ./clickhouse "${INSTALL_DIR}/clickhouse"
-            chmod +x "${INSTALL_DIR}/clickhouse"
-            ok "ClickHouse binary installed."
+        if [ ! -x "${INSTALL_DIR}/minio" ]; then
+            URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio"
+            [ -n "${RESOLVED}" ] && [ "${RESOLVED}" != "latest" ] && URL="https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/archive/minio.${RESOLVED}"
+            if fetch "${URL}" "${INSTALL_DIR}/minio"; then
+                chmod +x "${INSTALL_DIR}/minio"
+                ok "MinIO ${RESOLVED} installed."
+            else warn "MinIO download failed."; fi
         fi
         ;;
 
     victoriametrics)
-        TAG="${VERSION}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG=$(curl -fsSL https://api.github.com/repos/VictoriaMetrics/VictoriaMetrics/releases/latest 2>/dev/null | jq -r '.tag_name // "v1.108.0"' 2>/dev/null)
-            [ -z "${TAG}" ] && TAG="v1.108.0"
-        fi
-        [[ ! "${TAG}" =~ ^v ]] && TAG="v${TAG}"
-        log "Installing VictoriaMetrics ${TAG}..."
-        URL="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${TAG}/victoria-metrics-linux-${ARCH_TYPE}-${TAG}.tar.gz"
-        if curl -fsSL "${URL}" | tar -xz -C "${INSTALL_DIR}/"; then
-            chmod +x "${INSTALL_DIR}/victoria-metrics-prod" "${INSTALL_DIR}/victoriametrics" 2>/dev/null || true
-            ok "VictoriaMetrics ${TAG} installed."
+        TAG="${RESOLVED}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "VictoriaMetrics/VictoriaMetrics")
+        [ -z "${TAG}" ] && TAG="v1.108.0"
+        [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        if [ ! -x "${INSTALL_DIR}/victoria-metrics-prod" ]; then
+            URL="https://github.com/VictoriaMetrics/VictoriaMetrics/releases/download/${TAG}/victoria-metrics-linux-${ARCH_TYPE}-${TAG}.tar.gz"
+            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/victoria-metrics-prod" 2>/dev/null || true
+                ok "VictoriaMetrics ${TAG} installed."
+            else warn "VictoriaMetrics ${TAG} download failed."; fi
         fi
         ;;
 
     ferretdb)
-        TAG="${VERSION}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG="v1.21.0"
-        fi
-        log "Installing FerretDB ${TAG}..."
-        URL="https://github.com/FerretDB/FerretDB/releases/download/${TAG}/ferretdb-linux-${ARCH_TYPE}.tar.gz"
-        if curl -fsSL "${URL}" | tar -xz -C "${INSTALL_DIR}/"; then
-            chmod +x "${INSTALL_DIR}/ferretdb" 2>/dev/null || true
-            ok "FerretDB installed."
+        TAG="${RESOLVED}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "FerretDB/FerretDB")
+        [ -z "${TAG}" ] && TAG="v1.21.0"
+        [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        if [ ! -x "${INSTALL_DIR}/ferretdb" ]; then
+            URL="https://github.com/FerretDB/FerretDB/releases/download/${TAG}/ferretdb-linux-${ARCH_TYPE}.tar.gz"
+            if fetch "${URL}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/ferretdb" 2>/dev/null || true
+                ok "FerretDB installed."
+            else warn "FerretDB ${TAG} download failed."; fi
         fi
         ;;
 
-    valkey)
-        TAG="${VERSION#v}"
-        if [ "${TAG}" = "latest" ]; then
-            TAG="7.2.5"
+    clickhouse)
+        if [ ! -x "${INSTALL_DIR}/clickhouse" ]; then
+            V="${RESOLVED}"
+            ch_arch="amd64"; [ "${ARCH_TYPE}" = "arm64" ] && ch_arch="aarch64"
+            if [ -n "${V}" ] && [ "${V}" != "latest" ]; then
+                log "Installing ClickHouse ${V} (official tgz)..."
+                URL="https://packages.clickhouse.com/tgz/stable/clickhouse-common-static-${V}-${ch_arch}.tgz"
+                tmp_tgz=$(mktemp)
+                if fetch "${URL}" "${tmp_tgz}"; then
+                    ext="${INSTALL_DIR}/.chx.$$"; mkdir -p "${ext}"
+                    tar -xzf "${tmp_tgz}" -C "${ext}" 2>/dev/null || true
+                    find "${ext}" -type f -name clickhouse -exec cp -f {} "${INSTALL_DIR}/clickhouse" \; 2>/dev/null || true
+                    rm -rf "${ext}" "${tmp_tgz}"
+                else
+                    rm -f "${tmp_tgz}"
+                    warn "ClickHouse ${V} tgz failed; trying single-binary installer..."
+                    curl -fsSL https://clickhouse.com/ 2>/dev/null | sh >&2 || true
+                    [ -f ./clickhouse ] && mv -f ./clickhouse "${INSTALL_DIR}/clickhouse" 2>/dev/null || true
+                fi
+            else
+                log "Installing ClickHouse (latest single binary)..."
+                curl -fsSL https://clickhouse.com/ 2>/dev/null | sh >&2 || true
+                [ -f ./clickhouse ] && mv -f ./clickhouse "${INSTALL_DIR}/clickhouse" 2>/dev/null || true
+            fi
+            chmod +x "${INSTALL_DIR}/clickhouse" 2>/dev/null || true
         fi
-        log "Configuring Valkey ${TAG}..."
+        ;;
+
+    postgresql) install_postgresql || exit 1 ;;
+
+    mariadb)    install_mariadb    || exit 1 ;;
+
+    mysql)      install_mysql      || exit 1 ;;
+
+    mongodb)    install_mongodb    || exit 1 ;;
+
+    redis|valkey|keydb|memcached|dragonfly) install_redis_family || exit 1 ;;
+
+    # ---------------- Extended catalog (55+ engines) -------------------------
+    cockroachdb|cockroach)
+        gh_release_install "cockroachdb/cockroach" "linux-${ARCH_ALT}" "cockroach" "cockroach" || warn "CockroachDB download failed."
+        ;;
+
+    yugabytedb|yugabyte)
+        yb_base="${SERVER_DIR:-$(pwd)}/opt/yugabyte"
+        if [ ! -x "${yb_base}/bin/yugabyted" ]; then
+            YV="${RESOLVED#v}"
+            suffix="linux-x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && suffix="linux-aarch64"
+            disk_preflight_mb 3000
+            URL="https://software.yugabyte.com/releases/${YV}/yugabyte-${YV}-${suffix}.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${yb_base}"
+                tar -xzf "${tmp_tar}" -C "${yb_base}" --strip-components=1
+                ok "YugabyteDB ${YV} installed."
+            else warn "YugabyteDB download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    tidb)
+        tb_base="${SERVER_DIR:-$(pwd)}/opt/tidb"
+        if [ ! -x "${tb_base}/bin/tidb-server" ]; then
+            TV="${RESOLVED#v}"
+            URL="https://download.pingcap.org/tidb-v${TV}-linux-${ARCH_ALT}.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${tb_base}"
+                tar -xzf "${tmp_tar}" -C "${tb_base}" --strip-components=2
+                ok "TiDB ${TV} installed."
+            else warn "TiDB download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    dolt)
+        gh_release_install "dolthub/dolt" "install/dolt-linux-${ARCH_TYPE}" "dolt" "dolt" || warn "Dolt download failed."
+        ;;
+
+    etcd)
+        gh_release_install "etcd-io/etcd" "etcd-v.*linux-${ARCH_ALT}" "etcd" "etcd" || warn "etcd download failed."
+        gh_release_install "etcd-io/etcd" "etcd-v.*linux-${ARCH_ALT}" "etcdctl" "etcdctl" || true
+        ;;
+
+    nats)
+        gh_release_install "nats-io/nats-server" "nats-server-v.*linux-${ARCH_ALT}" "nats-server" "nats-server" || warn "NATS download failed."
+        ;;
+
+    immudb)
+        gh_release_install "codenotary/immudb" "immudb-linux-${ARCH_ALT}" "immudb" "immudb" || warn "immudb download failed."
+        ;;
+
+    dgraph)
+        gh_release_install "dgraph-io/dgraph" "dgraph.*linux-amd64|linux-amd64.*dgraph" "dgraph" "dgraph" || warn "Dgraph download failed."
+        ;;
+
+    aerospike)
+        as_base="${SERVER_DIR:-$(pwd)}/opt/aerospike"
+        if [ ! -x "${as_base}/bin/aerospike" ]; then
+            AV="${RESOLVED}"
+            downloaded=0
+            for art in ubuntu2204 ubuntu2004 el8 tgz; do
+                URL="https://www.aerospike.com/download/server/${AV}/artifact/${art}"
+                tmp_dl=$(mktemp)
+                if fetch "${URL}" "${tmp_dl}" && dpkg-deb -I "${tmp_dl}" >/dev/null 2>&1; then
+                    mkdir -p "${as_base}/pkg"
+                    dpkg-deb -x "${tmp_dl}" "${as_base}/pkg"
+                    find "${as_base}/pkg" -name aerospike -type f -exec cp -f {} "${as_base}/" \; 2>/dev/null || true
+                    downloaded=1
+                elif [ "${downloaded}" = "0" ] && [ -s "${tmp_dl}" ] && tar -tzf "${tmp_dl}" >/dev/null 2>&1; then
+                    mkdir -p "${as_base}"
+                    tar -xzf "${tmp_dl}" -C "${as_base}" --strip-components=1
+                    downloaded=1
+                fi
+                rm -f "${tmp_dl}"
+                [ "${downloaded}" = "1" ] && break
+            done
+            [ "${downloaded}" = "1" ] && ok "Aerospike ${AV} installed." || warn "Aerospike download failed."
+        fi
+        ;;
+
+    cassandra)
+        cs_base="${SERVER_DIR:-$(pwd)}/opt/cassandra"
+        if [ ! -x "${cs_base}/bin/cassandra" ]; then
+            ensure_java || true
+            CV="${RESOLVED}"
+            URL="https://archive.apache.org/dist/cassandra/${CV}/apache-cassandra-${CV}-bin.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${cs_base}"
+                tar -xzf "${tmp_tar}" -C "${cs_base}" --strip-components=1
+                ok "Cassandra ${CV} installed."
+            else warn "Cassandra download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    arangodb)
+        ag_base="${SERVER_DIR:-$(pwd)}/opt/arangodb"
+        if [ ! -x "${ag_base}/sbin/arangod" ] && [ ! -x "${ag_base}/usr/sbin/arangod" ] && [ ! -x "${ag_base}/bin/arangod" ]; then
+            GV="${RESOLVED#v}"
+            series="${GV%%.*}"
+            urls=("https://download.arangodb.com/arangodb${series}/Community/Linux/x86_64/arangodb3-linux-${GV}.tar.gz")
+            [ "${ARCH_TYPE}" = "arm64" ] && urls=("https://download.arangodb.com/arangodb${series}/Community/Linux/aarch64/arangodb3-linux-${GV}_aarch64.tar.gz" "https://download.arangodb.com/arangodb${series}/Community/Linux/x86_64/arangodb3-linux-${GV}.tar.gz")
+            downloaded=0
+            for URL in "${urls[@]}"; do
+                tmp_tar=$(mktemp)
+                if fetch "${URL}" "${tmp_tar}"; then
+                    mkdir -p "${ag_base}"
+                    tar -xzf "${tmp_tar}" -C "${ag_base}" --strip-components=1
+                    downloaded=1
+                fi
+                rm -f "${tmp_tar}"
+                [ "${downloaded}" = "1" ] && break
+            done
+            [ "${downloaded}" = "1" ] && ok "ArangoDB ${GV} installed." || warn "ArangoDB download failed."
+        fi
+        ;;
+
+    neo4j)
+        nj_base="${SERVER_DIR:-$(pwd)}/opt/neo4j"
+        if [ ! -x "${nj_base}/bin/neo4j" ]; then
+            NV="${RESOLVED#v}"
+            ensure_java || true
+            URL="https://dist.neo4j.org/neo4j-community-${NV}-unix.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${nj_base}"
+                tar -xzf "${tmp_tar}" -C "${nj_base}" --strip-components=1
+                ok "Neo4j Community ${NV} installed."
+            else warn "Neo4j download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    influxdb)
+        gh_release_install "influxdata/influxdb" "influxdb2-[0-9].*linux_${ARCH_ALT}" "influxd" "influxd" || warn "InfluxDB download failed."
+        ;;
+
+    questdb)
+        qd_base="${INSTALL_DIR}/questdb"
+        if [ ! -d "${qd_base}" ]; then
+            QV="${RESOLVED#v}"
+            URL="https://github.com/questdb/questdb/releases/download/${QV}/questdb-${QV}-jdk17-bin.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${qd_base}"
+                tar -xzf "${tmp_tar}" -C "${qd_base}" --strip-components=1
+                ok "QuestDB ${QV} installed (bundled JDK)."
+            else warn "QuestDB download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    elasticsearch)
+        es_base="${SERVER_DIR:-$(pwd)}/opt/elasticsearch"
+        if [ ! -x "${es_base}/bin/elasticsearch" ]; then
+            EV="${RESOLVED#v}"
+            es_arch="x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && es_arch="aarch64"
+            disk_preflight_mb 1500
+            URL="https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-${EV}-linux-${es_arch}.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${es_base}"
+                tar -xzf "${tmp_tar}" -C "${es_base}" --strip-components=1
+                ok "Elasticsearch ${EV} installed (bundled JDK)."
+            else warn "Elasticsearch download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    opensearch)
+        os_base="${SERVER_DIR:-$(pwd)}/opt/opensearch"
+        if [ ! -x "${os_base}/bin/opensearch" ]; then
+            OV="${RESOLVED#v}"
+            os_arch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && os_arch="arm64"
+            disk_preflight_mb 1500
+            URL="https://artifacts.opensearch.org/releases/bundle/opensearch/${OV}/opensearch-${OV}-linux-${os_arch}.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${os_base}"
+                tar -xzf "${tmp_tar}" -C "${os_base}" --strip-components=1
+                ok "OpenSearch ${OV} installed (bundled JDK)."
+            else warn "OpenSearch download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    solr)
+        sl_base="${SERVER_DIR:-$(pwd)}/opt/solr"
+        if [ ! -x "${sl_base}/bin/solr" ]; then
+            SV="${RESOLVED}"
+            ensure_java || true
+            URL="https://archive.apache.org/dist/lucene/solr/${SV}/solr-${SV}.tgz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${sl_base}"
+                tar -xzf "${tmp_tar}" -C "${sl_base}" --strip-components=1
+                ok "Solr ${SV} installed."
+            else warn "Solr download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    orientdb)
+        ob_base="${SERVER_DIR:-$(pwd)}/opt/orientdb"
+        if [ ! -x "${ob_base}/bin/server.sh" ]; then
+            BV="${RESOLVED}"
+            [[ "${BV}" != v* ]] && BV="v${BV}"
+            ensure_java || true
+            URL="https://github.com/orientechnologies/orientdb/releases/download/${BV}/orientdb-${BV#v}.tar.gz"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${ob_base}"
+                tar -xzf "${tmp_tar}" -C "${ob_base}" --strip-components=1
+                chmod +x "${ob_base}/bin/"*.sh 2>/dev/null || true
+                ok "OrientDB ${BV} installed."
+            else warn "OrientDB download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    ravendb)
+        rv_base="${SERVER_DIR:-$(pwd)}/opt/ravendb"
+        if [ ! -d "${rv_base}/Server" ]; then
+            RVV="${RESOLVED}"
+            rv_arch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && rv_arch="arm64"
+            URL="https://github.com/ravendb/ravendb/releases/download/${RVV}/linux/${RVV}-linux-${rv_arch}.tar.bz2"
+            probe_url "${URL}" || URL="https://github.com/ravendb/ravendb/releases/download/${RVV}/RavenDB-${RVV}-linux-${rv_arch}.tar.bz2"
+            tmp_tar=$(mktemp)
+            if fetch "${URL}" "${tmp_tar}"; then
+                mkdir -p "${rv_base}"
+                tar -xjf "${tmp_tar}" -C "${rv_base}"
+                ok "RavenDB ${RVV} installed."
+            else warn "RavenDB download failed."; fi
+            rm -f "${tmp_tar}"
+        fi
+        ;;
+
+    milvus)
+        gh_release_install "milvus-io/milvus" "milvus-standalone-embed|milvus.*linux-${ARCH_ALT}|linux_${ARCH_ALT}" "milvus" "milvus" \
+            || warn "Milvus standalone binary unavailable upstream; use the Docker variant or CUSTOM_DOWNLOAD_URL."
+        ;;
+
+    weaviate)
+        gh_release_install "weaviate-io/weaviate" "linux-${ARCH_ALT}" "weaviate" "weaviate" || warn "Weaviate download failed."
+        ;;
+
+    quickwit)
+        qw_inner="quickwit"
+        gh_release_install "quickwit-oss/quickwit" "x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu" "quickwit" "quickwit" || warn "Quickwit download failed."
+        ;;
+
+    manticoresearch|manticore)
+        mc_base="${INSTALL_DIR}"
+        if [ ! -x "${mc_base}/searchd" ]; then
+            MV="${RESOLVED#v}"
+            deb_arch="amd64"; [ "${ARCH_TYPE}" = "arm64" ] && deb_arch="arm64"
+            fetched=0
+            for du in \
+                "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-${deb_arch}.deb" \
+                "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-jammy_${deb_arch}.deb" \
+                "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-focal_${deb_arch}.deb"; do
+                tmp_deb=$(mktemp)
+                if fetch "${du}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${mc_base}/.mdx"; then
+                    find "${mc_base}/.mdx" \( -name searchd -o -name indexer \) -type f -exec cp -f {} "${mc_base}/" \; 2>/dev/null || true
+                    fetched=1
+                fi
+                rm -rf "${mc_base}/.mdx" "${tmp_deb}"
+                [ "${fetched}" = "1" ] && break
+            done
+            [ "${fetched}" = "1" ] && ok "Manticore Search ${MV} installed." || warn "Manticore Search download failed."
+        fi
+        ;;
+
+    seaweedfs|weed)
+        gh_release_install "seaweedfs/seaweedfs" "linux_${ARCH_ALT}" "weed" "weed" || warn "SeaweedFS download failed."
+        ;;
+
+    garage)
+        GTAG="${RESOLVED}"
+        [[ "${GTAG}" != v* ]] && GTAG="v${GTAG}"
+        g_target="x86_64-unknown-linux-musl"
+        [ "${ARCH_TYPE}" = "arm64" ] && g_target="aarch64-unknown-linux-musl"
+        if [ ! -x "${INSTALL_DIR}/garage" ]; then
+            URL="https://garagehq.deuxfleurs.fr/_releases/${GTAG}/${g_target}/garage"
+            if fetch "${URL}" "${INSTALL_DIR}/garage"; then
+                chmod +x "${INSTALL_DIR}/garage"
+                ok "Garage ${GTAG} installed."
+            else warn "Garage download failed (${URL})."; fi
+        fi
+        ;;
+
+    libsql|sqld)
+        gh_release_install "tursodatabase/libsql" "sqld.*linux-x86_64|sqld.*linux-aarch64" "sqld" "sqld" || warn "libSQL server download failed."
+        ;;
+
+    rethinkdb)
+        rt_base="${INSTALL_DIR}"
+        if [ ! -x "${rt_base}/rethinkdb" ]; then
+            RTV="${RESOLVED}"
+            deb_suffix="amd64~jammy"; [ "${ARCH_TYPE}" = "arm64" ] && deb_suffix="arm64~jammy"
+            deb_url="https://download.rethinkdb.com/repository/ubuntu-22.04/pool/r/rethinkdb/rethinkdb_${RTV}_${deb_suffix}.deb"
+            tmp_deb=$(mktemp)
+            if fetch "${deb_url}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${rt_base}/.rdx"; then
+                find "${rt_base}/.rdx" -name rethinkdb -type f -exec cp -f {} "${rt_base}/rethinkdb" \; 2>/dev/null || true
+                chmod +x "${rt_base}/rethinkdb" 2>/dev/null || true
+                ok "RethinkDB ${RTV} installed."
+            else warn "RethinkDB package download failed."; fi
+            rm -rf "${rt_base}/.rdx" "${tmp_deb}"
+        fi
         ;;
 
     custom)
         if [ -n "${CUSTOM_DOWNLOAD_URL:-}" ]; then
-            log "Downloading custom engine binary from ${CUSTOM_DOWNLOAD_URL}..."
-            curl -fsSL --retry 3 -o "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}" "${CUSTOM_DOWNLOAD_URL}"
+            fetch "${CUSTOM_DOWNLOAD_URL}" "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}"
             chmod +x "${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}"
-            ok "Custom engine ready: ${INSTALL_DIR}/${CUSTOM_BINARY_NAME:-server}"
+            ok "Custom engine ready."
         fi
         ;;
 
-    mariadb|mysql|postgresql|postgres|redis|keydb|dragonfly|memcached|mongodb|influxdb|couchdb|neo4j|rethinkdb)
-        log "Engine '${ENGINE}' (${VERSION}) is ready via container runtime orchestrator."
-        ok "Engine verified."
-        ;;
-
     *)
-        log "Configured database engine '${ENGINE}'."
+        log "Engine '${ENGINE}' uses container-provided binaries (no versioned installer needed)."
         ;;
 esac
+
+mark_engine_ready
+exit 0

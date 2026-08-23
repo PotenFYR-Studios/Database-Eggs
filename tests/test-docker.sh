@@ -72,7 +72,7 @@ run_db_test() {
     local test_cmd="${4:-}"
     local version="${5:-latest}"
 
-    local container_name="test-db-${engine}-$$"
+    local container_name="test-db-${engine}-$(echo "${version}" | tr '.' '-')-$$"
     local test_dir
     test_dir=$(mktemp -d 2>/dev/null || mktemp -d -t 'dbtest')
     chmod 777 "${test_dir}" 2>/dev/null || true
@@ -166,24 +166,33 @@ run_db_test() {
 # Test Execution Matrix
 # ---------------------------------------------------------------------------
 
-# 1. Relational SQL Databases
-run_db_test "mariadb" "3306" "" "mariadb -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null || mysql -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -e 'SELECT 1;' 2>/dev/null"
+# 0. VERSION CONTRACT REGRESSION TESTS (the core guarantee)
+#    Explicitly pinned versions MUST be honored exactly - no silent downgrades.
+run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tc 'SELECT version();' 2>/dev/null | grep -q 'PostgreSQL 18\.' && psql --version | grep -qE ' 18\.'" "18"
+run_db_test "mariadb" "3306" "" "mariadb -h 127.0.0.1 -P 3306 -u root -p'RootPassword123!Secure' -NBe 'SELECT VERSION();' 2>/dev/null | grep -q '^11\.4'" "11.4"
+run_db_test "mysql" "3307" "" "mysqld --version 2>/dev/null | grep -qE ' 8\.0\.'" "8.0"
+
+# 1. Relational SQL Databases (system defaults / latest resolution)
 run_db_test "postgresql" "5432" "" "PGPASSWORD='RootPassword123!Secure' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -c 'SELECT 1;' 2>/dev/null"
 
 # 2. In-Memory & Caching
 run_db_test "redis" "6379" "" "redis-cli -h 127.0.0.1 -p 6379 -a 'TestPassword123!Secure' ping 2>/dev/null | grep -q 'PONG'"
+run_db_test "valkey" "6380" "" "valkey-server --version 2>/dev/null | grep -qi valkey || redis-cli -p 6380 ping 2>/dev/null | grep -q PONG"
 run_db_test "memcached" "11211" "" ""
 
 # 3. Document & Multi-Model
+run_db_test "mongodb" "27017" "" "mongod --version 2>/dev/null | grep -qE 'db version v7\.'" "7.0"
 run_db_test "surrealdb" "8000" "" "curl -fsSL http://127.0.0.1:8000/health 2>/dev/null || curl -fsSL http://127.0.0.1:8000/status 2>/dev/null || curl -fsSL http://127.0.0.1:8000/version 2>/dev/null"
 
 # 4. Search & Vector Engines
 run_db_test "meilisearch" "7700" "-e MASTER_KEY=MasterKey1234567890SecureKey" "curl -fsSL -H 'Authorization: Bearer MasterKey1234567890SecureKey' http://127.0.0.1:7700/health 2>/dev/null || curl -fsSL http://127.0.0.1:7700/health 2>/dev/null"
 run_db_test "qdrant" "6333" "" "curl -fsSL http://127.0.0.1:6333/readyz 2>/dev/null || curl -fsSL http://127.0.0.1:6333/dashboard 2>/dev/null || curl -fsSL http://127.0.0.1:6333/ 2>/dev/null"
+run_db_test "typesense" "8108" "" "curl -fsSL http://127.0.0.1:8108/health 2>/dev/null"
 
 # 5. Backends & Storage
 run_db_test "pocketbase" "8090" "" "curl -fsSL http://127.0.0.1:8090/api/health 2>/dev/null"
 run_db_test "minio" "9000" "-e CONSOLE_PORT=9001" "curl -fsSL http://127.0.0.1:9000/minio/health/live 2>/dev/null"
+run_db_test "victoriametrics" "8428" "" "curl -fsSL http://127.0.0.1:8428/health 2>/dev/null"
 
 # ---------------------------------------------------------------------------
 # Test Summary

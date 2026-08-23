@@ -2,9 +2,38 @@
 # =============================================================================
 #  PotenFYR Studios - MariaDB & MySQL Engine Handler
 #  Crash-Proof, Docker OverlayFS Compatible, Auto-Tuned & Hardened
+#  Honors DB_VERSION: prefers binaries provisioned by install-db-version.sh
+#  (opt/mariadb or opt/mysql) and injects basedir automatically.
 # =============================================================================
 
+MARIADB_OPT_BASE="${SERVER_DIR}/opt/mariadb"
+MYSQL_OPT_BASE="${SERVER_DIR}/opt/mysql"
+
+find_mariadb_bin() { # find_mariadb_bin <name> [fallback-name]
+    local name="$1" alt="${2:-}"
+    local p
+    for p in \
+        "${MARIADB_OPT_BASE}/bin/${name}" \
+        "${MYSQL_OPT_BASE}/bin/${name}" \
+        "${MARIADB_OPT_BASE}/bin/${alt}" \
+        "${MYSQL_OPT_BASE}/bin/${alt}"; do
+        [ -n "${p}" ] && [ -x "${p}" ] && { printf '%s' "${p}"; return 0; }
+    done
+    if command -v "${name}" >/dev/null 2>&1; then command -v "${name}"; return 0; fi
+    [ -n "${alt}" ] && command -v "${alt}" >/dev/null 2>&1 && { command -v "${alt}"; return 0; }
+    return 1
+}
+
+activate_engine_libs() { # bundle libaio etc. for generic tarball builds
+    for base in "${MARIADB_OPT_BASE}" "${MYSQL_OPT_BASE}"; do
+        if [ -d "${base}/lib-extra" ]; then
+            export LD_LIBRARY_PATH="${base}/lib-extra:${LD_LIBRARY_PATH:-}"
+        fi
+    done
+}
+
 init_mariadb_mysql() {
+    activate_engine_libs
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
@@ -17,6 +46,11 @@ init_mariadb_mysql() {
 
     local socket_path="${socket_dir}/mysql.sock"
     local pid_path="${socket_dir}/mysql.pid"
+
+    # Version-installed engine root (basedir) when present
+    local engine_basedir=""
+    [ -x "${MARIADB_OPT_BASE}/bin/mariadbd" ] && engine_basedir="${MARIADB_OPT_BASE}"
+    [ -x "${MYSQL_OPT_BASE}/bin/mysqld" ] && engine_basedir="${MYSQL_OPT_BASE}"
 
     # Clean up any stale sockets or pid files from unclean shutdowns
     rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "${data_dir}/*.pid" 2>/dev/null || true
@@ -31,13 +65,14 @@ init_mariadb_mysql() {
         export TUNED_MYSQL_MAX_CONN="${MAX_CONNECTIONS:-150}"
     fi
 
-    # Generate custom my.cnf if not present
+    # Generate custom my.cnf if not present (or regenerate when basedir appeared)
     if [ ! -f "${my_cnf}" ]; then
         log "Generating performance-tuned my.cnf configuration..."
         cat <<EOF > "${my_cnf}"
 [mysqld]
 port=${SERVER_PORT}
-bind-address=0.0.0.0
+bind-address=${BIND_ADDRESS:-0.0.0.0}
+${engine_basedir:+basedir=${engine_basedir}}
 datadir=${data_dir}
 socket=${socket_path}
 pid-file=${pid_path}
@@ -79,6 +114,10 @@ EOF
         ok "Created ${my_cnf}"
     else
         sed -i "s/^port=.*/port=${SERVER_PORT}/g" "${my_cnf}" 2>/dev/null || true
+        sed -i "s|^bind-address=.*|bind-address=${BIND_ADDRESS:-0.0.0.0}|g" "${my_cnf}" 2>/dev/null || true
+        if [ -n "${engine_basedir}" ] && ! grep -q '^basedir=' "${my_cnf}" 2>/dev/null; then
+            printf 'basedir=%s\n' "${engine_basedir}" >> "${my_cnf}"
+        fi
     fi
 
     # Check if data directory is initialized
@@ -90,15 +129,35 @@ EOF
         local init_out=""
         local init_ok=0
 
-        if command -v mariadb-install-db >/dev/null 2>&1; then
-            init_out=$(mariadb-install-db --basedir=/usr --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db 2>&1) && init_ok=1
-            if [ ${init_ok} -eq 0 ]; then
-                init_out=$(mariadb-install-db --datadir="${data_dir}" --skip-test-db 2>&1) && init_ok=1
+        local install_db_bin=""
+        install_db_bin=$(find_mariadb_bin "mariadb-install-db" "mysql_install_db") || install_db_bin=""
+
+        local basedir_arg="--basedir=/usr"
+        local engine_basedir=""
+        [ -x "${MARIADB_OPT_BASE}/bin/mariadbd" ] && engine_basedir="${MARIADB_OPT_BASE}"
+        [ -x "${MYSQL_OPT_BASE}/bin/mysqld" ] && engine_basedir="${MYSQL_OPT_BASE}"
+        [ -n "${engine_basedir}" ] && basedir_arg="--basedir=${engine_basedir}"
+
+        if [ -n "${install_db_bin}" ]; then
+            case "$(basename "${install_db_bin}")" in
+                mariadb-install-db)
+                    init_out=$("${install_db_bin}" ${basedir_arg} --datadir="${data_dir}" --auth-root-authentication-method=normal --skip-test-db 2>&1) && init_ok=1
+                    if [ ${init_ok} -eq 0 ]; then
+                        init_out=$("${install_db_bin}" --datadir="${data_dir}" --skip-test-db 2>&1) && init_ok=1
+                    fi
+                    ;;
+                mysql_install_db)
+                    init_out=$("${install_db_bin}" ${basedir_arg} --datadir="${data_dir}" 2>&1) && init_ok=1
+                    ;;
+            esac
+        fi
+
+        if [ ${init_ok} -eq 0 ]; then
+            local mysqld_init_bin
+            mysqld_init_bin=$(find_mariadb_bin "mariadbd" "mysqld") || mysqld_init_bin=""
+            if [ -n "${mysqld_init_bin}" ] && basename "${mysqld_init_bin}" | grep -q "^mysqld$"; then
+                init_out=$("${mysqld_init_bin}" --initialize-insecure ${basedir_arg} --datadir="${data_dir}" 2>&1) && init_ok=1
             fi
-        elif command -v mysql_install_db >/dev/null 2>&1; then
-            init_out=$(mysql_install_db --basedir=/usr --datadir="${data_dir}" 2>&1) && init_ok=1
-        elif command -v mysqld >/dev/null 2>&1; then
-            init_out=$(mysqld --initialize-insecure --basedir=/usr --datadir="${data_dir}" 2>&1) && init_ok=1
         fi
 
         if [ -d "${data_dir}/mysql" ] || [ -f "${data_dir}/ibdata1" ]; then
@@ -114,8 +173,11 @@ EOF
     # If first run, apply security hardening and user creation
     if [ "${first_run}" -eq 1 ]; then
         log "Configuring users, root password, and security policies..."
-        local daemon_bin="mysqld"
-        command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
+        local daemon_bin
+        daemon_bin=$(find_mariadb_bin "mariadbd" "mysqld") || {
+            error "Neither mariadbd nor mysqld could be located."
+            fail "MariaDB/MySQL daemon binary is unavailable."
+        }
 
         local init_log="${SERVER_DIR}/logs/mariadb_init.log"
         "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --socket="${socket_path}" > "${init_log}" 2>&1 &
@@ -137,8 +199,8 @@ EOF
         done
 
         if [ -S "${socket_path}" ]; then
-            local client_bin="mysql"
-            command -v mariadb >/dev/null 2>&1 && client_bin="mariadb"
+            local client_bin
+            client_bin=$(find_mariadb_bin "mariadb" "mysql") || client_bin="mysql"
 
             "${client_bin}" -u root --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
 DELETE FROM mysql.user WHERE User='';
@@ -182,9 +244,13 @@ EOSQL
 }
 
 start_mariadb_mysql() {
+    activate_engine_libs
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local socket_dir="/tmp/.db-sockets"
+    local socket_path="${socket_dir}/mysql.sock"
+    local pid_path="${socket_dir}/mysql.pid"
 
     # Self-healing check: if configuration or data is missing, run init
     if [ ! -f "${my_cnf}" ] || [ ! -d "${data_dir}/mysql" ]; then
@@ -192,18 +258,20 @@ start_mariadb_mysql() {
         init_mariadb_mysql
     fi
 
-    local daemon_bin="mysqld"
-    command -v mariadbd >/dev/null 2>&1 && daemon_bin="mariadbd"
+    local daemon_bin
+    daemon_bin=$(find_mariadb_bin "mariadbd" "mysqld") || {
+        error "MariaDB/MySQL daemon binary not found in container."
+        error "Please ensure your server uses the official image: ghcr.io/potenfyr-studios/database-eggs:*"
+        fail "Daemon binary is unavailable."
+    }
 
-    if ! command -v "${daemon_bin}" >/dev/null 2>&1; then
-        error "MariaDB/MySQL daemon binary '${daemon_bin}' not found in container PATH."
-        error "Please ensure your server uses the universal image: ghcr.io/potenfyr-studios/database-eggs:latest"
-        fail "Daemon binary '${daemon_bin}' is unavailable."
-    fi
+    # Surface the actual engine version being started (no silent downgrades)
+    local actual_version
+    actual_version=$("${daemon_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+(-MariaDB)?' | head -n1)
 
     # Remove stale sockets before launching
     rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "/tmp/.db-sockets/mysql.sock" 2>/dev/null || true
 
-    log "Starting ${PROJECT_TYPE^^} on 0.0.0.0:${SERVER_PORT}..."
+    log "Starting ${PROJECT_TYPE^^} ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}..."
     exec "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-}
 }

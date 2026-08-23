@@ -1,6 +1,6 @@
 # Database Eggs
 
-One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **20+ database engines** across all versions (SQL, In-Memory Caching, Document NoSQL, Multi-Model, Search, AI Vector stores, and S3-compatible Object Storage) with cryptographically strong automated secrets, dynamic performance auto-tuning, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Jexactyl, PufferPanel**, and native Docker.
+One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **55+ database engines** at **any upstream version** (SQL, NoSQL, In-Memory, Vector, Search, Graph, Time-Series, Object Storage) — versions install isolated inside your container on demand from startup variables. Switching engine or major version never deletes previous data. Cryptographically strong automated secrets, dynamic performance auto-tuning, automatic panel detection, deep crash diagnostics, and cross-panel compatibility across **Pterodactyl, Pelican Panel, Feather Panel, Wisp, Convoy, Cytopanel, Jexactyl, PufferPanel**, Kubernetes/OpenShift, and native Docker.
 
 ```text
    __  ___      ____  _       ____  ____     
@@ -36,13 +36,15 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 
 ## Features
 
-- **Universal Single Egg (`egg-database-multi.json`)**: Switch between MariaDB, PostgreSQL, Redis, MongoDB, SurrealDB, Meilisearch, PocketBase, and 15+ other databases simply by changing one variable.
-- **All-Version Support (`DB_VERSION`)**: Deploy any version tag (such as `10.11`, `16`, `7.2`, `v2.0.4`, `0.25.0`, `latest`) or direct custom binary download URLs.
-- **Cryptographically Strong Automated Secrets**: Whenever passwords or secrets are left blank or set to `auto`, the system automatically generates high-entropy, 32+ character random credentials using `/dev/urandom` and OpenSSL (~190 bits of entropy).
-- **Dynamic Performance Auto-Tuning**: Automatically calculates optimal buffer pool sizes, cache limits, worker threads, and connection limits based on allocated server memory (`SERVER_MEMORY`) and CPU cores.
-- **Production Security Hardening**: Enforces SCRAM-SHA-256 password hashing for PostgreSQL, removes anonymous and test accounts for MySQL/MariaDB, disables dangerous debug commands in Redis, and locks down permissions to `chmod 600` and `chmod 700`.
-- **Protected Credential Persistence**: Generated secrets and connection parameters are saved strictly in `.env` (mode `600`) and exported to the startup environment, while remaining fully masked in console logs.
-- **True Cross-Panel Universal Compatibility**: First-class support for **Pterodactyl (0.7, 1.x)**, **Pelican Panel**, **Feather Panel**, **Wisp**, **Jexactyl**, **PufferPanel**, and native Docker.
+- **Universal Single Egg (`egg-database-multi.json`) + Single Image**: One egg, one container image. Pick any of 55+ engines via `DATABASE_TYPE`; everything installs inside your own container volume — nothing touches the host.
+- **Exact-Version Contract (`DB_VERSION`)**: Set `18`, `11.4`, `8.0`, `latest`, or a full version — the runtime provisions exactly that engine version and **refuses to silently run a different one** (`STRICT_VERSION=1` default). `latest` resolves dynamically upstream at every boot; series like `16` auto-resolve to the newest patch.
+- **Non-Destructive Version Switching**: Data lives in per-instance folders (`data/<engine>/<version>/`). Same-series boots reuse the identical instance; breaking major switches create a fresh instance and clearly print where old data is preserved. Nothing is ever deleted automatically.
+- **Automatic Panel Detection**: Identifies Pterodactyl, Pelican, Feather/Wings-family, Wisp, Convoy, Kubernetes/OpenShift, or plain Docker from environment signals and shows it on the startup card.
+- **Deep Crash Diagnostics**: Any failure writes a sanitized crash report (stack trace, last command, env snapshot with secrets masked, recent engine logs, disk/network state) to `logs/startup_error.log` / `logs/installer.log`.
+- **Cryptographically Strong Automated Secrets**: `auto`/blank passwords become 32+ char high-entropy secrets (~190 bits) persisted in `.env` (mode `600`), never logged.
+- **Dynamic Performance Auto-Tuning**: Buffer pools, caches, workers, and connection limits computed from allocated RAM/CPU.
+- **Production Security Hardening**: SCRAM-SHA-256 for PostgreSQL, anonymous/test account purge for MySQL/MariaDB, Redis `DEBUG` removal, MongoDB authorization, checksum-verified downloads, loopback-only secondary ports (consoles/admin UIs) unless explicitly allocated.
+- **Lightweight & Fleet-Friendly**: Version stamps skip re-downloads, extracted packages are pruned of docs/test-suites, disk preflight warns before big installs, `SKIP_VERSION_INSTALL=1` enables air-gapped boot using system binaries.
 
 ---
 
@@ -71,7 +73,41 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 | **VictoriaMetrics** | `victoriametrics` | `latest`, `v1.90` -> `v1.108.x` | `8428` | High-efficiency Prometheus-compatible time-series database. |
 | **Neo4j** | `neo4j` | `latest`, `5.x` | `7474` | Leading Graph database with Cypher query language and Browser UI. |
 | **Apache CouchDB** | `couchdb` | `latest`, `3.3.x` | `5984` | JSON document database with HTTP/REST API and Fauxton dashboard. |
+| **CockroachDB** | `cockroachdb` | `latest`, `23.2`, `24.3`, `25.x` | `26257` | Distributed survivable SQL (single-node mode; `COCKROACH_SECURE=1` for certs). |
+| **YugabyteDB** | `yugabytedb` | `latest`, `2.20`, `2024.x` | `5433` | PostgreSQL-compatible distributed SQL with YSQL API on your allocation. |
+| **TiDB** | `tidb` | `latest`, `7.5`, `8.5` | `4000` | MySQL-compatible HTAP database using embedded unistore storage. |
+| **Dolt** | `dolt` | `latest`, `1.x` | `3306` | MySQL-compatible SQL database with version-controlled data (branches/diffs). |
+| **libSQL (sqld)** | `sqld` | `latest`, `0.x` | `8080` | SQLite fork server with HTTP API (Turso-compatible). |
+| **Etcd** | `etcd` | `latest`, `3.5.x` | `2379` | Distributed key-value store for configuration & service discovery (v3 API). |
+| **NATS** | `nats` | `latest`, `2.10.x` | `4222` | High-performance messaging with embedded JetStream KV/Object stores. |
+| **Immudb** | `immudb` | `latest`, `1.9.x` | `3322` | Tamper-proof immutable ledger database with cryptographic proofs. |
+| **Dgraph** | `dgraph` | `latest`, `21.x`, `24.x` | `8080` | Native GraphQL graph database (Zero+Alpha on one allocation). |
+| **ArangoDB** | `arangodb` | `latest`, `3.12.x` | `8529` | Multi-model (document/graph/key-value) with AQL query language. |
+| **OrientDB** | `orientdb` | `latest`, `3.2.x` | `2424` | Multi-model NoSQL with SQL-like queries and graph support (Java auto-injected). |
+| **RavenDB** | `ravendb` | `latest`, `6.x`, `7.x` | `8080` | ACID NoSQL document database with full-text search (self-contained runtime). |
+| **Cassandra** | `cassandra` | `latest`, `4.1`, `5.0` | `9042` | Wide-column distributed NoSQL with CQL (JRE 17 auto-injected). |
+| **Aerospike** | `aerospike` | `latest`, `7.x` | `3000` | High-performance real-time NoSQL with in-memory storage engine. |
+| **RethinkDB** | `rethinkdb` | `latest`, `2.4.x` | `28015` | Real-time JSON database with changefeeds and ReQL. |
+| **Elasticsearch** | `elasticsearch` | `latest`, `8.x`, `9.x` | `9200` | Distributed RESTful search & analytics (single-node, bundled JDK). |
+| **OpenSearch** | `opensearch` | `latest`, `2.x` | `9200` | AWS-forked Elasticsearch successor with OpenSearch Dashboards support. |
+| **Solr** | `solr` | `latest`, `9.x` | `8983` | Enterprise Lucene-based search platform with faceting & highlighting. |
+| **Manticore Search** | `manticoresearch` | `latest`, `6.x`, `7.x` | `9306` | Fast open-source search (MySQL protocol listener on loopback by default). |
+| **Milvus** | `milvus` | `latest`, `2.4.x` | `19530` | Cloud-native vector database for AI similarity search (standalone). |
+| **Weaviate** | `weaviate` | `latest`, `1.2x` | `8080` | GraphQL-vector hybrid search engine with modular vectorizers. |
+| **Quickwit** | `quickwit` | `latest`, `0.8.x` | `7280` | Sub-second search on object storage / logs analytics engine. |
+| **QuestDB** | `questdb` | `latest`, `8.x` | `9000` | High-performance time-series with InfluxDB-line & PostgreSQL protocols. |
+| **SeaweedFS** | `seaweedfs` | `latest`, `3.x` | `9333` | Fast distributed object store (volume API on allocation, S3 optional). |
+| **Garage** | `garage` | `latest`, `1.x` | `3900` | Lightweight geo-distributed S3-compatible object storage (single node). |
 | **Custom** | `custom` | Custom direct download URL | Any | Execute any custom database daemon via `CUSTOM_COMMAND`. |
+
+> **Single-port policy**: panels allocate ONE port per server. Only each engine's primary protocol binds your allocation (`0.0.0.0`). Secondary services (admin UIs, consoles, cluster ports) default to `127.0.0.1` inside the container and can be exposed via explicit variables (`CONSOLE_PORT`, `TCP_PORT`, `NEO4J_HTTP_PORT`, etc.).
+
+### Version Selection & Data Instance Safety
+
+- `DB_VERSION=latest` → newest upstream release, resolved fresh every boot.
+- `DB_VERSION=18` or `11.4` → newest patch of that series.
+- `DB_VERSION=8.0.45` → exact version.
+- Data instances are isolated: `data/<engine>/<series>/`. Switching majors creates a NEW instance — old data stays untouched and the console tells you its path so you can migrate or delete it manually when ready.
 
 ---
 
@@ -219,32 +255,23 @@ The test suite validates:
 
 ```
 Database-Eggs/
-├── egg-database-multi.json         # Universal multi-database egg (import into panel)
-├── eggs/                           # Dedicated standalone eggs
-│   ├── egg-mariadb.json
-│   ├── egg-postgresql.json
-│   ├── egg-redis.json
-│   ├── egg-mongodb.json
-│   ├── egg-surrealdb.json
-│   ├── egg-meilisearch.json
-│   ├── egg-pocketbase.json
-│   ├── egg-minio.json
-│   └── egg-qdrant.json
+├── egg-database-multi.json         # THE universal egg (single egg, 55+ engines, any version)
 ├── Dockerfile                      # Multi-arch universal container image
-├── entrypoint.sh                   # Container entrypoint & credential generator
-├── run.sh                          # Universal database launcher & dispatcher
+├── entrypoint.sh                   # Entrypoint: panel detection, secrets, crash diagnostics
+├── run.sh                          # Universal launcher: version contract + data instances
 ├── install.sh                      # Universal installation script
 ├── scripts/                        # Modular engine & tuning handlers
 │   ├── password-gen.sh             # Cryptographic secret & password generator
 │   ├── performance-tuning.sh       # Dynamic RAM & CPU performance auto-tuner
-│   ├── install-db-version.sh       # Multi-version downloader & installer
+│   ├── install-db-version.sh       # 55+ engine version installer (latest resolver)
 │   ├── db-init-mariadb.sh          # MariaDB & MySQL handler
-│   ├── db-init-postgres.sh         # PostgreSQL handler
-│   ├── db-init-redis.sh            # Redis, Valkey, KeyDB, Dragonfly handler
+│   ├── db-init-postgres.sh         # PostgreSQL handler (13-18+)
+│   ├── db-init-redis.sh            # Redis, Valkey, KeyDB, Dragonfly, Memcached
 │   ├── db-init-mongo.sh            # MongoDB & FerretDB handler
 │   ├── db-init-surreal.sh          # SurrealDB handler
-│   ├── db-init-search.sh           # Meilisearch, Typesense, Qdrant handler
-│   └── db-init-storage.sh          # PocketBase, MinIO, InfluxDB handler
+│   ├── db-init-search.sh           # Meili, Typesense, Qdrant, ES, OpenSearch, Solr...
+│   ├── db-init-storage.sh          # PocketBase, MinIO, ClickHouse, QuestDB, Garage...
+│   └── db-init-extra.sh            # CockroachDB, TiDB, Dolt, Etcd, NATS, Cassandra...
 ├── tests/                          # Automated Docker verification suites
 │   ├── test-docker.sh              # Universal bash Docker verification test suite
 │   └── test-docker.ps1             # PowerShell Docker test runner for Windows

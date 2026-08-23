@@ -7,21 +7,12 @@
     "exported_at": "2026-08-22T04:00:00+00:00",
     "name": "Multi Database",
     "author": "potenfyr@potenfyr.com",
-    "description": "One egg. Every database. Every version. Every panel. Supports 20+ SQL, NoSQL, In-Memory, Vector, Time-Series, and Search databases with automated cryptographic strong passwords, dynamic performance auto-tuning, and instant cross-panel deployment.",
+    "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
     "features": [
         "pid_limit"
     ],
     "docker_images": {
-        "Universal (All Databases)": "ghcr.io/potenfyr-studios/database-eggs:latest",
-        "MySQL / MariaDB (Lean)": "ghcr.io/potenfyr-studios/database-eggs:mysql",
-        "PostgreSQL 16+ (Lean)": "ghcr.io/potenfyr-studios/database-eggs:postgres",
-        "MongoDB (Lean)": "ghcr.io/potenfyr-studios/database-eggs:mongodb",
-        "Redis / In-Memory (Lean)": "ghcr.io/potenfyr-studios/database-eggs:redis",
-        "Meilisearch (Lean)": "ghcr.io/potenfyr-studios/database-eggs:meilisearch",
-        "ClickHouse (Lean)": "ghcr.io/potenfyr-studios/database-eggs:clickhouse",
-        "SQLite / Litestream (Lean)": "ghcr.io/potenfyr-studios/database-eggs:sqlite",
-        "Pterodactyl Debian (Fallback)": "ghcr.io/pterodactyl/yolks:debian",
-        "Ubuntu 22.04 LTS": "ubuntu:22.04"
+        "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
     },
     "file_denylist": [],
     "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | bash; fi",
@@ -41,7 +32,7 @@
     "variables": [
         {
             "name": "Database Type",
-            "description": "Select the database engine to run.\nOptions: mariadb, mysql, postgresql, redis, valkey, keydb, dragonfly, memcached, mongodb, ferretdb, couchdb, surrealdb, meilisearch, typesense, qdrant, influxdb, clickhouse, victoriametrics, pocketbase, minio, neo4j, custom",
+            "description": "Engine to run (installed isolated inside the container on demand).\nSQL: mariadb, mysql, postgresql, cockroachdb, yugabytedb, tidb, dolt\nNoSQL: mongodb, ferretdb, arangodb, orientdb, ravendb, cassandra, aerospike, rethinkdb\nIn-Memory: redis, valkey, keydb, dragonfly, memcached, etcd, nats, immudb\nVector/Search: meilisearch, typesense, qdrant, elasticsearch, opensearch, solr, manticoresearch, milvus, weaviate, quickwit\nTime-Series/Storage: influxdb, clickhouse, victoriametrics, questdb, seaweedfs, garage, minio, pocketbase\nGraph/Ledger: neo4j, dgraph, surrealdb | Misc: sqld, custom",
             "env_variable": "DATABASE_TYPE",
             "default_value": "mariadb",
             "user_viewable": true,
@@ -51,12 +42,22 @@
         },
         {
             "name": "Database Version",
-            "description": "Version to install or run (e.g. latest, 10.11, 16, 7.2, 2.0.4, or a direct binary download URL).",
+            "description": "Version to run. 'latest' auto-resolves upstream newest. Series like 18 or 11.4 resolve to the latest patch automatically; full versions (8.0.45) are used as-is. Switching majors never deletes old data - a fresh data/<engine>/<version> instance is created and the old one is preserved.",
             "env_variable": "DB_VERSION",
             "default_value": "latest",
             "user_viewable": true,
             "user_editable": true,
             "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Strict Version Enforcement",
+            "description": "1 = refuse to start if the exact requested version cannot be provided (no silent downgrades). 0 = warn and fall back to best available binary.",
+            "env_variable": "STRICT_VERSION",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
             "field_type": "text"
         },
         {

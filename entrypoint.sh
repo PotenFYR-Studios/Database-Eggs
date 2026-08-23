@@ -15,6 +15,8 @@ C_MAGENTA='\033[35m'
 C_BLUE='\033[34m'
 C_DIM='\033[2m'
 
+export C_RESET C_BOLD C_CYAN C_GREEN C_YELLOW C_RED C_MAGENTA C_BLUE C_DIM
+
 PANEL_NAME="${PANEL_NAME:-${P_SERVER_UUID:+pterodactyl}}"
 PANEL_NAME="${PANEL_NAME:-panel}"
 
@@ -24,12 +26,80 @@ warn()  { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_YELLO
 error() { printf "${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[error]${C_RESET} %s\n" "$*" >&2; }
 fail()  {
     printf "\n${C_CYAN}${C_BOLD}container@${PANEL_NAME}~${C_RESET} ${C_RED}${C_BOLD}[fatal error]${C_RESET} %s\n\n" "$*" >&2
-    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
-    printf '[%s] FATAL: %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*" >> "${SERVER_DIR:-.}/logs/startup_error.log" 2>/dev/null || true
+    write_crash_report "$*" "${LINENO:-0}" "${BASH_COMMAND:-?}"
     # Pause briefly so user can see the error in the panel console before container exits
     sleep 8
     exit 1
 }
+
+# -----------------------------------------------------------------------------
+# Deep Crash Diagnostics (sanitized stack trace + environment snapshot)
+# -----------------------------------------------------------------------------
+write_crash_report() {
+    local reason="$1" line_no="${2:-0}" last_cmd="${3:-?}"
+    mkdir -p "${SERVER_DIR:-.}/logs" 2>/dev/null || true
+    local report="${SERVER_DIR:-.}/logs/startup_error.log"
+    {
+        printf '\n=== CRASH REPORT (%s) ===\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')"
+        printf 'Panel       : %s (%s)\n' "${PANEL_NAME:-unknown}" "${PANEL_TYPE:-unknown}"
+        printf 'Reason      : %s\n' "$reason"
+        printf 'Exit Line   : entrypoint.sh:L%s\n' "${line_no}"
+        printf 'Last Command: %s\n' "$(printf '%s' "${last_cmd}" | sed -E 's/(PASSWORD|PASSWD|SECRET|TOKEN|KEY)([A-Z_]*=)[^ ]+/\1\2<masked>/gI')"
+        printf 'Engine      : %s (requested v%s)\n' "${PROJECT_TYPE:-${DB_TYPE:-?}}" "${DB_VERSION:-latest}"
+        printf 'Port/Mem    : %s / %s MB\n' "${SERVER_PORT:-?}" "${SERVER_MEMORY:-?}"
+        printf 'UID:GID     : %s:%s | Arch: %s\n' "$(id -u 2>/dev/null || echo ?)" "$(id -g 2>/dev/null || echo ?)" "$(uname -m)"
+        printf 'Disk Free   : %s\n' "$(df -h "${SERVER_DIR:-.}" 2>/dev/null | awk 'NR==2{print $4}')"
+        printf 'Stack:\n'
+        local i=1
+        while [ ${i} -lt ${#FUNCNAME[@]} ] 2>/dev/null; do
+            printf '  #%d %s (called from line %s)\n' "$((i-1))" "${FUNCNAME[${i}]:-main}" "${BASH_LINENO[$((i-1))]:-?}" 2>/dev/null || break
+            i=$((i+1))
+        done
+        printf 'Environment (sanitized):\n'
+        env | sort | grep -viE 'PASSWORD|PASSWD|SECRET|TOKEN|_KEY|CREDENTIAL' | sed 's/^/  /' 2>/dev/null || true
+        printf 'Recent engine logs:\n'
+        for lf in "${SERVER_DIR:-.}/logs"/*.log; do
+            [ -f "${lf}" ] && { printf -- '--- %s ---\n' "$(basename "${lf}")"; tail -n 15 "${lf}" 2>/dev/null; }
+        done
+        printf '==============================\n'
+    } >> "${report}" 2>/dev/null || true
+}
+
+# -----------------------------------------------------------------------------
+# Universal Panel Detection (Pterodactyl, Pelican, Feather, Wisp, Convoy,
+# Cytopanel, Arcadia, Kubernetes/OpenShift, plain Docker, anything else)
+# -----------------------------------------------------------------------------
+detect_panel() {
+    PANEL_TYPE="standalone"
+    PANEL_NAME="panel"
+
+    if [ -n "${PANEL_TYPE_OVERRIDE:-}" ]; then
+        PANEL_TYPE="${PANEL_TYPE_OVERRIDE}"
+    elif [ -n "${P_SERVER_UUID:-}" ] || [ -n "${P_SERVER_LOCATION:-}" ]; then
+        PANEL_TYPE="pelican"          # Wings v2 environment variables
+    elif [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
+        if [ -n "${OPENSHIFT_BUILD_NAME:-}" ]; then
+            PANEL_TYPE="openshift"
+        else
+            PANEL_TYPE="kubernetes"
+        fi
+    elif [ -n "${WISP_SERVER_UUID:-}" ] || [ -d "/.wisp" ]; then
+        PANEL_TYPE="wisp"
+    elif [ -n "${CONVOY_SERVER_UUID:-}" ]; then
+        PANEL_TYPE="convoy"
+    elif [ -d /mnt/server ] && [ ! -d /home/container ]; then
+        PANEL_TYPE="pterodactyl"      # classic wings mount layout
+    elif [ -d /home/container ]; then
+        PANEL_TYPE="wings-family"     # Pterodactyl/Pelican/Feather/Cytopanel compatible daemon
+    fi
+
+    PANEL_NAME="${PANEL_NAME_ENV:-}"
+    [ -z "${PANEL_NAME}" ] && [ "${PANEL_TYPE}" = "pelican" ] && PANEL_NAME="pelican"
+    [ -z "${PANEL_NAME}" ] && [ -n "${P_SERVER_UUID:-}" ] && PANEL_NAME="pterodactyl"
+    [ -z "${PANEL_NAME}" ] && PANEL_NAME="${PANEL_TYPE}"
+    export PANEL_TYPE PANEL_NAME
+}
+detect_panel
 
 # Diagnostic Error Trap
 error_trap() {
@@ -113,12 +183,12 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
         REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
-            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
+            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh; do
                 curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${RUNTIME_DIR}/${h}" 2>/dev/null || true
             done
         elif command -v wget >/dev/null 2>&1; then
             wget -qO "${RUNTIME_DIR}/run.sh" "${REPO_BASE}/run.sh" 2>/dev/null || true
-            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh; do
+            for h in companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh; do
                 wget -qO "${RUNTIME_DIR}/${h}" "${REPO_BASE}/scripts/${h}" 2>/dev/null || true
             done
         fi
@@ -134,7 +204,7 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ] && [ ! -f /usr/local/bin/run.sh ] && [ ! -f 
     fail "Fatal: Runtime launcher unavailable."
 fi
 
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${RUNTIME_DIR}:/usr/local/bin:${PATH}"
+export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:${SERVER_DIR}/bin:${RUNTIME_DIR}:/usr/local/bin:${PATH}"
 
 # Source performance and helper scripts safely
 [ -f "${RUNTIME_DIR}/performance-tuning.sh" ] && source "${RUNTIME_DIR}/performance-tuning.sh" 2>/dev/null || true
@@ -151,6 +221,14 @@ SERVER_MEMORY="${SERVER_MEMORY:-${MEMORY:-${MEM_SIZE:-${P_SERVER_MEMORY:-1024}}}
 export SERVER_MEMORY
 SERVER_IP="${SERVER_IP:-${IP:-${P_SERVER_IP:-0.0.0.0}}}"
 export SERVER_IP
+
+# Customizable bind address (security: bind to INTERNAL_IP in shared infra)
+BIND_ADDRESS="${BIND_ADDRESS:-${LISTEN_HOST:-0.0.0.0}}"
+export BIND_ADDRESS
+
+# Security profile: strict (default) enables hardened defaults everywhere
+SECURITY_LEVEL="${SECURITY_LEVEL:-strict}"
+export SECURITY_LEVEL
 
 INTERNAL_IP=$(ip route get 1 2>/dev/null | awk '{print $(NF-2);exit}' 2>/dev/null || echo "${SERVER_IP}")
 export INTERNAL_IP
@@ -301,9 +379,10 @@ printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
 # Runtime Environment Card
 printf "${C_CYAN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
 printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Listen Address" "0.0.0.0:${SERVER_PORT}"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Listen Address" "${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}"
 printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
 printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
+printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Detected Panel" "${PANEL_TYPE:-standalone}"
 printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
 printf "${C_CYAN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
 
