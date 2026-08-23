@@ -6,7 +6,7 @@
     },
     "exported_at": "2026-08-22T04:00:00+00:00",
     "name": "Multi Database",
-    "author": "potenfyr@potenfyr.com",
+    "author": "support@potenfyr.in",
     "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
     "features": [
         "pid_limit"
