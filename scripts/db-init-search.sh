@@ -9,8 +9,33 @@ init_search_family() {
     chmod 700 "${data_dir}" 2>/dev/null || true
 }
 
+stop_search_family() {
+    local pid="$1"
+    case "${PROJECT_TYPE}" in
+        solr)
+            local solr_base="${SERVER_DIR}/opt/solr"
+            if [ -x "${solr_base}/bin/solr" ]; then
+                "${solr_base}/bin/solr" stop -p "${SERVER_PORT}" >/dev/null 2>&1 || true
+            fi
+            ;;
+        manticoresearch|manticore)
+            local mc_bin="${SERVER_DIR}/bin/searchd"
+            [ -x "${mc_bin}" ] || mc_bin="$(command -v searchd 2>/dev/null || true)"
+            local mc_conf="${SERVER_DIR}/config/manticore.conf"
+            if [ -n "${mc_bin}" ] && [ -f "${mc_conf}" ]; then
+                "${mc_bin}" --config "${mc_conf}" --stop >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_search_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local daemon_pid=""
 
     case "${PROJECT_TYPE}" in
         meilisearch)
@@ -30,8 +55,6 @@ start_search_family() {
             fi
 
             # Self-heal: a valid Meili database always contains a VERSION file.
-            # If the instance dir holds foreign/partial residue (interrupted
-            # first boot, stale engine switch), clear it so a fresh DB initializes.
             if [ -d "${data_dir}" ] && [ ! -f "${data_dir}/VERSION" ] && [ -n "$(ls -A "${data_dir}" 2>/dev/null)" ]; then
                 warn "Meilisearch instance dir has no VERSION marker; clearing stale residue for clean init."
                 rm -rf "${data_dir:?}/"* "${data_dir:?}"/.[!.]* 2>/dev/null || true
@@ -41,11 +64,12 @@ start_search_family() {
             [ -f "${SERVER_DIR}/config/meilisearch.toml" ] && cfg_arg="--config-file-path ${SERVER_DIR}/config/meilisearch.toml"
 
             log "Starting Meilisearch on 0.0.0.0:${SERVER_PORT}..."
-            exec "${meili_bin}" --http-addr "0.0.0.0:${SERVER_PORT}" \
-                                --db-path "${data_dir}" \
-                                --master-key "${master_key}" \
-                                --env "${MEILI_ENV:-production}" \
-                                ${cfg_arg} ${EXTRA_ARGS:-}
+            "${meili_bin}" --http-addr "0.0.0.0:${SERVER_PORT}" \
+                           --db-path "${data_dir}" \
+                           --master-key "${master_key}" \
+                           --env "${MEILI_ENV:-production}" \
+                           ${cfg_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         typesense)
             local api_key="${TYPESENSE_API_KEY:-${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
@@ -67,11 +91,12 @@ start_search_family() {
             [ -f "${SERVER_DIR}/config/typesense.ini" ] && cfg_arg="--config=${SERVER_DIR}/config/typesense.ini"
 
             log "Starting Typesense on 0.0.0.0:${SERVER_PORT}..."
-            exec "${ts_bin}" --data-dir="${data_dir}" \
-                             --api-port="${SERVER_PORT}" \
-                             --api-key="${api_key}" \
-                             --enable-cors="${ENABLE_CORS:-true}" \
-                             ${cfg_arg} ${EXTRA_ARGS:-}
+            "${ts_bin}" --data-dir="${data_dir}" \
+                        --api-port="${SERVER_PORT}" \
+                        --api-key="${api_key}" \
+                        --enable-cors="${ENABLE_CORS:-true}" \
+                        ${cfg_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         qdrant)
             local qdrant_bin="qdrant"
@@ -100,7 +125,8 @@ start_search_family() {
             export QDRANT__SERVICE__GRPC_PORT="${GRPC_PORT:-$((SERVER_PORT + 1))}"
             export QDRANT__STORAGE__STORAGE_PATH="${data_dir}"
             [ -n "${DB_PASSWORD:-}" ] && export QDRANT__SERVICE__API_KEY="${DB_PASSWORD}"
-            exec "${qdrant_bin}" ${cfg_arg} ${EXTRA_ARGS:-}
+            "${qdrant_bin}" ${cfg_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         elasticsearch|opensearch)
             local engine_base flavor
@@ -123,7 +149,7 @@ start_search_family() {
             log "Starting ${flavor} on 0.0.0.0:${SERVER_PORT}..."
             cd "${engine_base}" 2>/dev/null || true
             if [ "${PROJECT_TYPE}" = "opensearch" ]; then
-                exec env OPENSEARCH_JAVA_HOME="${engine_base}/jdk" OPENSEARCH_PATH_CONF="${engine_base}/config" \
+                env OPENSEARCH_JAVA_HOME="${engine_base}/jdk" OPENSEARCH_PATH_CONF="${engine_base}/config" \
                     ./bin/opensearch \
                     -E "http.port=${SERVER_PORT}" \
                     -E "network.host=0.0.0.0" \
@@ -131,9 +157,10 @@ start_search_family() {
                     -E "transport.host=127.0.0.1" \
                     -E "path.data=${data_dir}" \
                     -E "plugins.security.disabled=${OPENSEARCH_DISABLE_SECURITY:-true}" \
-                    ${EXTRA_ARGS:-}
+                    ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
             else
-                exec env ES_JAVA_HOME="${engine_base}/jdk" ES_PATH_CONF="${engine_base}/config" \
+                env ES_JAVA_HOME="${engine_base}/jdk" ES_PATH_CONF="${engine_base}/config" \
                     ./bin/elasticsearch \
                     -E "http.port=${SERVER_PORT}" \
                     -E "network.host=0.0.0.0" \
@@ -141,7 +168,8 @@ start_search_family() {
                     -E "transport.host=127.0.0.1" \
                     -E "xpack.security.enabled=${ES_SECURITY_ENABLED:-false}" \
                     -E "path.data=${data_dir}" \
-                    ${EXTRA_ARGS:-}
+                    ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
             fi
             ;;
         solr)
@@ -154,12 +182,13 @@ start_search_family() {
             mkdir -p "${data_dir}"
             log "Starting Solr on 0.0.0.0:${SERVER_PORT}..."
             cd "${solr_base}" 2>/dev/null || true
-            exec ./bin/solr start -f \
+            ./bin/solr start -f \
                 -p "${SERVER_PORT}" \
                 -h "0.0.0.0" \
                 -s "${data_dir}" \
                 -m "${SOLR_HEAP:-${TUNED_SOLR_HEAP:-512m}}" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         manticoresearch|manticore)
             local mc_bin="${SERVER_DIR}/bin/searchd"
@@ -185,7 +214,8 @@ EOF
             fi
             mkdir -p "${SERVER_DIR}/run" "${data_dir}"
             log "Starting Manticore Search on 0.0.0.0:${SERVER_PORT}..."
-            exec "${mc_bin}" --config "${mc_conf}" ${EXTRA_ARGS:-}
+            "${mc_bin}" --config "${mc_conf}" --nodetach ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         milvus)
             local mv_bin="${SERVER_DIR}/bin/milvus"
@@ -197,13 +227,14 @@ EOF
             }
             mkdir -p "${data_dir}/etcd" "${data_dir}/milvus"
             log "Starting Milvus standalone on 0.0.0.0:${SERVER_PORT}..."
-            exec env \
+            env \
                 ETCD_USE_EMBED="true" \
                 ETCD_DATA_DIR="${data_dir}/etcd" \
                 ETCD_CONFIG_PATH="" \
                 COMMON_STORAGETYPE="local" \
                 MILVUS_SERVER_PORT="${SERVER_PORT}" \
-                "${mv_bin}" run standalone ${EXTRA_ARGS:-}
+                "${mv_bin}" run standalone ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         weaviate)
             local wv_bin="${SERVER_DIR}/bin/weaviate"
@@ -214,7 +245,7 @@ EOF
             }
             mkdir -p "${data_dir}"
             log "Starting Weaviate on 0.0.0.0:${SERVER_PORT}..."
-            exec env \
+            env \
                 PERSISTENCE_DATA_PATH="${data_dir}" \
                 AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED="${WEAVIATE_ANONYMOUS_ACCESS:-true}" \
                 DEFAULT_VECTORIZER_MODULE="${WEAVIATE_VECTORIZER:-none}" \
@@ -224,7 +255,8 @@ EOF
                 "${wv_bin}" \
                 --port "${SERVER_PORT}" \
                 --host "0.0.0.0" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         quickwit)
             local qw_bin="${SERVER_DIR}/bin/quickwit"
@@ -235,15 +267,18 @@ EOF
             }
             mkdir -p "${data_dir}/qwdata"
             log "Starting Quickwit on 0.0.0.0:${SERVER_PORT}..."
-            exec env \
+            env \
                 QW_DATA_DIR="${data_dir}/qwdata" \
                 QW_LISTEN_ADDRESS="0.0.0.0" \
                 QW_REST_LISTEN_PORT="${SERVER_PORT}" \
                 QW_METASTORE_URI="${QUICKWIT_METASTORE_URI:-ram://}" \
-                "${qw_bin}" run ${EXTRA_ARGS:-}
+                "${qw_bin}" run ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         *)
             fail "Unknown search/vector engine: ${PROJECT_TYPE}"
             ;;
     esac
+
+    supervise_daemon "${daemon_pid}" "stop_search_family"
 }

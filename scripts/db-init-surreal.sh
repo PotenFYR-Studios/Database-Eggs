@@ -9,6 +9,13 @@ init_surreal_family() {
     chmod 700 "${data_dir}" 2>/dev/null || true
 }
 
+stop_surreal_family() {
+    local pid="$1"
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_surreal_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local storage="${SURREAL_STORAGE:-surrealkv://${data_dir}}"
@@ -19,9 +26,7 @@ start_surreal_family() {
     local pass="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-${SURREAL_PASS:-root}}}"
     local log_level="${SURREAL_LOG:-info}"
 
-    local bin_cmd="surreal"
-    [ -x "${SERVER_DIR}/bin/surreal" ] && bin_cmd="${SERVER_DIR}/bin/surreal"
-    [ -x "${SERVER_DIR}/surreal" ] && bin_cmd="${SERVER_DIR}/surreal"
+    local daemon_pid=""
 
     if [ "${PROJECT_TYPE}" = "rethinkdb" ]; then
         if ! command -v rethinkdb >/dev/null 2>&1; then
@@ -29,12 +34,19 @@ start_surreal_family() {
             fail "RethinkDB binary is unavailable."
         fi
         log "Starting RethinkDB on 0.0.0.0:${SERVER_PORT}..."
-        exec rethinkdb --directory "${data_dir}" \
-                       --bind all \
-                       --driver-port "${SERVER_PORT}" \
-                       --cluster-port "${CLUSTER_PORT:-29015}" \
-                       --http-port "${WEB_PORT:-8080}" ${EXTRA_ARGS:-}
+        rethinkdb --directory "${data_dir}" \
+                  --bind all \
+                  --driver-port "${SERVER_PORT}" \
+                  --cluster-port "${CLUSTER_PORT:-29015}" \
+                  --http-port "${WEB_PORT:-8080}" ${EXTRA_ARGS:-} < /dev/null &
+        daemon_pid=$!
+        supervise_daemon "${daemon_pid}" "stop_surreal_family"
+        return 0
     fi
+
+    local bin_cmd="surreal"
+    [ -x "${SERVER_DIR}/bin/surreal" ] && bin_cmd="${SERVER_DIR}/bin/surreal"
+    [ -x "${SERVER_DIR}/surreal" ] && bin_cmd="${SERVER_DIR}/surreal"
 
     if ! command -v "${bin_cmd}" >/dev/null 2>&1 && [ ! -x "${bin_cmd}" ]; then
         error "SurrealDB binary '${bin_cmd}' not found in container PATH or bin/ directory."
@@ -42,10 +54,12 @@ start_surreal_family() {
     fi
 
     log "Starting SurrealDB on 0.0.0.0:${SERVER_PORT} (Storage: ${storage})..."
-    exec "${bin_cmd}" start --bind "0.0.0.0:${SERVER_PORT}" \
-                            --user "${user}" \
-                            --pass "${pass}" \
-                            --log "${log_level}" \
-                            ${EXTRA_ARGS:-} \
-                            "${storage}"
+    "${bin_cmd}" start --bind "0.0.0.0:${SERVER_PORT}" \
+                       --user "${user}" \
+                       --pass "${pass}" \
+                       --log "${log_level}" \
+                       ${EXTRA_ARGS:-} \
+                       "${storage}" < /dev/null &
+    daemon_pid=$!
+    supervise_daemon "${daemon_pid}" "stop_surreal_family"
 }

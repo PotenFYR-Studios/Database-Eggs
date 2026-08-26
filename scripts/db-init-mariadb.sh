@@ -248,6 +248,24 @@ EOSQL
         ok "Initial configuration complete."
     fi
 }
+ 
+stop_mariadb_mysql() {
+    local pid="$1"
+    local socket_dir="/tmp/.db-sockets"
+    local socket_path="${socket_dir}/mysql.sock"
+    local client_bin
+    client_bin=$(find_mariadb_bin "mariadb-admin" "mysqladmin") || client_bin=""
+
+    # Attempt clean shutdown via admin client if socket is live
+    if [ -n "${client_bin}" ] && [ -S "${socket_path}" ]; then
+        "${client_bin}" -u root ${DB_ROOT_PASSWORD:+-p"${DB_ROOT_PASSWORD}"} --socket="${socket_path}" shutdown >/dev/null 2>&1 || true
+    fi
+
+    # Forward SIGTERM to daemon process if still running
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
 
 start_mariadb_mysql() {
     activate_engine_libs
@@ -279,5 +297,7 @@ start_mariadb_mysql() {
     rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "/tmp/.db-sockets/mysql.sock" 2>/dev/null || true
 
     log "Starting ${PROJECT_TYPE^^} ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}..."
-    exec "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-}
+    "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
+    local daemon_pid=$!
+    supervise_daemon "${daemon_pid}" "stop_mariadb_mysql"
 }

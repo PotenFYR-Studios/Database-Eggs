@@ -54,9 +54,26 @@ EOF
     fi
 }
 
+stop_storage_family() {
+    local pid="$1"
+    case "${PROJECT_TYPE}" in
+        neo4j)
+            local nj_base="${SERVER_DIR}/opt/neo4j"
+            if [ -x "${nj_base}/bin/neo4j" ]; then
+                "${nj_base}/bin/neo4j" stop >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_storage_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
+    local daemon_pid=""
 
     # Self-healing check
     if [ ! -d "${data_dir}" ]; then
@@ -75,7 +92,8 @@ start_storage_family() {
             fi
 
             log "Starting PocketBase on 0.0.0.0:${SERVER_PORT}..."
-            exec "${pb_bin}" serve --http="0.0.0.0:${SERVER_PORT}" --dir="${data_dir}/pb_data" ${EXTRA_ARGS:-}
+            "${pb_bin}" serve --http="0.0.0.0:${SERVER_PORT}" --dir="${data_dir}/pb_data" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         minio)
             local root_user="${MINIO_ROOT_USER:-${DB_USER:-admin}}"
@@ -87,7 +105,6 @@ start_storage_family() {
             if [ -n "${console_port}" ]; then
                 console_arg="--console-address 0.0.0.0:${console_port}"
             else
-                # No extra allocation? Console stays loopback-only inside the container
                 console_arg="--console-address 127.0.0.1:$((SERVER_PORT + 1))"
             fi
 
@@ -101,7 +118,8 @@ start_storage_family() {
             fi
 
             log "Starting MinIO S3 on 0.0.0.0:${SERVER_PORT} (Console: ${console_port:+0.0.0.0:}${console_port:-loopback:$((SERVER_PORT + 1))})..."
-            exec "${minio_bin}" server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" ${console_arg} ${EXTRA_ARGS:-}
+            "${minio_bin}" server "${data_dir}" --address "0.0.0.0:${SERVER_PORT}" ${console_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         influxdb)
             local influx_bin="${SERVER_DIR}/bin/influxd"
@@ -115,7 +133,8 @@ start_storage_family() {
             export INFLUXD_BOLT_PATH="${data_dir}/influxd.bolt"
             export INFLUXD_ENGINE_PATH="${data_dir}/engine"
             export INFLUXD_HTTP_BIND_ADDRESS="0.0.0.0:${SERVER_PORT}"
-            exec "${influx_bin}" ${EXTRA_ARGS:-}
+            "${influx_bin}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         clickhouse)
             local ch_bin="${SERVER_DIR}/bin/clickhouse"
@@ -131,7 +150,8 @@ start_storage_family() {
                 init_storage_family
             fi
             log "Starting ClickHouse Server on 0.0.0.0:${SERVER_PORT}..."
-            exec "${ch_bin}" server --config-file="${conf_dir}/clickhouse.xml" ${EXTRA_ARGS:-}
+            "${ch_bin}" server --config-file="${conf_dir}/clickhouse.xml" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         victoriametrics)
             local vm_bin="victoriametrics"
@@ -144,7 +164,8 @@ start_storage_family() {
             fi
 
             log "Starting VictoriaMetrics on 0.0.0.0:${SERVER_PORT}..."
-            exec "${vm_bin}" -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-}
+            "${vm_bin}" -storageDataPath="${data_dir}" -httpListenAddr="0.0.0.0:${SERVER_PORT}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         couchdb)
             if ! command -v couchdb >/dev/null 2>&1; then
@@ -156,7 +177,8 @@ start_storage_family() {
             log "Starting Apache CouchDB on 0.0.0.0:${SERVER_PORT}..."
             export COUCHDB_USER="${DB_USER:-admin}"
             export COUCHDB_PASSWORD="${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
-            exec couchdb ${cfg_arg} ${EXTRA_ARGS:-}
+            couchdb ${cfg_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         neo4j)
             local nj_base="${SERVER_DIR}/opt/neo4j"
@@ -167,21 +189,19 @@ start_storage_family() {
                 error "Neo4j binary 'neo4j' not found (installer download failed?). See logs/installer.log"
                 fail "Neo4j is unavailable."
             fi
-            # Java provided by ensure_java during install; wire it for runtime too
             if [ -z "${JAVA_HOME:-}" ] && [ -x "${SERVER_DIR}/.runtimes/jdk17/bin/java" ]; then
                 export JAVA_HOME="${SERVER_DIR}/.runtimes/jdk17"
                 export PATH="${JAVA_HOME}/bin:${PATH}"
             fi
             export NEO4J_AUTH="${NEO4J_AUTH:-neo4j/${DB_ROOT_PASSWORD:-${DB_PASSWORD}}}"
-            # Bolt (primary client protocol) uses the single allocated port;
-            # HTTP admin UI stays loopback unless NEO4J_HTTP_PORT is configured.
             log "Starting Neo4j Graph Database (bolt on 0.0.0.0:${SERVER_PORT})..."
             cd "${nj_base}" 2>/dev/null || true
-            exec env \
+            env \
                 NEO4J_server_bolt__listen__address="0.0.0.0:${SERVER_PORT}" \
                 NEO4J_server_http__listen__address="127.0.0.1:${NEO4J_HTTP_PORT:-7474}" \
                 NEO4J_server_default__listen__address="127.0.0.1" \
-                "${neo4j_bin}" console ${EXTRA_ARGS:-}
+                "${neo4j_bin}" console ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         questdb)
             local qd_base="${SERVER_DIR}/bin/questdb"
@@ -190,8 +210,6 @@ start_storage_family() {
                 fail "QuestDB is unavailable."
             }
             mkdir -p "${data_dir}"
-            # Generate server.conf binding HTTP to the allocation port
-            # Only the HTTP API gets the allocated port; ingest/pg protocols stay loopback
             if [ ! -f "${qd_base}/conf/server.conf.potenfyr" ]; then
                 cat <<EOF > "${qd_base}/conf/server.conf.potenfyr"
 http.net.bind.to=0.0.0.0:${SERVER_PORT}
@@ -208,9 +226,10 @@ EOF
             [ -x "${qd_java}" ] || qd_java="$(command -v java 2>/dev/null || echo java)"
             log "Starting QuestDB on 0.0.0.0:${SERVER_PORT}..."
             cd "${qd_base}" 2>/dev/null || true
-            exec "${qd_java}" $( [ -x "${qd_base}/jdk/bin/java" ] && echo "-XX:+UseG1GC" ) \
+            "${qd_java}" $( [ -x "${qd_base}/jdk/bin/java" ] && echo "-XX:+UseG1GC" ) \
                 -Dquestdb.server.conf.file="${qd_base}/conf/server.conf" \
-                -cp "${qd_base}" io.questdb.ServerMain -d "${qd_base}" ${EXTRA_ARGS:-}
+                -cp "${qd_base}" io.questdb.ServerMain -d "${qd_base}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         seaweedfs|weed)
             local weed_bin="${SERVER_DIR}/bin/weed"
@@ -220,9 +239,8 @@ EOF
             }
             mkdir -p "${data_dir}"
             local master_port="${SEAWEED_MASTER_PORT:-$((SERVER_PORT + 1))}" s3_port="${SEAWEED_S3_PORT:-$((SERVER_PORT + 2))}"
-            # Volume API serves the allocation; master/S3 stay on loopback unless extra ports configured
             log "Starting SeaweedFS (volume :${SERVER_PORT}, master :127.0.0.1:${master_port}${SEAWEED_S3_PORT:+, S3 :0.0.0.0:${s3_port}})..."
-            exec "${weed_bin}" server \
+            "${weed_bin}" server \
                 -dir="${data_dir}" \
                 -ip="${INTERNAL_IP:-127.0.0.1}" \
                 -ip.bind="${SEAWEED_BIND_IP:-0.0.0.0}" \
@@ -230,7 +248,8 @@ EOF
                 -volume.port="${SERVER_PORT}" \
                 ${SEAWEED_S3_PORT:+-s3.port="${s3_port}"} \
                 -master.volumeSizeLimitMB="${SEAWEED_VOLUME_LIMIT_MB:-1024}" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         garage)
             local garage_bin="${SERVER_DIR}/bin/garage"
@@ -240,7 +259,6 @@ EOF
             }
             mkdir -p "${data_dir}/meta" "${data_dir}/data" "${SERVER_DIR}/run"
             local garage_conf="${SERVER_DIR}/config/garage.toml"
-            # Only S3 API uses the allocated port; RPC/web/admin stay loopback
             cat <<EOF > "${garage_conf}"
 metadata_dir = "${data_dir}/meta"
 data_dir = "${data_dir}/data"
@@ -265,10 +283,13 @@ api_bind_addr = "127.0.0.1:${GARAGE_ADMIN_PORT:-$((SERVER_PORT + 3))}"
 EOF
             chmod 600 "${garage_conf}"
             log "Starting Garage S3 storage on 0.0.0.0:${SERVER_PORT}..."
-            exec "${garage_bin}" -c "${garage_conf}" server ${EXTRA_ARGS:-}
+            "${garage_bin}" -c "${garage_conf}" server ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         *)
             fail "Unknown storage/analytical engine: ${PROJECT_TYPE}"
             ;;
     esac
+
+    supervise_daemon "${daemon_pid}" "stop_storage_family"
 }

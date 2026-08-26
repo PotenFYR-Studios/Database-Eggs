@@ -1,214 +1,212 @@
 {
-    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
-    "meta": {
-        "version": "PTDL_v2",
-        "update_url": null
+  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2026-08-22T04:00:00+00:00",
+  "name": "Multi Database",
+  "author": "support@potenfyr.in",
+  "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
+  "features": ["pid_limit"],
+  "docker_images": {
+    "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+  },
+  "file_denylist": [],
+  "startup": "if [ -f /entrypoint.sh ]; then exec bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then exec bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then exec bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | exec bash; fi",
+  "config": {
+    "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+    "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+    "stop": "^C",
+    "logs": "{}"
+  },
+  "scripts": {
+    "installation": {
+      "script": "#!/bin/sh\n# PotenFYR Studios - Multi-Database Universal Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
+      "container": "ghcr.io/pterodactyl/installers:alpine",
+      "entrypoint": "ash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Database Type",
+      "description": "Engine to run (installed isolated inside the container on demand).\nSQL: mariadb, mysql, postgresql, cockroachdb, yugabytedb, tidb, dolt\nNoSQL: mongodb, ferretdb, arangodb, orientdb, ravendb, cassandra, aerospike, rethinkdb\nIn-Memory: redis, valkey, keydb, dragonfly, memcached, etcd, nats, immudb\nVector/Search: meilisearch, typesense, qdrant, elasticsearch, opensearch, solr, manticoresearch, milvus, weaviate, quickwit\nTime-Series/Storage: influxdb, clickhouse, victoriametrics, questdb, seaweedfs, garage, minio, pocketbase\nGraph/Ledger: neo4j, dgraph, surrealdb | Misc: sqld, custom",
+      "env_variable": "DATABASE_TYPE",
+      "default_value": "mariadb",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:32",
+      "field_type": "text"
     },
-    "exported_at": "2026-08-22T04:00:00+00:00",
-    "name": "Multi Database",
-    "author": "support@potenfyr.in",
-    "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
-    "features": [
-        "pid_limit"
-    ],
-    "docker_images": {
-        "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
+    {
+      "name": "Database Version",
+      "description": "Version to run. 'latest' auto-resolves upstream newest. Series like 18 or 11.4 resolve to the latest patch automatically; full versions (8.0.45) are used as-is. Switching majors never deletes old data - a fresh data/<engine>/<version> instance is created and the old one is preserved.",
+      "env_variable": "DB_VERSION",
+      "default_value": "latest",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:128",
+      "field_type": "text"
     },
-    "file_denylist": [],
-    "startup": "if [ -f /entrypoint.sh ]; then bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | bash; fi",
-    "config": {
-        "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
-        "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
-        "stop": "^C",
-        "logs": "{}"
+    {
+      "name": "Strict Version Enforcement",
+      "description": "1 = refuse to start if the exact requested version cannot be provided (no silent downgrades). 0 = warn and fall back to best available binary.",
+      "env_variable": "STRICT_VERSION",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
     },
-    "scripts": {
-        "installation": {
-            "script": "#!/bin/sh\n# PotenFYR Studios - Multi-Database Universal Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# Remove any obsolete scripts copied by previous egg versions\nrm -f \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\" 2>/dev/null || true\nrm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
-            "container": "ghcr.io/pterodactyl/installers:alpine",
-            "entrypoint": "ash"
-        }
+    {
+      "name": "Database Name",
+      "description": "The default database/schema to create on startup.",
+      "env_variable": "DB_NAME",
+      "default_value": "database",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
     },
-    "variables": [
-        {
-            "name": "Database Type",
-            "description": "Engine to run (installed isolated inside the container on demand).\nSQL: mariadb, mysql, postgresql, cockroachdb, yugabytedb, tidb, dolt\nNoSQL: mongodb, ferretdb, arangodb, orientdb, ravendb, cassandra, aerospike, rethinkdb\nIn-Memory: redis, valkey, keydb, dragonfly, memcached, etcd, nats, immudb\nVector/Search: meilisearch, typesense, qdrant, elasticsearch, opensearch, solr, manticoresearch, milvus, weaviate, quickwit\nTime-Series/Storage: influxdb, clickhouse, victoriametrics, questdb, seaweedfs, garage, minio, pocketbase\nGraph/Ledger: neo4j, dgraph, surrealdb | Misc: sqld, custom",
-            "env_variable": "DATABASE_TYPE",
-            "default_value": "mariadb",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:32",
-            "field_type": "text"
-        },
-        {
-            "name": "Database Version",
-            "description": "Version to run. 'latest' auto-resolves upstream newest. Series like 18 or 11.4 resolve to the latest patch automatically; full versions (8.0.45) are used as-is. Switching majors never deletes old data - a fresh data/<engine>/<version> instance is created and the old one is preserved.",
-            "env_variable": "DB_VERSION",
-            "default_value": "latest",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:128",
-            "field_type": "text"
-        },
-        {
-            "name": "Strict Version Enforcement",
-            "description": "1 = refuse to start if the exact requested version cannot be provided (no silent downgrades). 0 = warn and fall back to best available binary.",
-            "env_variable": "STRICT_VERSION",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Database Name",
-            "description": "The default database/schema to create on startup.",
-            "env_variable": "DB_NAME",
-            "default_value": "database",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:64",
-            "field_type": "text"
-        },
-        {
-            "name": "Database Username",
-            "description": "Default application database user.",
-            "env_variable": "DB_USER",
-            "default_value": "dbuser",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|string|max:64",
-            "field_type": "text"
-        },
-        {
-            "name": "Database User Password",
-            "description": "Password for the application user. Leave as 'auto' to generate an ultra-strong 32+ char random cryptographic password.",
-            "env_variable": "DB_PASSWORD",
-            "default_value": "auto",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:128",
-            "field_type": "text"
-        },
-        {
-            "name": "Root / Admin / Master Password",
-            "description": "Password for Root, Superuser, Admin, or Master Key. Leave as 'auto' to auto-generate a secure random secret.",
-            "env_variable": "DB_ROOT_PASSWORD",
-            "default_value": "auto",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:128",
-            "field_type": "text"
-        },
-        {
-            "name": "Auto Generate Strong Secrets",
-            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and update startup environment variables.",
-            "env_variable": "AUTO_GENERATE_CREDENTIALS",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Save Credentials to .env",
-            "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
-            "env_variable": "SAVE_TO_ENV",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Dynamic Performance Auto-Tuning",
-            "description": "1 = Automatically calculate buffer pools, cache sizes, memory limits, and I/O threads based on allocated container RAM and CPU cores.",
-            "env_variable": "PERFORMANCE_TUNING",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Production Security Hardening",
-            "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
-            "env_variable": "SECURITY_HARDENING",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Extra Daemon Arguments",
-            "description": "Additional custom CLI flags passed directly to the database daemon on startup.",
-            "env_variable": "EXTRA_ARGS",
-            "default_value": "",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:512",
-            "field_type": "text"
-        },
-        {
-            "name": "Extra Download URLs",
-            "description": "Extra files to download at install time (one per line, e.g. 'dest/name|url' or plain URL).",
-            "env_variable": "EXTRA_URLS",
-            "default_value": "",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:1024",
-            "field_type": "text"
-        },
-        {
-            "name": "Custom Startup Command",
-            "description": "Command to run when DATABASE_TYPE=custom.",
-            "env_variable": "CUSTOM_COMMAND",
-            "default_value": "",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:512",
-            "field_type": "text"
-        },
-        {
-            "name": "Smart Companion & Extra Runtimes",
-            "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
-            "env_variable": "EXTRA_RUNTIMES",
-            "default_value": "",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|string|max:256",
-            "field_type": "text"
-        },
-        {
-            "name": "Redis Overcommit Memory",
-            "description": "1 = attempt vm.overcommit_memory=1 on the host for safe Redis fork()/background saves (requires root; otherwise prints one guidance line). Set 0 to skip entirely.",
-            "env_variable": "REDIS_OVERCOMMIT_MEMORY",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        },
-        {
-            "name": "Host Somaxconn",
-            "description": "Attempt net.core.somaxconn on the host for connection-heavy engines (0 = skip). Needs root; unprivileged runs print guidance only.",
-            "env_variable": "HOST_SOMAXCONN",
-            "default_value": "0",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "nullable|numeric|min:0,max:65535",
-            "field_type": "text"
-        },
-        {
-            "name": "Disable Transparent Huge Pages",
-            "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
-            "env_variable": "HOST_DISABLE_THP",
-            "default_value": "1",
-            "user_viewable": true,
-            "user_editable": true,
-            "rules": "required|boolean",
-            "field_type": "text"
-        }
-    ]
+    {
+      "name": "Database Username",
+      "description": "Default application database user.",
+      "env_variable": "DB_USER",
+      "default_value": "dbuser",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64",
+      "field_type": "text"
+    },
+    {
+      "name": "Database User Password",
+      "description": "Password for the application user. Leave as 'auto' to generate an ultra-strong 32+ char random cryptographic password.",
+      "env_variable": "DB_PASSWORD",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:128",
+      "field_type": "text"
+    },
+    {
+      "name": "Root / Admin / Master Password",
+      "description": "Password for Root, Superuser, Admin, or Master Key. Leave as 'auto' to auto-generate a secure random secret.",
+      "env_variable": "DB_ROOT_PASSWORD",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:128",
+      "field_type": "text"
+    },
+    {
+      "name": "Auto Generate Strong Secrets",
+      "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and update startup environment variables.",
+      "env_variable": "AUTO_GENERATE_CREDENTIALS",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Save Credentials to .env",
+      "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+      "env_variable": "SAVE_TO_ENV",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Dynamic Performance Auto-Tuning",
+      "description": "1 = Automatically calculate buffer pools, cache sizes, memory limits, and I/O threads based on allocated container RAM and CPU cores.",
+      "env_variable": "PERFORMANCE_TUNING",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Production Security Hardening",
+      "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
+      "env_variable": "SECURITY_HARDENING",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Extra Daemon Arguments",
+      "description": "Additional custom CLI flags passed directly to the database daemon on startup.",
+      "env_variable": "EXTRA_ARGS",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Extra Download URLs",
+      "description": "Extra files to download at install time (one per line, e.g. 'dest/name|url' or plain URL).",
+      "env_variable": "EXTRA_URLS",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:1024",
+      "field_type": "text"
+    },
+    {
+      "name": "Custom Startup Command",
+      "description": "Command to run when DATABASE_TYPE=custom.",
+      "env_variable": "CUSTOM_COMMAND",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Smart Companion & Extra Runtimes",
+      "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
+      "env_variable": "EXTRA_RUNTIMES",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:256",
+      "field_type": "text"
+    },
+    {
+      "name": "Redis Overcommit Memory",
+      "description": "1 = attempt vm.overcommit_memory=1 on the host for safe Redis fork()/background saves (requires root; otherwise prints one guidance line). Set 0 to skip entirely.",
+      "env_variable": "REDIS_OVERCOMMIT_MEMORY",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Host Somaxconn",
+      "description": "Attempt net.core.somaxconn on the host for connection-heavy engines (0 = skip). Needs root; unprivileged runs print guidance only.",
+      "env_variable": "HOST_SOMAXCONN",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|numeric|min:0,max:65535",
+      "field_type": "text"
+    },
+    {
+      "name": "Disable Transparent Huge Pages",
+      "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
+      "env_variable": "HOST_DISABLE_THP",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    }
+  ]
 }

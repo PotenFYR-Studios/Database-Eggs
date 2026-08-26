@@ -382,6 +382,23 @@ EOSQL
     fi
 }
 
+stop_postgres() {
+    local pid="$1"
+    local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local pg_ctl_bin
+    pg_ctl_bin=$(find_pg_bin "pg_ctl" 2>/dev/null || true)
+
+    # Use pg_ctl fast shutdown if available (clean checkpoint & immediate client disconnect)
+    if [ -n "${pg_ctl_bin}" ] && [ -f "${data_dir}/postmaster.pid" ]; then
+        "${pg_ctl_bin}" -D "${data_dir}" -m fast stop >/dev/null 2>&1 || true
+    fi
+
+    # Forward SIGINT for Fast Shutdown to postgres master process
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -INT "${pid}" 2>/dev/null || kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local socket_dir="/tmp/.db-sockets"
@@ -427,5 +444,7 @@ start_postgres() {
     [ -d "${pg_home}/lib" ] && export LD_LIBRARY_PATH="${pg_home}/lib:${LD_LIBRARY_PATH:-}"
 
     log "Starting PostgreSQL ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."
-    exec "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "${BIND_ADDRESS:-0.0.0.0}" ${EXTRA_ARGS:-}
+    "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "${BIND_ADDRESS:-0.0.0.0}" ${EXTRA_ARGS:-} < /dev/null &
+    local daemon_pid=$!
+    supervise_daemon "${daemon_pid}" "stop_postgres"
 }
