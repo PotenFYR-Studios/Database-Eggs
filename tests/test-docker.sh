@@ -160,9 +160,9 @@ run_db_test() {
     local exit_code
     exit_code=$(docker inspect -f '{{.State.ExitCode}}' "${container_name}" 2>/dev/null || echo "0")
     if [ "${exit_code}" -eq 0 ] || [ "${exit_code}" -eq 130 ] || [ "${exit_code}" -eq 143 ]; then
-        record_result "${engine^^} graceful signal handling (SIGTERM/SIGINT)" 0 "Exit code ${exit_code}"
+        record_result "${engine^^} graceful stop & signal handling (SIGTERM/SIGINT/Panel Stop)" 0 "Exit code ${exit_code}"
     else
-        record_result "${engine^^} graceful signal handling" 1 "Exit code ${exit_code}"
+        record_result "${engine^^} graceful stop handling" 1 "Exit code ${exit_code}"
     fi
 
     # Cleanup

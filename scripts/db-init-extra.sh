@@ -233,9 +233,38 @@ EOF
     esac
 }
 
+stop_extra_engine() {
+    local pid="$1"
+    case "${PROJECT_TYPE}" in
+        cockroachdb|cockroach)
+            local cr_bin
+            cr_bin=$(extra_find_bin "cockroach" 2>/dev/null || true)
+            if [ -n "${cr_bin}" ]; then
+                "${cr_bin}" quit --insecure --host="127.0.0.1:${SERVER_PORT}" >/dev/null 2>&1 || true
+            fi
+            ;;
+        dgraph)
+            if [ -n "${DGRAPH_ZERO_PID:-}" ] && kill -0 "${DGRAPH_ZERO_PID}" 2>/dev/null; then
+                kill -TERM "${DGRAPH_ZERO_PID}" 2>/dev/null || true
+            fi
+            ;;
+        orientdb)
+            local od_base="${SERVER_DIR}/opt/orientdb"
+            if [ -x "${od_base}/bin/shutdown.sh" ]; then
+                bash "${od_base}/bin/shutdown.sh" >/dev/null 2>&1 || true
+            fi
+            ;;
+    esac
+
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_extra_engine() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
+    local daemon_pid=""
 
     case "${PROJECT_TYPE}" in
         cockroachdb|cockroach)
@@ -256,61 +285,66 @@ start_extra_engine() {
                 warn "CockroachDB running INSECURE (development mode). Set COCKROACH_SECURE=1 for certificates."
             fi
             log "Starting CockroachDB single-node on 0.0.0.0:${SERVER_PORT}..."
-            exec "${cr_bin}" start-single-node ${sec_args} \
+            "${cr_bin}" start-single-node ${sec_args} \
                 --store=path="${data_dir}" \
                 --listen-addr="${LISTEN_HOST:-0.0.0.0}:${SERVER_PORT}" \
                 --http-addr="127.0.0.1:${COCKROACH_HTTP_PORT:-$((SERVER_PORT + 1))}" \
                 --cache="$(python3 -c "print(max(128,int(${SERVER_MEMORY}*0.25)))MB" 2>/dev/null || echo 128MB)" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         yugabytedb|yugabyte)
             local yb_bin
             yb_bin=$(require_bin "yugabyted" "YugabyteDB")
             log "Starting YugabyteDB (YSQL on :${SERVER_PORT})..."
-            exec "${yb_bin}" start --background=false \
+            "${yb_bin}" start --background=false \
                 --base_dir="${data_dir}" \
                 --tserver_flags="ysql_proxy_bind_address=0.0.0.0:${SERVER_PORT}" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         tidb)
             local td_bin
             td_bin=$(require_bin "tidb-server" "TiDB")
             log "Starting TiDB (unistore embedded storage) on 0.0.0.0:${SERVER_PORT}..."
-            exec "${td_bin}" \
+            "${td_bin}" \
                 -P "${SERVER_PORT}" \
                 -status "$((SERVER_PORT + 100))" \
                 -host "0.0.0.0" \
                 -store unistore \
                 -path "${data_dir}" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         dolt)
             local dolt_bin
             dolt_bin=$(require_bin "dolt" "Dolt")
             log "Starting Dolt SQL Server on 0.0.0.0:${SERVER_PORT}..."
-            exec "${dolt_bin}" sql-server \
+            "${dolt_bin}" sql-server \
                 --config "${conf_dir}/dolt-server.yaml" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         sqld|libsql)
             local sqld_bin
             sqld_bin=$(require_bin "sqld" "libSQL server")
             log "Starting libSQL (sqld) on 0.0.0.0:${SERVER_PORT}..."
-            exec "${sqld_bin}" \
+            "${sqld_bin}" \
                 --http-listen-addr "0.0.0.0:${SERVER_PORT}" \
                 --db-path "${data_dir}/db" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         etcd)
             local etcd_bin
             etcd_bin=$(require_bin "etcd" "Etcd")
             log "Starting Etcd v3 on 0.0.0.0:${SERVER_PORT}..."
-            exec "${etcd_bin}" \
+            "${etcd_bin}" \
                 --name "server-${SERVER_PORT}" \
                 --data-dir "${data_dir}" \
                 --listen-client-urls "http://0.0.0.0:${SERVER_PORT}" \
@@ -318,7 +352,8 @@ start_extra_engine() {
                 --listen-peer-urls "http://127.0.0.1:$((SERVER_PORT + 1))" \
                 --initial-advertise-peer-urls "http://127.0.0.1:$((SERVER_PORT + 1))" \
                 --initial-cluster "server-${SERVER_PORT}=http://127.0.0.1:$((SERVER_PORT + 1))" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         nats)
@@ -327,45 +362,48 @@ start_extra_engine() {
             local auth_args=""
             [ -n "${DB_PASSWORD:-}${DB_ROOT_PASSWORD:-}" ] && auth_args="--auth ${DB_PASSWORD:-${DB_ROOT_PASSWORD}}"
             log "Starting NATS Server (JetStream) on 0.0.0.0:${SERVER_PORT}..."
-            exec "${nats_bin}" \
+            "${nats_bin}" \
                 -a "0.0.0.0" -p "${SERVER_PORT}" \
                 -sd "${data_dir}" \
                 -js \
-                ${auth_args} ${EXTRA_ARGS:-}
+                ${auth_args} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         immudb)
             local imu_bin
             imu_bin=$(require_bin "immudb" "Immudb")
             log "Starting Immudb (tamper-proof ledger) on 0.0.0.0:${SERVER_PORT}..."
-            exec "${imu_bin}" ${EXTRA_ARGS:-}
+            "${imu_bin}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         dgraph)
             local dg_bin
             dg_bin=$(require_bin "dgraph" "Dgraph")
             local zport="$((SERVER_PORT + 1))"
-            # HTTP API serves the allocated port; internal Zero/GRPC stay loopback
             log "Starting Dgraph (HTTP :${SERVER_PORT}, Zero :127.0.0.1:${zport})..."
             "${dg_bin}" zero \
                 --my "127.0.0.1:${zport}" \
                 --replicas 1 \
                 --wal "${data_dir}/zw" \
-                --postings "${data_dir}/zero" >/dev/null 2>&1 &
+                --postings "${data_dir}/zero" < /dev/null >/dev/null 2>&1 &
             local zpid=$!
+            export DGRAPH_ZERO_PID="${zpid}"
             sleep 3
             if ! kill -0 "${zpid}" 2>/dev/null; then
                 fail "Dgraph Zero failed to start. Check logs/installer.log and container console."
             fi
             ok "Dgraph Zero healthy."
-            exec "${dg_bin}" alpha \
+            "${dg_bin}" alpha \
                 --my "127.0.0.1:$((SERVER_PORT + 2))" \
                 --zero "127.0.0.1:${zport}" \
                 --http "0.0.0.0:${SERVER_PORT}" \
                 --grpc "127.0.0.1:${DGRAPH_GRPC_PORT:-$((SERVER_PORT + 3))}" \
                 --postings "${data_dir}/alpha/postings" \
                 --wal "${data_dir}/alpha/wal" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         arangodb)
@@ -378,11 +416,12 @@ start_extra_engine() {
                 auth_arg="--server.authentication true --server.jwt-secret ${ARANGO_JWT_SECRET:-${DB_ROOT_PASSWORD}}"
             fi
             log "Starting ArangoDB on tcp://0.0.0.0:${SERVER_PORT}..."
-            exec "${ag_bin}" \
+            "${ag_bin}" \
                 --server.endpoint "tcp://0.0.0.0:${SERVER_PORT}" \
                 --database.directory "${data_dir}" \
                 ${auth_arg} \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         orientdb)
@@ -396,7 +435,8 @@ start_extra_engine() {
             export ORIENTDB_HOME="${od_base}"
             log "Starting OrientDB on 0.0.0.0:${SERVER_PORT}..."
             cd "${od_base}/bin" 2>/dev/null || true
-            exec bash ./server.sh ${EXTRA_ARGS:-}
+            bash ./server.sh ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         ravendb)
@@ -408,9 +448,12 @@ start_extra_engine() {
             log "Starting RavenDB on 0.0.0.0:${SERVER_PORT}..."
             cd "${rv_server}" 2>/dev/null || true
             if [ -x "./Raven.Server" ]; then
-                exec ./Raven.Server ${EXTRA_ARGS:-}
+                ./Raven.Server ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
+            else
+                dotnet Raven.Server.dll ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
             fi
-            exec dotnet Raven.Server.dll ${EXTRA_ARGS:-}
             ;;
 
         cassandra)
@@ -423,8 +466,9 @@ start_extra_engine() {
             local heap_mb=$((SERVER_MEMORY > 512 ? SERVER_MEMORY / 2 : 256))
             log "Starting Apache Cassandra on 0.0.0.0:${SERVER_PORT} (heap ~${heap_mb}MB)..."
             cd "${cs_base}" 2>/dev/null || true
-            exec env MAX_HEAP_SIZE="${heap_mb}M" HEAP_NEWSIZE="32M" \
-                ./bin/cassandra -f ${EXTRA_ARGS:-}
+            env MAX_HEAP_SIZE="${heap_mb}M" HEAP_NEWSIZE="32M" \
+                ./bin/cassandra -f ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         aerospike)
@@ -437,23 +481,27 @@ start_extra_engine() {
             fi
             mkdir -p "${SERVER_DIR}/run"
             log "Starting Aerospike on 0.0.0.0:${SERVER_PORT}..."
-            exec "${as_bin}" \
+            "${as_bin}" \
                 --config-file "${conf_dir}/aerospike.conf" \
                 --foreground \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         rethinkdb)
             local rt_bin
             rt_bin=$(require_bin "rethinkdb" "RethinkDB")
             log "Starting RethinkDB on 0.0.0.0:${SERVER_PORT}..."
-            exec "${rt_bin}" \
+            "${rt_bin}" \
                 --config-file "${conf_dir}/rethinkdb.conf" \
-                ${EXTRA_ARGS:-}
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
 
         *)
             fail "Unknown extended engine: ${PROJECT_TYPE}"
             ;;
     esac
+
+    supervise_daemon "${daemon_pid}" "stop_extra_engine"
 }

@@ -115,6 +115,23 @@ EOF
         fi
     fi
 }
+ 
+stop_redis_family() {
+    local pid="$1"
+    local cli_bin
+    cli_bin=$(find_inmemory_bin "redis-cli") || cli_bin=""
+
+    # Gracefully save and shutdown via CLI if accessible
+    if [ -n "${cli_bin}" ] && [ "${PROJECT_TYPE}" != "memcached" ]; then
+        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} shutdown save >/dev/null 2>&1 || \
+        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} shutdown nosave >/dev/null 2>&1 || true
+    fi
+
+    # Forward SIGTERM to daemon process
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
 
 start_redis_family() {
     local conf_dir="${SERVER_DIR}/config"
@@ -126,6 +143,8 @@ start_redis_family() {
         warn "Configuration missing. Initializing ${PROJECT_TYPE^^} config..."
         init_redis_family
     fi
+
+    local daemon_pid=""
 
     case "${PROJECT_TYPE}" in
         dragonfly)
@@ -139,7 +158,8 @@ start_redis_family() {
             local actual_version
             actual_version=$("${df_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             log "Starting Dragonfly ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB})..."
-            exec "${df_bin}" --port="${SERVER_PORT}" --dir="${data_dir}" --maxmemory="${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB}" ${pw_arg} ${EXTRA_ARGS:-}
+            "${df_bin}" --port="${SERVER_PORT}" --dir="${data_dir}" --maxmemory="${TUNED_REDIS_MAXMEMORY:-${SERVER_MEMORY}MB}" ${pw_arg} ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         keydb)
             local kd_bin
@@ -148,7 +168,8 @@ start_redis_family() {
                 fail "KeyDB binary is unavailable."
             }
             log "Starting KeyDB on 0.0.0.0:${SERVER_PORT} (Threads: ${TUNED_REDIS_IO_THREADS:-2})..."
-            exec "${kd_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
+            "${kd_bin}" "${redis_conf}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         valkey)
             local vk_bin
@@ -157,7 +178,8 @@ start_redis_family() {
                 fail "Valkey binary is unavailable."
             }
             log "Starting Valkey on 0.0.0.0:${SERVER_PORT}..."
-            exec "${vk_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
+            "${vk_bin}" "${redis_conf}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         memcached)
             local mc_bin
@@ -166,7 +188,8 @@ start_redis_family() {
                 fail "Memcached binary is unavailable."
             }
             log "Starting Memcached on 0.0.0.0:${SERVER_PORT}..."
-            exec "${mc_bin}" -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" -u "$(id -un 2>/dev/null || echo container)" ${EXTRA_ARGS:-}
+            "${mc_bin}" -p "${SERVER_PORT}" -m "${SERVER_MEMORY:-1024}" -u "$(id -un 2>/dev/null || echo container)" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
         *) # redis
             local rs_bin
@@ -177,7 +200,10 @@ start_redis_family() {
             local actual_version
             actual_version=$("${rs_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             log "Starting Redis ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
-            exec "${rs_bin}" "${redis_conf}" ${EXTRA_ARGS:-}
+            "${rs_bin}" "${redis_conf}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
             ;;
     esac
+
+    supervise_daemon "${daemon_pid}" "stop_redis_family"
 }

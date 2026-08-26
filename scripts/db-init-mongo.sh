@@ -151,6 +151,25 @@ EOSCRIPT
     fi
 }
 
+stop_mongo_family() {
+    local pid="$1"
+    if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
+        kill -TERM "${pid}" 2>/dev/null || true
+        return 0
+    fi
+
+    local msh
+    msh=$(mongo_shell 2>/dev/null || true)
+    if [ -n "${msh}" ] && [ -n "${DB_ROOT_PASSWORD:-}" ]; then
+        "${msh}" --quiet --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" --eval "db.adminCommand({shutdown: 1, force: true})" >/dev/null 2>&1 || true
+    fi
+
+    # Forward SIGTERM to daemon process
+    if kill -0 "${pid}" 2>/dev/null; then
+        kill -TERM "${pid}" 2>/dev/null || true
+    fi
+}
+
 start_mongo_family() {
     local conf_dir="${SERVER_DIR}/config"
     local mongod_conf="${conf_dir}/mongod.conf"
@@ -162,6 +181,8 @@ start_mongo_family() {
         init_mongo_family
     fi
 
+    local daemon_pid=""
+
     if [ "${PROJECT_TYPE}" = "ferretdb" ]; then
         local fdb_bin
         fdb_bin=$(find_mongo_bin "ferretdb") || {
@@ -169,9 +190,10 @@ start_mongo_family() {
             fail "FerretDB binary is unavailable."
         }
         log "Starting FerretDB on 0.0.0.0:${SERVER_PORT}..."
-        exec "${fdb_bin}" --listen-addr="0.0.0.0:${SERVER_PORT}" \
+        "${fdb_bin}" --listen-addr="0.0.0.0:${SERVER_PORT}" \
                       --handler="${FERRETDB_HANDLER:-sqlite}" \
-                      --sqlite-url="${data_dir}/" ${EXTRA_ARGS:-}
+                      --sqlite-url="${data_dir}/" ${EXTRA_ARGS:-} < /dev/null &
+        daemon_pid=$!
     else
         local mongod_bin
         mongod_bin=$(find_mongo_bin "mongod") || {
@@ -181,6 +203,9 @@ start_mongo_family() {
         local actual_version
         actual_version=$("${mongod_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
         log "Starting MongoDB ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
-        exec "${mongod_bin}" --config "${mongod_conf}" ${EXTRA_ARGS:-}
+        "${mongod_bin}" --config "${mongod_conf}" ${EXTRA_ARGS:-} < /dev/null &
+        daemon_pid=$!
     fi
+
+    supervise_daemon "${daemon_pid}" "stop_mongo_family"
 }

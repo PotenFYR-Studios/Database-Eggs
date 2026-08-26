@@ -446,6 +446,124 @@ print_connection_guide() {
     printf "\n"
 }
 
+# ---------------------------------------------------------------------------
+# Central Process Supervisor & Console Stop Listener
+# ---------------------------------------------------------------------------
+DAEMON_PID=""
+STOP_HANDLER=""
+STDIN_READER_PID=""
+_SHUTDOWN_IN_PROGRESS=0
+
+_do_graceful_shutdown() {
+    local sig="${1:-SIGTERM}"
+    if [ "${_SHUTDOWN_IN_PROGRESS}" = "1" ]; then
+        return 0
+    fi
+    _SHUTDOWN_IN_PROGRESS=1
+
+    printf "\n"
+    log "Shutdown event (${sig}) received. Gracefully stopping ${PROJECT_TYPE^^}..."
+
+    # Terminate background stdin listener immediately
+    if [ -n "${STDIN_READER_PID:-}" ] && kill -0 "${STDIN_READER_PID}" 2>/dev/null; then
+        kill -9 "${STDIN_READER_PID}" 2>/dev/null || true
+        wait "${STDIN_READER_PID}" 2>/dev/null || true
+    fi
+
+    # Invoke engine-specific stop hook if provided
+    if [ -n "${STOP_HANDLER:-}" ] && declare -f "${STOP_HANDLER}" >/dev/null 2>&1; then
+        "${STOP_HANDLER}" "${DAEMON_PID}" || true
+    elif [ -n "${DAEMON_PID:-}" ] && kill -0 "${DAEMON_PID}" 2>/dev/null; then
+        kill -TERM "${DAEMON_PID}" 2>/dev/null || true
+    fi
+
+    # Grace period waiting for daemon to exit cleanly (up to 15 seconds)
+    local wait_count=0
+    local max_wait=15
+    if [ -n "${DAEMON_PID:-}" ]; then
+        while kill -0 "${DAEMON_PID}" 2>/dev/null && [ "${wait_count}" -lt "${max_wait}" ]; do
+            sleep 1
+            wait_count=$((wait_count + 1))
+        done
+
+        if kill -0 "${DAEMON_PID}" 2>/dev/null; then
+            warn "${PROJECT_TYPE^^} (PID ${DAEMON_PID}) did not terminate within ${max_wait}s. Forcing shutdown..."
+            kill -9 "${DAEMON_PID}" 2>/dev/null || true
+            wait "${DAEMON_PID}" 2>/dev/null || true
+        fi
+    fi
+
+    ok "${PROJECT_TYPE^^} server stopped cleanly."
+}
+
+_on_trap_signal() {
+    local sig="$1"
+    _do_graceful_shutdown "${sig}"
+    exit 0
+}
+
+supervise_daemon() {
+    local daemon_pid="$1"
+    local stop_handler="${2:-}"
+    DAEMON_PID="${daemon_pid}"
+    STOP_HANDLER="${stop_handler}"
+    export DAEMON_PID STOP_HANDLER
+
+    # Trap termination signals for graceful container lifecycle
+    trap '_on_trap_signal SIGTERM' SIGTERM
+    trap '_on_trap_signal SIGINT' SIGINT
+    trap '_on_trap_signal SIGHUP' SIGHUP
+    trap '_on_trap_signal SIGQUIT' SIGQUIT
+
+    local sup_pid=$$
+
+    # Start background stdin listener to handle panel console commands and control characters
+    if [ -t 0 ] || [ -p /dev/stdin ] || [ -e /dev/stdin ]; then
+        (
+            while IFS= read -r line || [ -n "${line}" ]; do
+                local clean_cmd
+                clean_cmd=$(printf '%s' "${line}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+                case "${clean_cmd}" in
+                    $'\x03'|$'\x04'|^C|^c|^D|^d|stop|STOP|exit|EXIT|quit|QUIT|shutdown|SHUTDOWN|restart|RESTART|"stop server"|"restart server"|"end")
+                        log "Console stop command received ('${clean_cmd}'). Initiating shutdown..."
+                        kill -TERM "${sup_pid}" 2>/dev/null || true
+                        break
+                        ;;
+                    "")
+                        ;;
+                    *)
+                        log "Console command '${clean_cmd}' received. (To stop the database, use 'stop' or the Panel Stop button)."
+                        ;;
+                esac
+            done
+        ) &
+        STDIN_READER_PID=$!
+    fi
+
+    # Wait for the managed daemon process
+    local exit_code=0
+    wait "${daemon_pid}" 2>/dev/null
+    exit_code=$?
+
+    if [ "${_SHUTDOWN_IN_PROGRESS}" = "0" ]; then
+        if [ "${exit_code}" -gt 128 ]; then
+            _do_graceful_shutdown "SIGNAL"
+            exit_code=0
+        elif [ "${exit_code}" -ne 0 ]; then
+            warn "${PROJECT_TYPE^^} daemon exited with code ${exit_code}."
+        fi
+    fi
+
+    # Clean up stdin reader subshell
+    if [ -n "${STDIN_READER_PID:-}" ] && kill -0 "${STDIN_READER_PID}" 2>/dev/null; then
+        kill -9 "${STDIN_READER_PID}" 2>/dev/null || true
+        wait "${STDIN_READER_PID}" 2>/dev/null || true
+    fi
+
+    exit "${exit_code}"
+}
+export -f supervise_daemon _do_graceful_shutdown _on_trap_signal
+
 # --- Engine Dispatcher ------------------------------------------------------
 case "${PROJECT_TYPE}" in
     mariadb|mysql)
@@ -515,7 +633,9 @@ case "${PROJECT_TYPE}" in
 
         if [ -n "${run_cmd}" ]; then
             log "Starting Custom Engine: ${run_cmd}"
-            exec ${run_cmd}
+            ${run_cmd} < /dev/null &
+            local daemon_pid=$!
+            supervise_daemon "${daemon_pid}"
         else
             fail "CUSTOM_COMMAND or CUSTOM_BINARY_NAME is empty. Provide a valid command or binary to run."
         fi
