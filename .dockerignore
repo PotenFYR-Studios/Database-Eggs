@@ -1,14 +1,59 @@
+# VCS & CI
 .git
 .github
 .gitignore
 .gitattributes
+
+# Docs & repo meta (not needed inside the image)
 README.md
 LICENSE
 eggs/
+tests/
+scripts/.DS_Store
+
+# Runtime data created at container startup
 data/
 logs/
+run/
+bin/
+.runtimes/
+opt/
 socket/
+*.sock
+*.sock.lock
+*.pid
 *.log
+*.old
+
+# Credentials / secrets — never bake into an image
+.env
+.env.*
 .db_credentials
 credentials.txt
-.env
+.multi-db.conf
+*.pem
+*.key
+
+# Build artifacts & archives
+*.tar.gz
+*.tgz
+*.zip
+*.deb
+*.rpm
+dist/
+build/
+out/
+
+# Package managers / runtimes
+node_modules/
+__pycache__/
+.venv/
+vendor/
+
+# OS & editor junk
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+*.swp

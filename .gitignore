@@ -1,20 +1,49 @@
-# Data and local storage
+# ---- Runtime data (created inside server containers at startup) ----
 data/
 logs/
+run/
+bin/
+.runtimes/
+opt/
 socket/
 *.sock
+*.sock.lock
 *.pid
 *.log
+*.old
+
+# ---- Credentials / secrets ----
+.env
+.env.*
+!.env.example
 .db_credentials
 credentials.txt
-.env
 .multi-db.conf
-*.old
-*.tar.gz
-*.zip
+*.pem
+*.key
 
-# OS & Editor
+# ---- Build artifacts & archives ----
+*.tar.gz
+*.tgz
+*.zip
+*.deb
+*.rpm
+dist/
+build/
+out/
+
+# ---- Package managers / runtimes ----
+node_modules/
+__pycache__/
+*.pyc
+.venv/
+vendor/
+
+# ---- OS & Editor junk ----
 .DS_Store
 Thumbs.db
+desktop.ini
 .idea/
 .vscode/
+*.swp
+*~
