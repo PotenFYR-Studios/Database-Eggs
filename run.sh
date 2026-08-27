@@ -515,7 +515,13 @@ supervise_daemon() {
     trap '_on_trap_signal SIGHUP' SIGHUP
     trap '_on_trap_signal SIGQUIT' SIGQUIT
 
+    # Subshell-safe self PID: $$ is the PARENT's pid inside ( ) subshells,
+    # which would make the console-stop handler kill the wrong process.
+    # BASH_SUBSHELL > 0 means we are a subshell -> resolve via /proc/self.
     local sup_pid=$$
+    if [ "${BASH_SUBSHELL:-0}" -gt 0 ] && [ -r /proc/self/stat ]; then
+        sup_pid=$(cut -d' ' -f1 /proc/self/stat 2>/dev/null || printf '%s' "$$")
+    fi
 
     # Start background stdin listener to handle panel console commands and control characters
     if [ -t 0 ] || [ -p /dev/stdin ] || [ -e /dev/stdin ]; then
