@@ -1127,13 +1127,13 @@ case "${ENGINE}" in
         if [ ! -x "${INSTALL_DIR}/qdrant" ]; then
             # Prefer STATIC musl builds: immune to host glibc age (recent qdrant
             # gnu builds require GLIBC 2.38+, older bases ship 2.35).
-            local q_musl="x86_64-unknown-linux-musl"
+            q_musl="x86_64-unknown-linux-musl"
             [ -n "${ARCH_MUSL:-}" ] && q_musl="${ARCH_MUSL}"
-            local urls=(
+            urls=(
                 "https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${q_musl}.tar.gz"
                 "https://github.com/qdrant/qdrant/releases/download/${TAG}/qdrant-${ARCH_ALT}-unknown-linux-gnu.tar.gz"
             )
-            local installed=0 u
+            installed=0; u=""
             for u in "${urls[@]}"; do
                 probe_url "${u}" || continue
                 if fetch "${u}" - 2>/dev/null | tar -xz -C "${INSTALL_DIR}/"; then

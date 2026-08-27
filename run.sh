@@ -521,7 +521,6 @@ supervise_daemon() {
     if [ -t 0 ] || [ -p /dev/stdin ] || [ -e /dev/stdin ]; then
         (
             while IFS= read -r line || [ -n "${line}" ]; do
-                local clean_cmd
                 clean_cmd=$(printf '%s' "${line}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
                 case "${clean_cmd}" in
                     $'\x03'|$'\x04'|^C|^c|^D|^d|stop|STOP|exit|EXIT|quit|QUIT|shutdown|SHUTDOWN|restart|RESTART|"stop server"|"restart server"|"end")
@@ -634,7 +633,7 @@ case "${PROJECT_TYPE}" in
         if [ -n "${run_cmd}" ]; then
             log "Starting Custom Engine: ${run_cmd}"
             ${run_cmd} < /dev/null &
-            local daemon_pid=$!
+            daemon_pid=$!
             supervise_daemon "${daemon_pid}"
         else
             fail "CUSTOM_COMMAND or CUSTOM_BINARY_NAME is empty. Provide a valid command or binary to run."
