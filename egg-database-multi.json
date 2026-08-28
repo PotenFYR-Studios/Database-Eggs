@@ -2,7 +2,7 @@
   "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
   "meta": {
     "version": "PTDL_v2",
-    "update_url": null
+    "update_url": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json"
   },
   "exported_at": "2026-08-22T04:00:00+00:00",
   "name": "Multi Database",
@@ -202,6 +202,26 @@
       "name": "Disable Transparent Huge Pages",
       "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
       "env_variable": "HOST_DISABLE_THP",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Egg Update URL",
+      "description": "Check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed (raw GitHub egg JSON or run.sh URL).",
+      "env_variable": "EGG_UPDATE_URL",
+      "default_value": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:512",
+      "field_type": "text"
+    },
+    {
+      "name": "Auto Update Egg",
+      "description": "1 = check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed. 0 = disable the check entirely.",
+      "env_variable": "AUTO_UPDATE_EGG",
       "default_value": "1",
       "user_viewable": true,
       "user_editable": true,

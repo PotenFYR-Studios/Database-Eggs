@@ -4,8 +4,11 @@ logs/
 run/
 bin/
 .runtimes/
+.environments/
+.potenfyr/
 opt/
 socket/
+.logs/
 *.sock
 *.sock.lock
 *.pid

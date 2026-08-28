@@ -210,10 +210,113 @@ apply_persisted() {
 
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
-            PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND; do
+            PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND \
+            EGG_UPDATE_URL AUTO_UPDATE_EGG; do
     apply_persisted "${_key}"
 done
 unset _key
+
+# -----------------------------------------------------------------------------
+# 5.5 Egg Self-Update Engine (EGG_UPDATE_URL)
+# -----------------------------------------------------------------------------
+# On startup the launcher scripts run from the image; to let users pick up
+# launcher fixes without rebuilding/reinstalling the image, EGG_UPDATE_URL can
+# point at a run.sh (or egg JSON) on GitHub. Default is this repo's own raw
+# egg JSON URL. AUTO_UPDATE_EGG=0 disables the check entirely.
+#
+# Behaviour:
+#   * URL ending in .json / the raw egg file  -> compared against the hash
+#     file; on change the launcher scripts are refreshed from the same repo
+#     branch (egg JSON metadata travels with the image).
+#   * URL pointing at a run.sh                -> replaces the launcher directly.
+# Failure of any step is non-fatal: the previously installed launcher runs.
+EGG_UPDATE_URL="${EGG_UPDATE_URL:-https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json}"
+AUTO_UPDATE_EGG="${AUTO_UPDATE_EGG:-1}"
+
+if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
+    if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+        # Non-root panels (uid 988 etc.) cannot write /usr/local/bin; fall back
+        # to a user-writable override location that launcher resolution below
+        # prefers over the image copy.
+        _egg_target="/usr/local/bin/run.sh"
+        _egg_hashfile="/etc/potenfyr-egg-hash"
+        if [ -f /usr/local/bin/run.sh ]; then
+            RUNTIME_DIR="/usr/local/bin"
+        else
+            RUNTIME_DIR="/tmp/.database-runtime"
+            mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true
+        fi
+        _egg_target="${RUNTIME_DIR}/run.sh"
+        _egg_hashfile="${RUNTIME_DIR}/.potenfyr-egg-hash"
+        if ! [ -w "$(dirname "${_egg_target}")" ] 2>/dev/null || [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
+            _egg_target="${SERVER_DIR}/.potenfyr/run.sh"
+            _egg_hashfile="${SERVER_DIR}/.potenfyr/egg-hash"
+            mkdir -p "${SERVER_DIR}/.potenfyr" 2>/dev/null || true
+        fi
+        _egg_tmp="$(mktemp 2>/dev/null || echo "/tmp/potenfyr-egg.$$")"
+        _egg_fetch_ok=0
+        if command -v curl >/dev/null 2>&1; then
+            curl -fsSL --retry 2 --max-time 30 "${EGG_UPDATE_URL}" -o "${_egg_tmp}" 2>/dev/null && _egg_fetch_ok=1
+        elif command -v wget >/dev/null 2>&1; then
+            wget -qO "${_egg_tmp}" "${EGG_UPDATE_URL}" 2>/dev/null && _egg_fetch_ok=1
+        fi
+        if [ "${_egg_fetch_ok}" = "1" ] && [ -s "${_egg_tmp}" ]; then
+            _egg_hash_new="$(sha256sum "${_egg_tmp}" 2>/dev/null | cut -d' ' -f1)"
+            _egg_hash_old="$(cat "${_egg_hashfile}" 2>/dev/null || cat /etc/potenfyr-egg-hash 2>/dev/null || true)"
+            if [ -n "${_egg_hash_new}" ] && [ "${_egg_hash_new}" != "${_egg_hash_old}" ]; then
+                case "${EGG_UPDATE_URL}" in
+                    *.sh)
+                        # Direct launcher replacement
+                        if cp "${_egg_tmp}" "${_egg_target}" 2>/dev/null; then
+                            chmod +x "${_egg_target}" 2>/dev/null || true
+                            echo "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
+                            ok "Launcher self-updated from EGG_UPDATE_URL."
+                        else
+                            warn "Launcher self-update failed (target not writable): ${_egg_target}"
+                        fi
+                        ;;
+                    *)
+                        # egg JSON changed -> refresh launcher from same branch
+                        _base="${EGG_UPDATE_URL%/*}"
+                        _launcher_ok=0
+                        if curl -fsSL --retry 2 --max-time 30 "${_base}/run.sh" -o /tmp/potenfyr-run.sh 2>/dev/null && [ -s /tmp/potenfyr-run.sh ] && grep -q "PotenFYR Studios" /tmp/potenfyr-run.sh 2>/dev/null; then
+                            if head -c 2 /tmp/potenfyr-run.sh | grep -q $'\r'; then
+                                sed -i 's/\r$//' /tmp/potenfyr-run.sh 2>/dev/null || true
+                            fi
+                            if cp /tmp/potenfyr-run.sh "${_egg_target}" 2>/dev/null; then
+                                chmod +x "${_egg_target}" 2>/dev/null || true
+                                _launcher_ok=1
+                            fi
+                        fi
+                        if [ "${_launcher_ok}" = "1" ]; then
+                            echo "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
+                            ok "Egg update detected - launcher refreshed from ${_base}."
+                        else
+                            warn "Egg update detected but launcher refresh failed - continuing with installed launcher."
+                        fi
+                        rm -f /tmp/potenfyr-run.sh 2>/dev/null || true
+                        ;;
+                esac
+            else
+                log "Egg is up to date."
+            fi
+        else
+            warn "EGG_UPDATE_URL fetch failed - continuing with installed launcher."
+        fi
+        rm -f "${_egg_tmp}" 2>/dev/null || true
+        unset _egg_tmp _egg_hash_new _egg_hash_old _egg_target _egg_hashfile _base _launcher_ok _egg_fetch_ok
+    fi
+fi
+
+# Launcher resolution prefers the user-writable self-update override so
+# refreshed launchers (EGG_UPDATE_URL) actually take effect on non-root panels.
+if [ -f "${SERVER_DIR}/.potenfyr/run.sh" ]; then
+    RUNTIME_DIR="${SERVER_DIR}/.potenfyr"
+elif [ -f /usr/local/bin/run.sh ]; then
+    RUNTIME_DIR="/usr/local/bin"
+elif [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
+    RUNTIME_DIR="/tmp/.database-runtime"
+fi
 
 # Also map common .env variations (DB_DATABASE, DB_USERNAME)
 if [ -z "${DB_NAME:-}" ]; then

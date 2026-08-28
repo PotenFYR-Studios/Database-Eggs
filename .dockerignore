@@ -17,6 +17,9 @@ logs/
 run/
 bin/
 .runtimes/
+.environments/
+.potenfyr/
+.logs/
 opt/
 socket/
 *.sock
