@@ -454,6 +454,59 @@ STOP_HANDLER=""
 STDIN_READER_PID=""
 _SHUTDOWN_IN_PROGRESS=0
 
+# Recursively collect all descendant PIDs of a process
+get_all_child_pids() {
+    local parent="$1"
+    [ -z "${parent}" ] && return 0
+    local children
+    children=$(pgrep -P "${parent}" 2>/dev/null || true)
+    if [ -z "${children}" ] && [ -d "/proc" ]; then
+        children=$(awk -v p="${parent}" '$1 == "PPid:" && $2 == p {print FILENAME}' /proc/[0-9]*/status 2>/dev/null | awk -F/ '{print $3}' || true)
+    fi
+    for child in ${children}; do
+        get_all_child_pids "${child}"
+        echo "${child}"
+    done
+}
+
+# Gracefully terminate a process and its full process tree, escalating to SIGKILL
+terminate_process_tree() {
+    local root_pid="$1"
+    local timeout="${2:-5}"
+    [ -z "${root_pid}" ] || [ "${root_pid}" -le 1 ] 2>/dev/null && return 0
+    kill -0 "${root_pid}" 2>/dev/null || return 0
+
+    local pids
+    pids="$(get_all_child_pids "${root_pid}") ${root_pid}"
+
+    # Step 1: Send SIGTERM and SIGINT for graceful stop across entire tree
+    for p in ${pids}; do
+        kill -TERM "${p}" 2>/dev/null || true
+        kill -INT "${p}" 2>/dev/null || true
+    done
+
+    # Step 2: Poll every 0.2s for graceful exit
+    local waited=0
+    local max_wait=$((timeout * 5))
+    while kill -0 "${root_pid}" 2>/dev/null && [ "${waited}" -lt "${max_wait}" ]; do
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+
+    # Step 3: Escalate to SIGKILL if any process in the tree remains alive
+    if kill -0 "${root_pid}" 2>/dev/null; then
+        pids="$(get_all_child_pids "${root_pid}") ${root_pid}"
+        for p in ${pids}; do
+            kill -KILL "${p}" 2>/dev/null || true
+            kill -9 "${p}" 2>/dev/null || true
+        done
+        sleep 0.3
+    fi
+
+    # Step 4: Reap child
+    wait "${root_pid}" 2>/dev/null || true
+}
+
 _do_graceful_shutdown() {
     local sig="${1:-SIGTERM}"
     if [ "${_SHUTDOWN_IN_PROGRESS}" = "1" ]; then
@@ -488,9 +541,25 @@ _do_graceful_shutdown() {
 
         if kill -0 "${DAEMON_PID}" 2>/dev/null; then
             warn "${PROJECT_TYPE^^} (PID ${DAEMON_PID}) did not terminate within ${max_wait}s. Forcing shutdown..."
-            kill -9 "${DAEMON_PID}" 2>/dev/null || true
-            wait "${DAEMON_PID}" 2>/dev/null || true
+            terminate_process_tree "${DAEMON_PID}" 3
         fi
+    fi
+
+    # Container-wide sweep: catch orphaned/double-forked processes that escaped
+    # the daemon PID (re-parented to PID 1). Without this, such strays keep
+    # serving connections after the panel has already flipped to "stopping".
+    # Exclude: ourselves, the tee that mirrors the console log, and the
+    # ps/awk/sed/grep helpers used by this very sweep.
+    if [ -d "/proc" ]; then
+        local _me="$$" _p
+        for _p in $(ps -eo pid=,ppid= 2>/dev/null | awk -v me="${_me}" '$2 == 1 && $1 != me {print $1}'); do
+            [ -n "${_p}" ] && [ "${_p}" -gt 1 ] 2>/dev/null || continue
+            case "$(ps -o comm= -p "${_p}" 2>/dev/null)" in
+                tee|ps|awk|sed|grep) continue ;;
+            esac
+            log "Terminating orphaned process ${_p} ($(ps -o comm= -p "${_p}" 2>/dev/null))..."
+            terminate_process_tree "${_p}" 3
+        done
     fi
 
     ok "${PROJECT_TYPE^^} server stopped cleanly."
