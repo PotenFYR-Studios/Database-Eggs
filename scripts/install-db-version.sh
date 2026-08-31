@@ -36,14 +36,17 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib-diagnostics.sh" 2>/dev
     || source /usr/local/bin/lib-diagnostics.sh 2>/dev/null \
     || source ./lib-diagnostics.sh 2>/dev/null
 
-if [ "${PF_DIAG_VERSION:-}" != "1.0" ]; then
-    # Minimal fallback if library unavailable
-    log()  { echo "[version-installer] $*"; }
-    ok()   { echo "[version-installer][OK] $*"; }
-    warn() { echo "[version-installer][warn] $*" >&2; }
-    err()  { echo "[version-installer][ERROR] $*" >&2; }
-    fail() { err "$*"; exit 1; }
-fi
+case "${PF_DIAG_VERSION:-}" in
+    1.0|2.0) : ;;
+    *)
+        # Minimal fallback if library unavailable
+        log()  { echo "[version-installer] $*"; }
+        ok()   { echo "[version-installer][OK] $*"; }
+        warn() { echo "[version-installer][warn] $*" >&2; }
+        err()  { echo "[version-installer][ERROR] $*" >&2; }
+        fail() { err "$*"; exit 1; }
+        ;;
+esac
 
 # -----------------------------------------------------------------------------
 # Tooling & architecture
@@ -161,8 +164,35 @@ _json_tags() { # Extract tag_name values without jq (first match wins upstream o
     fi
 }
 
+# --- Resolution disk cache -------------------------------------------------------
+# api.github.com allows 60 requests/hour per IP; shared panel nodes exhaust that
+# instantly. Cache every upstream lookup for 6h in /tmp so repeat boots are
+# free and rate-limited boots still resolve from the last successful answer.
+pf_cache_get() { # pf_cache_get <key> [ttl_seconds]
+    local key="$1" ttl="${2:-21600}" f="/tmp/.pf-vercache-${key}"
+    [ -f "${f}" ] || return 1
+    local ts now
+    ts=$(head -n1 "${f}" 2>/dev/null)
+    now=$(date -u +%s 2>/dev/null || echo 0)
+    case "${ts}" in ''|*[!0-9]*) rm -f "${f}" 2>/dev/null || true; return 1 ;; esac
+    { [ "${now}" -ge "${ts}" ] && [ $((now - ts)) -le "${ttl}" ]; } || { rm -f "${f}" 2>/dev/null || true; return 1; }
+    tail -n1 "${f}" 2>/dev/null
+}
+pf_cache_put() { # pf_cache_put <key> <value>
+    printf '%s\n%s\n' "$(date -u +%s 2>/dev/null || echo 0)" "$2" > "/tmp/.pf-vercache-${1}" 2>/dev/null || true
+}
+
+# Extract the newest tag from a releases LIST JSON document (array form).
+_json_list_tags() { # prints tag_name values in document order (jq optional)
+    if have jq; then jq -r '.[].tag_name' 2>/dev/null; else
+        grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]*"' | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+    fi
+}
+
 gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
-    local repo="$1" pre="${2:-0}" tag=""
+    local repo="$1" pre="${2:-0}" tag="" key="ghtag-${repo//\//-}-${pre}"
+    tag=$(pf_cache_get "${key}" 21600 2>/dev/null || true)
+    [ -n "${tag}" ] && { printf '%s' "${tag}"; return 0; }
     if [ "${pre}" = "1" ]; then
         # Newest release of ANY kind (beta/alpha/rc/nightly included)
         tag=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=10" - 2>/dev/null | \
@@ -173,6 +203,19 @@ gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
         tag=$(fetch "https://api.github.com/repos/${1}/releases/latest" - 2>/dev/null | _json_tags)
         [ -z "${tag}" ] && tag=$(fetch "https://api.github.com/repos/${1}/releases?per_page=5" - 2>/dev/null | _json_tags)
     fi
+    if [ -z "${tag}" ] && [ "${pre}" != "1" ]; then
+        # Rate-limit / API outage fallback: scrape the releases/latest HTTP
+        # redirect (no API quota, always current). Follows to the final tag URL.
+        if have curl; then
+            tag=$(curl -fsSL -A "${PF_CURL_UA}" -o /dev/null -w '%{url_effective}' --max-time 25 "https://github.com/${repo}/releases/latest" 2>/dev/null | sed -E 's#.*/releases/tag/##' | tr -d '\r\n')
+        elif have wget; then
+            tag=$(wget -Sq --spider --max-redirect=8 -T 20 "https://github.com/${repo}/releases/latest" 2>&1 | grep -i '^  Location:' | tail -n1 | sed -E 's#.*/releases/tag/##' | tr -d '\r\n[:space:]')
+        fi
+        case "${tag}" in
+            https://*|""|*"releases"*) tag="" ;;   # redirect did not reach a tag page
+        esac
+    fi
+    [ -n "${tag}" ] && pf_cache_put "${key}" "${tag}"
     printf '%s' "${tag}"
 }
 
@@ -252,28 +295,36 @@ probe_url() { curl -fsIL -A "${PF_CURL_UA}" --retry 1 --connect-timeout 10 --max
 # shellcheck disable=SC2120
 eofl_resolve() { # eofl_resolve <product> <prefix>
     local product="$1" prefix="${2:-}"
+    local key="eofl-${product}-${prefix}"
+    local cached
+    cached=$(pf_cache_get "${key}" 21600 2>/dev/null || true)
+    [ -n "${cached}" ] && { printf '%s' "${cached}"; return 0; }
+
     local cache_file="/tmp/.eofl-cache-${product}.json"
     if [ ! -s "${cache_file}" ]; then
         fetch "https://endoflife.date/api/${product}.json" "${cache_file}" || true
     fi
     [ -s "${cache_file}" ] || return 1
 
+    local v=""
     if have jq; then
         if [ -n "${prefix}" ]; then
-            jq -r --arg p "${prefix}" '[.[] | select(.cycle | startswith($p))][0].latest // empty' "${cache_file}" 2>/dev/null
+            v=$(jq -r --arg p "${prefix}" '[.[] | select(.cycle | startswith($p))][0].latest // empty' "${cache_file}" 2>/dev/null)
         else
-            jq -r '.[0].latest // empty' "${cache_file}" 2>/dev/null
+            v=$(jq -r '.[0].latest // empty' "${cache_file}" 2>/dev/null)
         fi
     else
         # jq-less fallback: pair up cycle/latest fields in document order
-        paste \
+        v=$(paste \
             <(grep -oE '"cycle"[[:space:]]*:[[:space:]]*"[^"]*"' "${cache_file}" | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/') \
             <(grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]*"' "${cache_file}" | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/') \
         | awk -F'\t' -v p="${prefix}" '
             NF<2 {next}
             p=="" && !done {print $2; done=1; exit}
-            index($1, p)==1 {print $2; exit}'
+            index($1, p)==1 {print $2; exit}')
     fi
+    [ -n "${v}" ] && pf_cache_put "${key}" "${v}"
+    printf '%s' "${v}"
 }
 
 verify_checksum() { # verify_checksum <file> <sidecar_url>
@@ -418,14 +469,47 @@ prune_extracted() {
     return 0
 }
 
-system_version_satisfies() { # system_version_satisfies <binary> <wanted_major>
+system_version_satisfies() { # system_version_satisfies <binary> <wanted_version>
     local bin="$1" want="$2"
     [ -n "${want}" ] || return 1
     command -v "${bin}" >/dev/null 2>&1 || return 1
     local got
     got="$("${bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -n1)"
     [ -n "${got}" ] || return 1
-    [ "${got%%.*}" = "${want%%.*}" ]
+    # Series pins ("8.4") must match major AND minor; plain major pins ("18")
+    # match on the major only. Non-numeric wants ("latest") never satisfy.
+    case "${want}" in
+        [0-9]*.[0-9]*)
+            [ "${got%.*}" = "${want}" ] || [ "${got}" = "${want}" ]
+            ;;
+        [0-9]*)
+            [ "${got%%.*}" = "${want%%.*}" ]
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+# Version of a binary we previously provisioned into INSTALL_DIR (empty if the
+# binary is missing or won't report a version).
+installed_binary_version() { # installed_binary_version <binary_path>
+    local b="$1"
+    [ -x "${b}" ] || return 1
+    "${b}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1
+}
+
+# True when a provisioned binary already serves the requested version series.
+# A version switch (7.4 -> 8.2) must NEVER silently reuse the old binary.
+provisioned_series_matches() { # provisioned_series_matches <bin_path> <resolved>
+    local got want="$2"
+    got="$(installed_binary_version "$1" 2>/dev/null || true)"
+    [ -n "${got}" ] || return 1
+    case "${want}" in
+        [0-9]*.[0-9]*) [ "${got%.*}" = "${want}" ] || [ "${got}" = "${want}" ] ;;
+        [0-9]*)        [ "${got%%.*}" = "${want%%.*}" ] ;;
+        *)             return 1 ;;
+    esac
 }
 
 # -----------------------------------------------------------------------------
@@ -472,12 +556,12 @@ resolve_version() {
     if [ "${req}" = "latest" ] || [ "${req}" = "default" ]; then
         local v=""
         case "${ENGINE}" in
-            postgresql)                v=$(eofl_resolve "postgresql" "") ;;
-            mariadb)                   v=$(eofl_resolve "mariadb" "") ;;
+            postgresql)                v=$(gh_latest_tag "theseus-rs/postgresql-binaries"); [ -z "${v}" ] && v=$(eofl_resolve "postgresql" "") ;;
+            mariadb)                   v=$(eofl_resolve "mariadb" ""); [ -z "${v}" ] && { v=$(gh_latest_tag "MariaDB/server"); v=${v#mariadb-}; } ;;
             mysql)                     v=$(eofl_resolve "mysql" "") ;;
-            mongodb)                   v=$(eofl_resolve "mongodb" "") ;;
-            redis)                     v=$(eofl_resolve "redis" "") ;;
-            valkey)                    v=$(eofl_resolve "valkey" "") ;;
+            mongodb)                   v=$(eofl_resolve "mongodb" ""); [ -z "${v}" ] && { v=$(gh_latest_tag "mongodb/mongodb"); v=${v#v}; } ;;
+            redis)                     v=$(eofl_resolve "redis" ""); [ -z "${v}" ] && { v=$(gh_latest_tag "redis/redis"); v=${v#v}; } ;;
+            valkey)                    v=$(eofl_resolve "valkey" ""); [ -z "${v}" ] && { v=$(gh_latest_tag "valkey-io/valkey"); v=${v#v}; } ;;
             memcached)                 v=$(eofl_resolve "memcached" "") ;;
             dragonfly)                 v=$(gh_latest_tag "dragonflydb/dragonfly"); v=${v#v} ;;
             keydb)                     v=$(gh_latest_tag "EQ-Alpha/KeyDB"); v=${v#v} ;;
@@ -609,11 +693,26 @@ install_postgresql() {
     tag=$(gh_latest_tag "theseus-rs/postgresql-binaries")
     if [ -n "${want_major}" ]; then
         if [ -z "${tag}" ] || ! [[ "${tag}" =~ ^${want_major}\. ]]; then
-            tag=$(fetch "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=60" - | \
-                  jq -r --arg m "${want_major}" '[.[].tag_name | select(startswith($m ++ "."))][0] // empty' 2>/dev/null)
+            # Major-specific lookup (works with or without jq; newest first)
+            tag=$(fetch "https://api.github.com/repos/theseus-rs/postgresql-binaries/releases?per_page=100" - 2>/dev/null | \
+                  _json_list_tags | grep -E "^${want_major}\." | head -n1)
+        fi
+        # Endoflife fallback for the newest patch of the requested series
+        if [ -z "${tag}" ]; then
+            local series_latest
+            series_latest=$(eofl_resolve "postgresql" "${want_major}" 2>/dev/null || true)
+            if [ -n "${series_latest}" ] && [[ "${series_latest}" =~ ^${want_major}\. ]]; then
+                tag="${series_latest}"
+            fi
         fi
     fi
-    [ -z "${tag}" ] && fail "No PostgreSQL build located matching '${RESOLVED}'. Valid majors: 13-18."
+    if [ -z "${tag}" ]; then
+        # No matching upstream build (rate limits, network, or nonexistent
+        # major): serve the container-provided PostgreSQL loudly instead of
+        # hard-failing the boot; the launcher's strict verifier announces the
+        # substitution. Invalid version pins still surface clearly.
+        fallback_to_system "No PostgreSQL build located matching '${RESOLVED}' (upstream lookup failed)."
+    fi
 
     local dest="${INSTALL_DIR}/pg-${tag%%.*}"
     if [ -x "${dest}/bin/postgres" ] && "${dest}/bin/postgres" --version 2>/dev/null | grep -qE " ${tag%%.*}[. ]"; then
@@ -678,7 +777,15 @@ install_postgresql() {
 # -----------------------------------------------------------------------------
 install_mariadb() {
     local base="${SERVER_DIR:-$(pwd)}/opt/mariadb"
-    [ -x "${base}/bin/mariadbd" ] && { log "MariaDB ${RESOLVED} already installed."; return 0; }
+    # Version-aware reuse: a MariaDB provisioned for a DIFFERENT series must
+    # never silently serve a new request (version switches re-provision).
+    if [ -x "${base}/bin/mariadbd" ]; then
+        if provisioned_series_matches "${base}/bin/mariadbd" "${RESOLVED}"; then
+            log "MariaDB $(installed_binary_version "${base}/bin/mariadbd") already installed (matches '${RESOLVED}')."
+            return 0
+        fi
+        warn "Existing MariaDB $(installed_binary_version "${base}/bin/mariadbd") does not match requested '${RESOLVED}' - re-provisioning."
+    fi
 
     # Official bintars link glibc: musl hosts (Alpine) use the system engine
     if [ "${PF_LIBC:-gnu}" = "musl" ]; then
@@ -734,7 +841,14 @@ install_mariadb() {
 # -----------------------------------------------------------------------------
 install_mysql() {
     local base="${SERVER_DIR:-$(pwd)}/opt/mysql"
-    [ -x "${base}/bin/mysqld" ] && { log "MySQL ${RESOLVED} already installed."; return 0; }
+    # Version-aware reuse (same contract as MariaDB above)
+    if [ -x "${base}/bin/mysqld" ]; then
+        if provisioned_series_matches "${base}/bin/mysqld" "${RESOLVED}"; then
+            log "MySQL $(installed_binary_version "${base}/bin/mysqld") already installed (matches '${RESOLVED}')."
+            return 0
+        fi
+        warn "Existing MySQL $(installed_binary_version "${base}/bin/mysqld") does not match requested '${RESOLVED}' - re-provisioning."
+    fi
 
     # Official generic builds link glibc: musl hosts (Alpine) use system engine
     if [ "${PF_LIBC:-gnu}" = "musl" ]; then
@@ -883,7 +997,16 @@ ensure_mongosh() {
 }
 
 install_mongodb() {
-    [ -x "${INSTALL_DIR}/mongod" ] && { log "MongoDB already present."; ensure_mongosh; return 0; }
+    # Version-aware reuse: re-provision when the provisioned binary is from a
+    # different series than requested.
+    if [ -x "${INSTALL_DIR}/mongod" ]; then
+        if provisioned_series_matches "${INSTALL_DIR}/mongod" "${RESOLVED}"; then
+            log "MongoDB $(installed_binary_version "${INSTALL_DIR}/mongod") already present (matches '${RESOLVED}')."
+            ensure_mongosh
+            return 0
+        fi
+        warn "Existing MongoDB $(installed_binary_version "${INSTALL_DIR}/mongod") does not match requested '${RESOLVED}' - re-provisioning."
+    fi
 
     # Lightweight path: system binary already provides the requested series
     if [ -n "${RESOLVED}" ] && system_version_satisfies mongod "${RESOLVED}"; then
@@ -968,7 +1091,14 @@ gh_release_install() { # gh_release_install <repo> <asset_regex> <inner_name> <f
     [ -x "${INSTALL_DIR}/${final}" ] && { log "${final} already present."; return 0; }
     local asset_url
     asset_url=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=30" - | \
-        jq -r --arg re "${regex}" '[.[].assets[].browser_download_url | select(test($re))][0] // empty' 2>/dev/null)
+        if have jq; then
+            jq -r --arg re "${regex}" '[.[].assets[].browser_download_url | select(test($re))][0] // empty' 2>/dev/null
+        else
+            grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
+                | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/' \
+                | grep -E "${regex}" \
+                | head -n1
+        fi)
     [ -z "${asset_url}" ] && { warn "No release asset matched '${regex}' for ${repo}."; return 1; }
     log "Fetching $(basename "${asset_url}") ..."
     local tmp_dl; tmp_dl=$(mktemp)
@@ -1006,30 +1136,63 @@ install_redis_family() {
         memcached) sysbin="memcached" ;;
         dragonfly) sysbin="" ;;
     esac
+
+    # 'latest' that survived resolution without a concrete version (every
+    # upstream lookup failed) must be re-resolved here, never passed to URLs.
+    case "${ENGINE}" in
+        redis|valkey|keydb|memcached)
+            if [ -z "${RESOLVED}" ] || [ "${RESOLVED}" = "latest" ]; then
+                local lv=""
+                case "${ENGINE}" in
+                    redis)    lv=$(gh_latest_tag "redis/redis"); lv="${lv#v}" ;;
+                    valkey)   lv=$(gh_latest_tag "valkey-io/valkey"); lv="${lv#v}" ;;
+                    keydb)    lv=$(gh_latest_tag "EQ-Alpha/KeyDB"); lv="${lv#v}" ;;
+                    memcached) lv=$(eofl_resolve "memcached" "") ;;
+                esac
+                if [ -n "${lv}" ]; then
+                    RESOLVED="${lv}"
+                    log "'latest' re-resolved for ${ENGINE} -> ${RESOLVED}"
+                fi
+            fi
+            ;;
+    esac
+
+    # System binary reuse: series pins must match major AND minor (a system
+    # Redis 6.0.16 must never silently serve a Redis 8.2 request).
     if [ -n "${sysbin}" ] && system_version_satisfies "${sysbin}" "${RESOLVED}"; then
         log "System ${sysbin} matches requested series (${RESOLVED}); skipping source build."
         return 0
     fi
     case "${ENGINE}" in
         redis)
-            [ -x "${INSTALL_DIR}/redis-server" ] && return 0
+            if [ -x "${INSTALL_DIR}/redis-server" ] && provisioned_series_matches "${INSTALL_DIR}/redis-server" "${RESOLVED}"; then
+                log "Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") already provisioned (matches '${RESOLVED}')."
+                return 0
+            fi
+            [ -x "${INSTALL_DIR}/redis-server" ] && warn "Existing Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") does not match requested '${RESOLVED}' - re-provisioning."
             build_from_source "https://download.redis.io/releases/redis-${RESOLVED}.tar.gz" src/redis-server src/redis-cli \
                 || fallback_to_system "Redis ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         valkey)
-            [ -x "${INSTALL_DIR}/valkey-server" ] && return 0
+            if [ -x "${INSTALL_DIR}/valkey-server" ] && provisioned_series_matches "${INSTALL_DIR}/valkey-server" "${RESOLVED}"; then
+                return 0
+            fi
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
             build_from_source "https://github.com/valkey-io/valkey/archive/refs/tags/${tag}.tar.gz" src/valkey-server src/valkey-cli \
                 || fallback_to_system "Valkey ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         keydb)
-            [ -x "${INSTALL_DIR}/keydb-server" ] && return 0
+            if [ -x "${INSTALL_DIR}/keydb-server" ] && provisioned_series_matches "${INSTALL_DIR}/keydb-server" "${RESOLVED}"; then
+                return 0
+            fi
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
             build_from_source "https://github.com/EQ-Alpha/KeyDB/archive/refs/tags/${tag}.tar.gz" keydb-server keydb-cli \
                 || fallback_to_system "KeyDB ${RESOLVED} cannot be compiled here."
             ;;
         memcached)
-            [ -x "${INSTALL_DIR}/memcached" ] && return 0
+            if [ -x "${INSTALL_DIR}/memcached" ] && provisioned_series_matches "${INSTALL_DIR}/memcached" "${RESOLVED}"; then
+                return 0
+            fi
             apt_try_install libevent-dev || true
             ldconfig 2>/dev/null || true
             build_from_source "https://memcached.org/files/memcached-${RESOLVED}.tar.gz" memcached \

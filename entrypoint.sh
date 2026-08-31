@@ -2,20 +2,23 @@
 # =============================================================================
 #  Multi Database - Universal Container Entrypoint
 #  By PotenFYR Studios (https://github.com/PotenFYR-Studios/Database-Eggs)
+#
+#  Multi-Panel Support:
+#    - Pterodactyl Panel (Wings Daemon)
+#    - Pelican Panel (Pelican Wings)
+#    - Feather Panel (feather-panel / renoki-co, detected via P_SERVER_UUID_SHORT)
+#    - PufferPanel, Jexactyl / Wisp / Emerald (Wings forks)
+#    - Convoy, Cytopanel, AMP
+#    - Kubernetes / OpenShift, Railway / Render / Fly.io, plain Docker
 # =============================================================================
 
-# Colors
-C_RESET='\033[0m'
-C_BOLD='\033[1m'
-C_CYAN='\033[36m'
-C_GREEN='\033[32m'
-C_YELLOW='\033[33m'
-C_RED='\033[31m'
-C_MAGENTA='\033[35m'
-C_BLUE='\033[34m'
-C_DIM='\033[2m'
+# --- Security baseline -----------------------------------------------------------
+# Files created by the entrypoint are group/other-readable but not writable; core
+# dumps are disabled so crashes cannot eat server disk space.
+umask 022
+ulimit -c 0 2>/dev/null || true
 
-export C_RESET C_BOLD C_CYAN C_GREEN C_YELLOW C_RED C_MAGENTA C_BLUE C_DIM
+export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 
 # -----------------------------------------------------------------------------
 # Central Diagnostics Library (logging, traces, crash safety, log rotation)
@@ -27,9 +30,6 @@ _src="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/scripts/lib-diag
     || source ./lib-diagnostics.sh \
     || true
 
-PANEL_NAME="${PANEL_NAME:-${P_SERVER_UUID:+pterodactyl}}"
-PANEL_NAME="${PANEL_NAME:-panel}"
-
 # -----------------------------------------------------------------------------
 # Universal Panel Detection (Pterodactyl, Pelican, Feather, Wisp, Convoy,
 # Cytopanel, Arcadia, Kubernetes/OpenShift, plain Docker, anything else)
@@ -40,25 +40,38 @@ detect_panel() {
 
     if [ -n "${PANEL_TYPE_OVERRIDE:-}" ]; then
         PANEL_TYPE="${PANEL_TYPE_OVERRIDE}"
-    elif [ -n "${P_SERVER_UUID:-}" ] || [ -n "${P_SERVER_LOCATION:-}" ]; then
-        PANEL_TYPE="pelican"          # Wings v2 environment variables
     elif [ -n "${KUBERNETES_SERVICE_HOST:-}" ]; then
         if [ -n "${OPENSHIFT_BUILD_NAME:-}" ]; then
             PANEL_TYPE="openshift"
         else
             PANEL_TYPE="kubernetes"
         fi
+    elif [ -n "${P_SERVER_UUID:-}" ] || [ -n "${SERVER_UUID:-}" ] || [ -n "${P_SERVER_LOCATION:-}" ] || [ -f "/etc/pterodactyl/config.json" ]; then
+        # Wings-family discrimination:
+        #   Feather Panel injects P_SERVER_UUID plus a Feather-only short UUID
+        #   (P_SERVER_UUID_SHORT). Pelican uses P_SERVER_UUID without it.
+        if [ -n "${P_SERVER_UUID_SHORT:-}" ]; then
+            PANEL_TYPE="feather"
+        elif [ -n "${PELICAN_PANEL_VERSION:-}" ] || { [ -n "${P_SERVER_UUID:-}" ] && [ -z "${SERVER_UUID:-}" ]; }; then
+            PANEL_TYPE="pelican"      # Wings v2 environment variables
+        elif [ -n "${JEXACTYL_VERSION:-}" ] || [ -f "/etc/jexactyl/config.json" ]; then
+            PANEL_TYPE="jexactyl"
+        elif [ -n "${WISP_PANEL_VERSION:-}" ] || [ -f "/etc/wisp/config.json" ]; then
+            PANEL_TYPE="wisp"
+        else
+            PANEL_TYPE="pterodactyl"  # classic wings
+        fi
+    elif [ -n "${EMERALD_SRV_UUID:-}" ]; then
+        PANEL_TYPE="emerald"
     elif [ -n "${WISP_SERVER_UUID:-}" ] || [ -d "/.wisp" ]; then
         PANEL_TYPE="wisp"
     elif [ -n "${CONVOY_SERVER_UUID:-}" ]; then
         PANEL_TYPE="convoy"
     elif [ -n "${CYTOPANEL_SERVER_UUID:-}" ] || [ -n "${CYTO_SERVER_UUID:-}" ]; then
         PANEL_TYPE="cytopanel"
-    elif [ -n "${JEXACTYL_SERVER_UUID:-}" ]; then
-        PANEL_TYPE="jexactyl"
     elif [ -n "${FEATHER_SERVER_UUID:-}" ]; then
         PANEL_TYPE="feather"
-    elif [ -n "${PUFFER_PANEL_TOKEN:-}" ] || [ -n "${PP_SERVER_ID:-}" ] || [ -d "/var/lib/pufferpanel/servers" ]; then
+    elif [ -n "${PUFFER_PANEL_TOKEN:-}" ] || [ -n "${PUFFER_PORT:-}" ] || [ -n "${PP_SERVER_ID:-}" ] || [ -d "/var/lib/pufferpanel/servers" ]; then
         PANEL_TYPE="pufferpanel"
     elif [ -n "${AMP_INSTANCE_ID:-}" ]; then
         PANEL_TYPE="amp"
@@ -78,6 +91,15 @@ detect_panel() {
     export PANEL_TYPE PANEL_NAME
 }
 detect_panel
+
+# Cross-panel port compatibility shims for applications that read
+# panel-specific port variables. Exported strictly AFTER panel detection -
+# exporting them earlier made the Puffer detection branch always match
+# (every container reported PufferPanel).
+if [ -n "${SERVER_PORT:-}" ]; then
+    export FEATHER_PORT="${FEATHER_PORT:-${SERVER_PORT}}"
+    export PUFFER_PORT="${PUFFER_PORT:-${SERVER_PORT}}"
+fi
 
 # Crash-safety traps are installed by lib-diagnostics.sh (pf_err_trap/pf_exit_hook).
 # Signal hygiene: SIGINT/SIGTERM propagate to the exec'd database daemon via tini.
@@ -106,17 +128,51 @@ else
 fi
 SERVER_DIR="$(pwd)"
 
+# -----------------------------------------------------------------------------
+# 3.5 Production Reliability: Console Mirroring & Safety Checks
+# -----------------------------------------------------------------------------
+# Mirror the entire boot + runtime console into .logs/console.log so users can
+# troubleshoot crashes even after the panel scrollback is gone. Opt out with
+# LAUNCHER_LOG=0. Rotates the previous boot's log to .1 automatically.
+if [ "${LAUNCHER_LOG:-1}" = "1" ]; then
+    _LOGDIR="${SERVER_DIR}/.logs"
+    mkdir -p "${_LOGDIR}" 2>/dev/null || true
+    if [ -d "${_LOGDIR}" ] && [ -w "${_LOGDIR}" ]; then
+        LAUNCH_CONSOLE_LOG="${_LOGDIR}/console.log"
+        [ -f "${LAUNCH_CONSOLE_LOG}" ] && mv -f "${LAUNCH_CONSOLE_LOG}" "${LAUNCH_CONSOLE_LOG}.1" 2>/dev/null || true
+        exec > >(tee -a "${LAUNCH_CONSOLE_LOG}") 2>&1
+        # Boot header written into the mirror so log segments are easy to tell
+        # apart when troubleshooting (panel, arch, uid, timestamp).
+        printf '\n=== Database Eggs boot @ %s | panel=%s | arch=%s | uid=%s ===\n' \
+            "$(date -u '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null || date)" \
+            "${PANEL_TYPE}" "$(uname -m 2>/dev/null || echo '?')" "$(id -u 2>/dev/null || echo '?')"
+    fi
+fi
+unset _LOGDIR
+
+# Running as root inside a panel container is a security anti-pattern; warn.
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    warn "Container is running as ROOT. Panels should launch images as a non-root user (e.g. uid 988)."
+fi
+
+# Image provenance stamp (written at docker build time) for supportability.
+if [ -f "/etc/potenfyr-version" ]; then
+    info "Image build: $(head -n1 /etc/potenfyr-version 2>/dev/null)"
+fi
+
 # Create clean user directory tree
 mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/bin"
 
 # Backward-Compatibility & Cleanup:
-# Remove obsolete root scripts copied by previous egg versions so old servers run cleanly on latest image scripts
-if [ -f "${SERVER_DIR}/run.sh" ] && [ -f /usr/local/bin/run.sh ]; then
-    rm -f "${SERVER_DIR}/run.sh" 2>/dev/null || true
-fi
-if [ -f "${SERVER_DIR}/entrypoint.sh" ] && [ -f /entrypoint.sh ]; then
-    rm -f "${SERVER_DIR}/entrypoint.sh" 2>/dev/null || true
-fi
+# Remove obsolete root scripts copied by previous egg versions so old servers run cleanly on latest image scripts.
+# Signature-gated (must contain the studio header) so user files with the same
+# name are never touched.
+for _egg_script in run.sh entrypoint.sh; do
+    if [ -f "${SERVER_DIR}/${_egg_script}" ] && grep -q "PotenFYR Studios" "${SERVER_DIR}/${_egg_script}" 2>/dev/null; then
+        rm -f "${SERVER_DIR}/${_egg_script}" 2>/dev/null || true
+    fi
+done
+unset _egg_script
 if [ -d "${SERVER_DIR}/scripts" ] && [ -f /usr/local/bin/password-gen.sh ]; then
     rm -rf "${SERVER_DIR}/scripts" 2>/dev/null || true
 fi
@@ -211,7 +267,7 @@ apply_persisted() {
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
             PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND \
-            EGG_UPDATE_URL AUTO_UPDATE_EGG; do
+            EGG_UPDATE_URL AUTO_UPDATE_EGG PANEL_STOP_WATCHER CLI_THEME CLI_BANNER_GRADIENT; do
     apply_persisted "${_key}"
 done
 unset _key
@@ -225,22 +281,31 @@ unset _key
 # egg JSON URL. AUTO_UPDATE_EGG=0 disables the check entirely.
 #
 # Behaviour:
-#   * URL ending in .json / the raw egg file  -> compared against the hash
-#     file; on change the launcher scripts are refreshed from the same repo
-#     branch (egg JSON metadata travels with the image).
-#   * URL pointing at a run.sh                -> replaces the launcher directly.
+#   * https URLs only - plain http is refused so a tampered update server can
+#     never inject launcher code.
+#   * URL ending in .sh   -> replaces the launcher directly (staged + sha256
+#     recorded; the staged copy is only promoted by the resolution step below
+#     if its recorded hash matches, so a planted file is never executed).
+#   * URL ending in .json -> compared against the hash file; on change the
+#     launcher scripts are refreshed from the same repo branch.
 # Failure of any step is non-fatal: the previously installed launcher runs.
+# The launcher override lives OUTSIDE the user's data volume (in /opt/potenfyr,
+# container-local, or /tmp/.database-runtime) so egg internals are never exposed
+# under the workspace the panel file manager can see.
+phase "Egg Self-Update"
 EGG_UPDATE_URL="${EGG_UPDATE_URL:-https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json}"
 AUTO_UPDATE_EGG="${AUTO_UPDATE_EGG:-1}"
 
 if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
-    if command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
+    if ! [[ "${EGG_UPDATE_URL}" =~ ^https:// ]]; then
+        warn "EGG_UPDATE_URL must be an https:// URL - self-update disabled for safety."
+    elif command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1; then
         # Non-root panels (uid 988 etc.) cannot write /usr/local/bin; fall back
-        # to a user-writable override location that launcher resolution below
-        # prefers over the image copy.
+        # to a user-writable override location OUTSIDE the user data volume that
+        # launcher resolution below prefers over the image copy.
         _egg_target="/usr/local/bin/run.sh"
         _egg_hashfile="/etc/potenfyr-egg-hash"
-        if [ -f /usr/local/bin/run.sh ]; then
+        if [ -f /usr/local/bin/run.sh ] && [ -w /usr/local/bin ] && [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
             RUNTIME_DIR="/usr/local/bin"
         else
             RUNTIME_DIR="/tmp/.database-runtime"
@@ -248,11 +313,7 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
         fi
         _egg_target="${RUNTIME_DIR}/run.sh"
         _egg_hashfile="${RUNTIME_DIR}/.potenfyr-egg-hash"
-        if ! [ -w "$(dirname "${_egg_target}")" ] 2>/dev/null || [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
-            _egg_target="${SERVER_DIR}/.potenfyr/run.sh"
-            _egg_hashfile="${SERVER_DIR}/.potenfyr/egg-hash"
-            mkdir -p "${SERVER_DIR}/.potenfyr" 2>/dev/null || true
-        fi
+        _egg_lhash="${RUNTIME_DIR}/.potenfyr-launcher-hash"
         _egg_tmp="$(mktemp 2>/dev/null || echo "/tmp/potenfyr-egg.$$")"
         _egg_fetch_ok=0
         if command -v curl >/dev/null 2>&1; then
@@ -266,11 +327,19 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
             if [ -n "${_egg_hash_new}" ] && [ "${_egg_hash_new}" != "${_egg_hash_old}" ]; then
                 case "${EGG_UPDATE_URL}" in
                     *.sh)
-                        # Direct launcher replacement
-                        if cp "${_egg_tmp}" "${_egg_target}" 2>/dev/null; then
-                            chmod +x "${_egg_target}" 2>/dev/null || true
-                            echo "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
-                            ok "Launcher self-updated from EGG_UPDATE_URL."
+                        # Direct launcher replacement (staged; promoted only on hash match)
+                        if cp "${_egg_tmp}" "${_egg_target}.update" 2>/dev/null; then
+                            printf '%s\n' "${_egg_hash_new}" > "${RUNTIME_DIR}/.potenfyr-staged-hash" 2>/dev/null || true
+                            if [ "$(sha256sum "${_egg_target}.update" 2>/dev/null | cut -d' ' -f1)" = "${_egg_hash_new}" ]; then
+                                mv -f "${_egg_target}.update" "${_egg_target}" 2>/dev/null || true
+                                chmod +x "${_egg_target}" 2>/dev/null || true
+                                printf '%s\n' "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
+                                printf '%s\n' "$(_egg_hash_new)" > "${_egg_lhash}" 2>/dev/null || true
+                                ok "Launcher self-updated from EGG_UPDATE_URL."
+                            else
+                                rm -f "${_egg_target}.update" 2>/dev/null || true
+                                warn "Staged launcher update failed integrity check - discarded."
+                            fi
                         else
                             warn "Launcher self-update failed (target not writable): ${_egg_target}"
                         fi
@@ -279,43 +348,76 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
                         # egg JSON changed -> refresh launcher from same branch
                         _base="${EGG_UPDATE_URL%/*}"
                         _launcher_ok=0
-                        if curl -fsSL --retry 2 --max-time 30 "${_base}/run.sh" -o /tmp/potenfyr-run.sh 2>/dev/null && [ -s /tmp/potenfyr-run.sh ] && grep -q "PotenFYR Studios" /tmp/potenfyr-run.sh 2>/dev/null; then
-                            if head -c 2 /tmp/potenfyr-run.sh | grep -q $'\r'; then
-                                sed -i 's/\r$//' /tmp/potenfyr-run.sh 2>/dev/null || true
+                        if curl -fsSL --retry 2 --max-time 30 "${_base}/run.sh" -o "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null \
+                           && [ -s "${RUNTIME_DIR}/.run.sh.update" ] \
+                           && grep -q "PotenFYR Studios" "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null; then
+                            if head -c 2 "${RUNTIME_DIR}/.run.sh.update" | grep -q $'\r'; then
+                                sed -i 's/\r$//' "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null || true
                             fi
-                            if cp /tmp/potenfyr-run.sh "${_egg_target}" 2>/dev/null; then
-                                chmod +x "${_egg_target}" 2>/dev/null || true
-                                _launcher_ok=1
-                            fi
+                            _lhash_new="$(sha256sum "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null | cut -d' ' -f1)"
+                            mv -f "${RUNTIME_DIR}/.run.sh.update" "${_egg_target}" 2>/dev/null || true
+                            chmod +x "${_egg_target}" 2>/dev/null || true
+                            printf '%s\n' "${_lhash_new}" > "${_egg_lhash}" 2>/dev/null || true
+                            _launcher_ok=1
                         fi
-                        if [ "${_launcher_ok}" = "1" ]; then
+                        if [ "${_launcher_ok:-0}" = "1" ]; then
                             echo "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
                             ok "Egg update detected - launcher refreshed from ${_base}."
                         else
                             warn "Egg update detected but launcher refresh failed - continuing with installed launcher."
                         fi
-                        rm -f /tmp/potenfyr-run.sh 2>/dev/null || true
+                        rm -f "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null || true
                         ;;
                 esac
             else
-                log "Egg is up to date."
+                info "Egg is up to date."
             fi
         else
             warn "EGG_UPDATE_URL fetch failed - continuing with installed launcher."
         fi
         rm -f "${_egg_tmp}" 2>/dev/null || true
-        unset _egg_tmp _egg_hash_new _egg_hash_old _egg_target _egg_hashfile _base _launcher_ok _egg_fetch_ok
+        unset _egg_tmp _egg_hash_new _egg_hash_old _egg_target _egg_hashfile _egg_lhash _base _launcher_ok _egg_fetch_ok _lhash_new
     fi
 fi
+# Tell run.sh the check already ran this boot (skips a second network round-trip).
+export EGG_UPDATE_CHECKED=1
 
 # Launcher resolution prefers the user-writable self-update override so
-# refreshed launchers (EGG_UPDATE_URL) actually take effect on non-root panels.
-if [ -f "${SERVER_DIR}/.potenfyr/run.sh" ]; then
-    RUNTIME_DIR="${SERVER_DIR}/.potenfyr"
-elif [ -f /usr/local/bin/run.sh ]; then
-    RUNTIME_DIR="/usr/local/bin"
-elif [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
-    RUNTIME_DIR="/tmp/.database-runtime"
+# refreshed launchers (EGG_UPDATE_URL) actually take effect on non-root panels -
+# but only after verifying its sha256 against the hash recorded when it was
+# written. A user-writable file is never blindly executed.
+if [ -f "${RUNTIME_DIR}/.run.sh.update" ] && [ -f "${RUNTIME_DIR}/.potenfyr-staged-hash" ]; then
+    _staged_hash="$(sha256sum "${RUNTIME_DIR}/.run.sh.update" 2>/dev/null | cut -d' ' -f1)"
+    if [ -n "${_staged_hash}" ] && [ "${_staged_hash}" = "$(cat "${RUNTIME_DIR}/.potenfyr-staged-hash" 2>/dev/null)" ]; then
+        mv -f "${RUNTIME_DIR}/.run.sh.update" "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
+    else
+        warn "Staged launcher update failed integrity check - discarded."
+        rm -f "${RUNTIME_DIR}/.run.sh.update" "${RUNTIME_DIR}/.potenfyr-staged-hash" 2>/dev/null || true
+    fi
+fi
+if [ -n "${SERVER_DIR}" ] && [ -d "${SERVER_DIR}/.potenfyr" ]; then
+    # Legacy workspace override from old egg versions: migrate out of the user
+    # volume when it passes integrity, discard when it does not.
+    if [ -f "${SERVER_DIR}/.potenfyr/run.sh" ]; then
+        _lh="$(cat "${SERVER_DIR}/.potenfyr/launcher-hash" 2>/dev/null || true)"
+        if [ -n "${_lh}" ] && [ "$(sha256sum "${SERVER_DIR}/.potenfyr/run.sh" 2>/dev/null | cut -d' ' -f1)" = "${_lh}" ]; then
+            cp "${SERVER_DIR}/.potenfyr/run.sh" "${RUNTIME_DIR}/run.sh.override" 2>/dev/null || true
+            printf '%s\n' "${_lh}" > "${RUNTIME_DIR}/.potenfyr-launcher-hash" 2>/dev/null || true
+            ok "Launcher override moved out of the user workspace."
+        else
+            warn "Old .potenfyr launcher override failed integrity check - discarded."
+        fi
+    fi
+    rm -rf "${SERVER_DIR}/.potenfyr" 2>/dev/null || true
+fi
+if [ -f "${RUNTIME_DIR}/run.sh.override" ]; then
+    _rec_hash="$(cat "${RUNTIME_DIR}/.potenfyr-launcher-hash" 2>/dev/null || true)"
+    if [ -n "${_rec_hash}" ] && [ "$(sha256sum "${RUNTIME_DIR}/run.sh.override" 2>/dev/null | cut -d' ' -f1)" = "${_rec_hash}" ]; then
+        LAUNCHER_OVERRIDE="${RUNTIME_DIR}/run.sh.override"
+    else
+        warn "User-space launcher override failed integrity check - using image launcher."
+        rm -f "${RUNTIME_DIR}/run.sh.override" 2>/dev/null || true
+    fi
 fi
 
 # Also map common .env variations (DB_DATABASE, DB_USERNAME)
@@ -394,7 +496,7 @@ fi
 
 # Generate user environment shortcuts for terminal CLI usage (.profile and .bashrc)
 {
-    printf 'export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
+    printf 'export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
     printf '[ -f "%s/.env" ] && set -a && source "%s/.env" 2>/dev/null && set +a\n' "${SERVER_DIR}" "${SERVER_DIR}"
     printf 'export DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
     printf 'export DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
@@ -425,27 +527,106 @@ fi
 cp -f "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
 chmod 600 "${SERVER_DIR}/.profile" "${SERVER_DIR}/.bashrc" 2>/dev/null || true
 
-# ---------------------------------------------------------------------------
-# Startup banner (Compact Slant font, clean ANSI gradient)
-# ---------------------------------------------------------------------------
-printf "\n"
-printf "${C_CYAN}${C_BOLD}   __  ___      ____  _       ____  ____     ${C_RESET}\n"
-printf "${C_CYAN}${C_BOLD}  /  |/  /_  __/ / /_(_)     / __ \\/ __ )    ${C_RESET}\n"
-printf "${C_BLUE}${C_BOLD} / /|_/ / / / / / __/ /_____/ / / / __  |    ${C_RESET}\n"
-printf "${C_BLUE}${C_BOLD}/ /  / / /_/ / / /_/ /_____/ /_/ / /_/ /     ${C_RESET}\n"
-printf "${C_MAGENTA}${C_BOLD}/_/  /_/\\__,_/_/\\__/_/     /_____/_____/      ${C_RESET}\n"
-printf "${C_YELLOW}${C_BOLD}  » Multi-Database Server Runtime${C_RESET}\n"
-printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
+# -----------------------------------------------------------------------------
+# Startup banner (block-font art, diagonal 256-color gradient sweeps)
+# -----------------------------------------------------------------------------
+# Gradient presets: citrus (brand) aurora sunset ocean candy spectrum | none =
+# flat lime. CLI_BANNER_GRADIENT picks one; "auto" (default) randomizes per
+# boot. Consoles narrower than 78 cols get compact art, < 62 get plain text.
+print_banner() {
+    printf "\n"
+    local _gname _ramp=""
+    case "${CLI_BANNER_GRADIENT:-auto}" in
+        citrus|aurora|sunset|ocean|candy|spectrum) _gname="${CLI_BANNER_GRADIENT}" ;;
+        none|off|plain) _gname="none" ;;
+        auto|*)
+            case $((RANDOM % 6)) in
+                0) _gname="citrus" ;;
+                1) _gname="aurora" ;;
+                2) _gname="sunset" ;;
+                3) _gname="ocean" ;;
+                4) _gname="candy" ;;
+                5) _gname="spectrum" ;;
+            esac ;;
+    esac
+    case "${_gname}" in
+        citrus)   _ramp="22 28 34 40 46 82 118 154 190 220 214 208 202" ;;
+        aurora)   _ramp="22 28 34 41 47 48 49 50 51 45 39 33 27 21" ;;
+        sunset)   _ramp="52 88 124 160 196 202 208 214 220 226" ;;
+        ocean)    _ramp="16 17 18 19 20 26 32 38 44 50 51" ;;
+        candy)    _ramp="53 91 128 164 200 206 212 218 224 213 177 141 105" ;;
+        spectrum) _ramp="196 202 208 214 220 226 190 154 118 82 46 40 34 21 27 33 39 45 51 93 129 165 201 207 213" ;;
+    esac
+
+    if [ "${_gname}" != "none" ]; then
+        # Print one row, sweeping the ramp across columns with a slight
+        # diagonal offset per row so the gradient flows top-left to
+        # bottom-right. Spaces pass through uncolored.
+        _banner_grad_row() {
+            local row="$1" ridx="$2"
+            local -a cs
+            read -ra cs <<< "${_ramp}"
+            local n=${#cs[@]} w=${#row} out="" i ci ch span
+            span=$(( (w > 1 ? w : 2) - 1 + 30 ))
+            for ((i = 0; i < w; i++)); do
+                ch="${row:i:1}"
+                if [ "${ch}" = " " ]; then out+=" "; continue; fi
+                ci=$(( (i + ridx * 6) * (n - 1) / span ))
+                (( ci >= n )) && ci=$(( n - 1 ))
+                out+="\e[38;5;${cs[$ci]}m${ch}"
+            done
+            printf '%b%b\n' "${out}" "${C_RESET}"
+        }
+        # "DATABASE" in ANSI Shadow font, 72 columns wide (fits 80-col panels
+        # without wrapping - wrapped rows would smear escape codes into the art).
+        local -a _art=(
+'██████╗   █████╗  ████████╗  █████╗  ██████╗   █████╗  ███████╗ ███████╗'
+'██╔══██╗ ██╔══██╗ ╚══██╔══╝ ██╔══██╗ ██╔══██╗ ██╔══██╗ ██╔════╝ ██╔════╝'
+'██║  ██║ ███████║    ██║    ███████║ ██████╔╝ ███████║ ███████║ █████╗  '
+'██║  ██║ ██╔══██║    ██║    ██╔══██║ ██╔══██╗ ██╔══██║ ╚════██║ ██╔══╝  '
+'██████╔╝ ██║  ██║    ██║    ██║  ██║ ██████╔╝ ██║  ██║ ███████║ ███████╗'
+'╚═════╝  ╚═╝  ╚═╝    ╚═╝    ╚═╝  ╚═╝ ╚═════╝  ╚═╝  ╚═╝ ╚══════╝ ╚══════╝'
+        )
+        local _w
+        _w="${COLUMNS:-$(tput cols 2>/dev/null || echo 80)}"
+        if [ "${_w:-80}" -ge 74 ] 2>/dev/null; then
+            local r
+            for r in 0 1 2 3 4 5; do
+                _banner_grad_row "${_art[$r]}" "$r"
+            done
+        else
+            # Narrow consoles: clean styled text (figlet art would wrap/corrupt).
+            printf "${C_LIME}${C_BOLD}  »» DATABASE EGGS · Multi-Database Server Runtime${C_RESET}\n"
+            printf "${C_LIME}${C_BOLD}  »» 55+ Engines · Every Version · Every Panel${C_RESET}\n"
+        fi
+    else
+        printf "${C_LIME}${C_BOLD} ██████╗   █████╗  ████████╗  █████╗  ██████╗   █████╗  ███████╗ ███████╗${C_RESET}\n"
+        printf "${C_LIME}${C_BOLD} ██╔══██╗ ██╔══██╗ ╚══██╔══╝ ██╔══██╗ ██╔══██╗ ██╔══██╗ ██╔════╝ ██╔════╝${C_RESET}\n"
+        printf "${C_LIME}${C_BOLD} ██║  ██║ ███████║    ██║    ███████║ ██████╔╝ ███████║ ███████║ █████╗  ${C_RESET}\n"
+        printf "${C_LIME}${C_BOLD} ██║  ██║ ██╔══██║    ██║    ██╔══██║ ██╔══██╗ ██╔══██║ ╚════██║ ██╔══╝  ${C_RESET}\n"
+        printf "${C_LIME}${C_BOLD} ██████╔╝ ██║  ██║    ██║    ██║  ██║ ██████╔╝ ██║  ██║ ███████║ ███████╗${C_RESET}\n"
+        printf "${C_LIME}${C_BOLD} ╚═════╝  ╚═╝  ╚═╝    ╚═╝    ╚═╝  ╚═╝ ╚═════╝  ╚═╝  ╚═╝ ╚══════╝ ╚══════╝${C_RESET}\n"
+    fi
+
+    printf "${C_LIME}${C_BOLD}  </> » Multi-Database Server Runtime · 55+ Engines · Every Version${C_RESET}\n"
+    if [ "${_gname}" = "none" ]; then
+        printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in${C_RESET}\n\n"
+    else
+        printf "${C_DIM}    By PotenFYR Studios • support@potenfyr.in · gradient: %s${C_RESET}\n\n" "${_gname}"
+    fi
+}
+
+print_banner
 
 # Runtime Environment Card
-printf "${C_CYAN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Listen Address" "${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Detected Panel" "${PANEL_TYPE:-standalone}"
-printf "${C_CYAN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_CYAN}${C_BOLD}│${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
-printf "${C_CYAN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
+printf "${C_LIME}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Listen Address" "${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Detected Panel" "${PANEL_TYPE:-standalone}"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
+printf "${C_LIME}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
 
 log "Executing startup launcher..."
 
@@ -454,6 +635,9 @@ if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     log "Custom launcher detected (run.custom.sh). Executing..."
     chmod +x "${SERVER_DIR}/run.custom.sh" 2>/dev/null || true
     exec "${SERVER_DIR}/run.custom.sh"
+elif [ -n "${LAUNCHER_OVERRIDE:-}" ] && [ -f "${LAUNCHER_OVERRIDE}" ]; then
+    chmod +x "${LAUNCHER_OVERRIDE}" 2>/dev/null || true
+    exec "${LAUNCHER_OVERRIDE}"
 elif [ -f "${RUNTIME_DIR}/run.sh" ]; then
     chmod +x "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
     exec "${RUNTIME_DIR}/run.sh"

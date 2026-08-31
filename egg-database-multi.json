@@ -227,6 +227,36 @@
       "user_editable": true,
       "rules": "required|boolean",
       "field_type": "text"
+    },
+    {
+      "name": "Panel Stop Watcher",
+      "description": "Watch console stdin for stop commands ('stop', '^C', 'exit', ...) delivered as text by TTY daemons (Feather Panel and other Wings-family stops). auto = on for all consoles; 0 = disable (keep stdin for the database); 1 = force on.",
+      "env_variable": "PANEL_STOP_WATCHER",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:16",
+      "field_type": "text"
+    },
+    {
+      "name": "Console Theme",
+      "description": "Console output style. 'db' = agent theme (</> database-eggs prefixes); 'classic' = the previous [PotenFYR] bracket style.",
+      "env_variable": "CLI_THEME",
+      "default_value": "db",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:16",
+      "field_type": "text"
+    },
+    {
+      "name": "Banner Gradient",
+      "description": "Boot banner color gradient: auto (random per boot), citrus, aurora, sunset, ocean, candy, spectrum, or none (flat).",
+      "env_variable": "CLI_BANNER_GRADIENT",
+      "default_value": "auto",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:16",
+      "field_type": "text"
     }
   ]
 }

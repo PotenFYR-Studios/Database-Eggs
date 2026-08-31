@@ -8,7 +8,8 @@
 README.md
 LICENSE
 eggs/
-tests/
+tests/*
+!tests/t5b-driver.py
 scripts/.DS_Store
 
 # Runtime data created at container startup
