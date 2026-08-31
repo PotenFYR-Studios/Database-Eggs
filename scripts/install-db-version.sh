@@ -169,7 +169,11 @@ _json_tags() { # Extract tag_name values without jq (first match wins upstream o
 # instantly. Cache every upstream lookup for 6h in /tmp so repeat boots are
 # free and rate-limited boots still resolve from the last successful answer.
 pf_cache_get() { # pf_cache_get <key> [ttl_seconds]
-    local key="$1" ttl="${2:-21600}" f="/tmp/.pf-vercache-${key}"
+    # NOTE: each declaration on its own line - bash expands the whole `local`
+    # statement before binding, so a same-line self-reference dies under set -u.
+    local key="$1"
+    local ttl="${2:-21600}"
+    local f="/tmp/.pf-vercache-${key}"
     [ -f "${f}" ] || return 1
     local ts now
     ts=$(head -n1 "${f}" 2>/dev/null)
@@ -190,7 +194,10 @@ _json_list_tags() { # prints tag_name values in document order (jq optional)
 }
 
 gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
-    local repo="$1" pre="${2:-0}" tag="" key="ghtag-${repo//\//-}-${pre}"
+    local repo="$1"
+    local pre="${2:-0}"
+    local tag=""
+    local key="ghtag-${repo//\//-}-${pre}"
     tag=$(pf_cache_get "${key}" 21600 2>/dev/null || true)
     [ -n "${tag}" ] && { printf '%s' "${tag}"; return 0; }
     if [ "${pre}" = "1" ]; then

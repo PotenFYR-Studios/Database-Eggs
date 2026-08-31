@@ -172,17 +172,23 @@ apply_host_tunables() {
         can_sysctl=1
     fi
 
-    # 1) vm.overcommit_memory=1 - Redis fork() safety for RDB/AOF rewrites.
-    #    REDIS_OVERCOMMIT_MEMORY=1 (default) attempts the sysctl when possible.
-    if [ "${REDIS_OVERCOMMIT_MEMORY:-1}" = "1" ]; then
-        if [ "${can_sysctl}" = "1" ]; then
-            sysctl -qw vm.overcommit_memory=1 2>/dev/null \
-                && ok "Host tunable applied: vm.overcommit_memory=1" \
-                || warn "Could not set vm.overcommit_memory (host restriction)."
-        else
-            warn "Redis background-save safety: host should set vm.overcommit_memory=1 (needs root on the HOST: sysctl vm.overcommit_memory=1)."
-        fi
-    fi
+    # 1) vm.overcommit_memory=1 - fork() safety for engines that fork() for
+    #    persistence/snapshots (Redis family RDB/AOF rewrites, MongoDB
+    #    WiredTiger snapshots). Only relevant to those engines - never warn
+    #    for MariaDB/PostgreSQL/etc.
+    case "${PROJECT_TYPE:-}" in
+        redis|valkey|keydb|dragonfly|mongodb)
+            if [ "${REDIS_OVERCOMMIT_MEMORY:-1}" = "1" ]; then
+                if [ "${can_sysctl}" = "1" ]; then
+                    sysctl -qw vm.overcommit_memory=1 2>/dev/null \
+                        && ok "Host tunable applied: vm.overcommit_memory=1" \
+                        || warn "Could not set vm.overcommit_memory (host restriction)."
+                else
+                    warn "${PROJECT_TYPE} background-save safety: host should set vm.overcommit_memory=1 (needs root on the HOST: sysctl vm.overcommit_memory=1)."
+                fi
+            fi
+            ;;
+    esac
 
     # 2) net.core.somaxconn - accept-queue depth for connection-heavy engines.
     if [ -n "${HOST_SOMAXCONN:-}" ] && [ "${HOST_SOMAXCONN}" != "0" ]; then

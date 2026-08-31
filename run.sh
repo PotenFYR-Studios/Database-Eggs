@@ -51,6 +51,10 @@ fi
 # No world-writable files from the launcher; no core dumps eating disk space.
 umask 022
 ulimit -c 0 2>/dev/null || true
+# Ignore SIGPIPE: tini -g kills the console-mirror tee on panel Stop, and the
+# launcher's final shutdown messages must not kill the shell (exit 141).
+# Database daemons install their own SIGPIPE handling, so this is safe.
+trap '' PIPE
 
 PANEL_NAME="${PANEL_NAME:-${P_SERVER_UUID:+pterodactyl}}"
 PANEL_NAME="${PANEL_NAME:-panel}"
