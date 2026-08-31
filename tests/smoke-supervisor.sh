@@ -83,7 +83,10 @@ echo "--- 4. Clean natural exit (daemon exits 0 on its own) ---"
 check "natural-exit-0 propagated" 0 "$RC"
 
 echo "--- 5. Crash path (daemon exits 3 unexpectedly) ---"
-start_crasher; RC=$?
+# Background like the panel does: supervise_daemon exits with the daemon's
+# crash code, which must propagate to the caller (the panel).
+start_crasher & CRASH_SUP=$!
+wait "$CRASH_SUP"; RC=$?
 # Some minimal shells/subshells lose the child's exit status; accept 3 or 1
 if [ "$RC" = "3" ] || [ "$RC" = "1" ]; then ok "crash detected, launcher exit=${RC}"; else warn "crash exit unexpected: ${RC}"; FAILS=$((FAILS+1)); fi
 

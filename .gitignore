@@ -50,3 +50,9 @@ desktop.ini
 .vscode/
 *.swp
 *~
+
+# Smoke-test scratch files
+.fake_*.sh
+.fake_stdin.txt
+.fake_console_case.sh
+.wtest.sh

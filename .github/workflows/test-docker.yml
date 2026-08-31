@@ -29,3 +29,21 @@ jobs:
         run: |
           chmod +x tests/test-docker.sh
           IMAGE_NAME="database-eggs:test" BUILD_IMAGE="0" ./tests/test-docker.sh
+
+  panel-lifecycle:
+    name: Panel Lifecycle Behavior Suite
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Run Panel Lifecycle Suite
+        run: |
+          chmod +x tests/panel-test.sh
+          ./tests/panel-test.sh

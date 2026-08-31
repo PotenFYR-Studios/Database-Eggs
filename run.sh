@@ -43,7 +43,14 @@ if [ "${_pf_lib_loaded}" != "1" ]; then
     warn()  { printf '[launcher][warn] %s\n' "$*" >&2; }
     error() { printf '[launcher][error] %s\n' "$*" >&2; }
     fail()  { printf '[launcher][FATAL] %s\n' "$*" >&2; sleep 8; exit 1; }
+    phase() { printf '\n── %s ────────────────────────────────────────\n' "$*"; }
+    _egg_error_log() { :; }
 fi
+
+# --- Security baseline ------------------------------------------------------------
+# No world-writable files from the launcher; no core dumps eating disk space.
+umask 022
+ulimit -c 0 2>/dev/null || true
 
 PANEL_NAME="${PANEL_NAME:-${P_SERVER_UUID:+pterodactyl}}"
 PANEL_NAME="${PANEL_NAME:-panel}"
@@ -166,7 +173,7 @@ ensure_engine_binary() {
     if [ -n "${installer_bin}" ]; then
         log "Resolving ${engine} version request (v${DB_VERSION:-latest})..."
         if ! "${installer_bin}" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin"; then
-            warn "Version provisioning failed for ${engine} - falling back to best-available binaries."
+            error "Version provisioning failed for ${engine} - falling back to best-available binaries (see .logs/installer.log and .logs/launcher-errors.log)."
         fi
     fi
 }
@@ -351,6 +358,7 @@ verify_running_version() {
     if [ -f "${SERVER_DIR}/bin/.versions/${PROJECT_TYPE}-system-fallback" ]; then
         warn "Running container-provided ${PROJECT_TYPE} ${actual}: the pinned version '${req}' could not be provisioned in this environment (see logs/installer.log)."
         warn "Exact-version service resumes automatically once provisioning becomes possible (build tools, root, or reachable upstream)."
+        _egg_error_log "launcher" "version contract substituted: requested ${PROJECT_TYPE} ${req}, serving container-provided ${actual} (system-fallback)"
         return 0
     fi
     if [ "${PROJECT_TYPE}" = "mysql" ] \
@@ -469,6 +477,36 @@ get_all_child_pids() {
     done
 }
 
+# Container-wide sweep for orphaned processes (detached spawners, double-forked
+# helpers, leftover daemons from a crashed previous boot) that escaped every
+# tracked process tree - they keep serving even after the main daemon dies.
+#   sweep_stray_processes graceful -> TERM, wait, escalate to KILL (panel stop)
+#   sweep_stray_processes quick    -> immediate SIGKILL (pre-start port cleanup)
+# Excludes: the main shell, console-mirror helpers, and the stdin watcher.
+sweep_stray_processes() {
+    local mode="${1:-graceful}" _me="$$" _p _name _killed=0
+    [ -d "/proc" ] || return 0
+    for _p in $(ps -eo pid=,ppid= 2>/dev/null | awk -v me="${_me}" '$2 == 1 && $1 != me {print $1}'); do
+        [ -n "${_p}" ] && [ "${_p}" -gt 1 ] 2>/dev/null || continue
+        [ "${_p}" = "${STDIN_READER_PID:-0}" ] && continue
+        _name="$(ps -o comm= -p "${_p}" 2>/dev/null || echo '')"
+        case "${_name}" in
+            tee|stdbuf|ps|awk|sed|grep) continue ;;
+        esac
+        if [ "${mode}" = "quick" ]; then
+            kill -9 "${_p}" 2>/dev/null || true
+        else
+            terminate_process_tree "${_p}" 2
+        fi
+        _killed=$((_killed + 1))
+    done
+    if [ "${_killed}" -gt 0 ]; then
+        log "Swept ${_killed} stray process(es) (detached daemons / leftover workers)."
+        _egg_error_log "launcher" "swept ${_killed} stray process(es) during ${mode} sweep" >/dev/null 2>&1 || true
+    fi
+    return 0
+}
+
 # Gracefully terminate a process and its full process tree, escalating to SIGKILL
 terminate_process_tree() {
     local root_pid="$1"
@@ -530,9 +568,12 @@ _do_graceful_shutdown() {
         kill -TERM "${DAEMON_PID}" 2>/dev/null || true
     fi
 
-    # Grace period waiting for daemon to exit cleanly (up to 15 seconds)
+    # Grace period waiting for daemon to exit cleanly.
+    # Panels/Wings escalate to SIGKILL ~10s after the stop request, so the whole
+    # graceful shutdown must stay inside that window: 6s daemon wait + 3s tree
+    # kill + 2s sweep.
     local wait_count=0
-    local max_wait=15
+    local max_wait=6
     if [ -n "${DAEMON_PID:-}" ]; then
         while kill -0 "${DAEMON_PID}" 2>/dev/null && [ "${wait_count}" -lt "${max_wait}" ]; do
             sleep 1
@@ -548,20 +589,11 @@ _do_graceful_shutdown() {
     # Container-wide sweep: catch orphaned/double-forked processes that escaped
     # the daemon PID (re-parented to PID 1). Without this, such strays keep
     # serving connections after the panel has already flipped to "stopping".
-    # Exclude: ourselves, the tee that mirrors the console log, and the
-    # ps/awk/sed/grep helpers used by this very sweep.
-    if [ -d "/proc" ]; then
-        local _me="$$" _p
-        for _p in $(ps -eo pid=,ppid= 2>/dev/null | awk -v me="${_me}" '$2 == 1 && $1 != me {print $1}'); do
-            [ -n "${_p}" ] && [ "${_p}" -gt 1 ] 2>/dev/null || continue
-            case "$(ps -o comm= -p "${_p}" 2>/dev/null)" in
-                tee|ps|awk|sed|grep) continue ;;
-            esac
-            log "Terminating orphaned process ${_p} ($(ps -o comm= -p "${_p}" 2>/dev/null))..."
-            terminate_process_tree "${_p}" 3
-        done
-    fi
+    sweep_stray_processes graceful
 
+    # Give the console-mirror tee (process substitution) time to flush the
+    # final lines before the container tears down the pipe.
+    sleep 0.3
     ok "${PROJECT_TYPE^^} server stopped cleanly."
 }
 
@@ -592,26 +624,57 @@ supervise_daemon() {
         sup_pid=$(cut -d' ' -f1 /proc/self/stat 2>/dev/null || printf '%s' "$$")
     fi
 
-    # Start background stdin listener to handle panel console commands and control characters
+    # --- Panel Stop Command Watcher (stdin, fd 3) --------------------------------
+    # Wings-family daemons (Feather Panel, Pterodactyl, Pelican, Jexactyl, Wisp)
+    # create server containers with Tty:true and deliver the configured stop
+    # command ("^C" etc.) as console TEXT on that TTY stdin instead of raising a
+    # signal. The literal text "^C" is not a real INTR byte, so the kernel never
+    # generates SIGINT, and without a reader the stop line just sits in the tty
+    # input buffer while the panel hangs on "stopping" until the daemon times
+    # out and force-kills the container. This watcher scans console input (pipe
+    # OR tty) and raises our own shutdown trap when a stop command is seen.
+    # PANEL_STOP_WATCHER=0 disables the watcher entirely; =1 forces it on.
     if [ -t 0 ] || [ -p /dev/stdin ] || [ -e /dev/stdin ]; then
-        (
-            while IFS= read -r line || [ -n "${line}" ]; do
-                clean_cmd=$(printf '%s' "${line}" | tr -d '\r' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
-                case "${clean_cmd}" in
-                    $'\x03'|$'\x04'|^C|^c|^D|^d|stop|STOP|exit|EXIT|quit|QUIT|shutdown|SHUTDOWN|restart|RESTART|"stop server"|"restart server"|"end")
-                        log "Console stop command received ('${clean_cmd}'). Initiating shutdown..."
-                        kill -TERM "${sup_pid}" 2>/dev/null || true
-                        break
-                        ;;
-                    "")
-                        ;;
-                    *)
-                        log "Console command '${clean_cmd}' received. (To stop the database, use 'stop' or the Panel Stop button)."
-                        ;;
-                esac
-            done
-        ) &
-        STDIN_READER_PID=$!
+        local watcher_enabled=1
+        case "${PANEL_STOP_WATCHER:-auto}" in
+            0|false|off|disabled|no) watcher_enabled=0 ;;
+        esac
+        if [ "${watcher_enabled}" = "1" ]; then
+            # Probe first inside a subshell: a failed exec redirection would exit
+            # the launcher itself if fd 0 were closed (bash non-interactive rule).
+            if ( exec 3<&0 ) 2>/dev/null; then
+                # Dup console stdin to fd 3 in the main shell before backgrounding
+                # - spawn-time redirections on background jobs do not survive on
+                # some daemon/container runtimes (observed EOF-on-read otherwise).
+                exec 3<&0 2>/dev/null || true
+                (
+                    local line clean_cmd
+                    while IFS= read -r -u 3 line || [ -n "${line}" ]; do
+                        clean_cmd="${line}"
+                        clean_cmd="${clean_cmd//$'\r'/}"
+                        clean_cmd="${clean_cmd//[[:space:]]/}"
+                        clean_cmd="${clean_cmd,,}"
+                        case "${clean_cmd}" in
+                            ^c|'^\c'|^d|stop|/stop|kill|exit|quit|shutdown|poweroff|halt|end|sigint|sigterm|restart)
+                                log "Stop command '${line}' received via console. Shutting down..."
+                                kill -TERM "${sup_pid}" 2>/dev/null || true
+                                break
+                                ;;
+                            "")
+                                ;;
+                            *)
+                                log "Console command '${line}' received. (To stop the database, use 'stop' or the Panel Stop button)."
+                                ;;
+                        esac
+                    done
+                    exec 3>&- 2>/dev/null || true
+                ) &
+                STDIN_READER_PID=$!
+                # The watcher subshell holds its own dup; close ours so the dup is
+                # not inherited by every child the launcher spawns afterwards.
+                exec 3>&- 2>/dev/null || true
+            fi
+        fi
     fi
 
     # Wait for the managed daemon process
@@ -625,6 +688,7 @@ supervise_daemon() {
             exit_code=0
         elif [ "${exit_code}" -ne 0 ]; then
             warn "${PROJECT_TYPE^^} daemon exited with code ${exit_code}."
+            _egg_error_log "launcher" "${PROJECT_TYPE} daemon exited with code ${exit_code} (see crash context above)"
         fi
     fi
 
@@ -637,6 +701,11 @@ supervise_daemon() {
     exit "${exit_code}"
 }
 export -f supervise_daemon _do_graceful_shutdown _on_trap_signal
+
+# Pre-start sweep: free the port from daemons a crashed previous boot left
+# behind (double-forked survivors keep holding the port and make the fresh
+# daemon fail with "address already in use").
+sweep_stray_processes quick
 
 # --- Engine Dispatcher ------------------------------------------------------
 case "${PROJECT_TYPE}" in
@@ -707,7 +776,9 @@ case "${PROJECT_TYPE}" in
 
         if [ -n "${run_cmd}" ]; then
             log "Starting Custom Engine: ${run_cmd}"
-            ${run_cmd} < /dev/null &
+            # eval (in a subshell) so quoted/complex commands survive intact;
+            # the subshell PID becomes the supervised daemon.
+            ( eval "${run_cmd}" ) < /dev/null &
             daemon_pid=$!
             supervise_daemon "${daemon_pid}"
         else

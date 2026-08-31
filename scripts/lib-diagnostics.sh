@@ -20,7 +20,48 @@
 #    PF_DEBUG=1          extra verbose trace lines to console
 # =============================================================================
 
-PF_DIAG_VERSION="1.0"
+PF_DIAG_VERSION="2.0"
+
+# --- Visual theme ---------------------------------------------------------------
+# Default: Database Eggs agent theme (agent-style console output).
+# Restore the previous PotenFYR bracket theme with CLI_THEME=classic.
+CLI_THEME="${CLI_THEME:-db}"
+C_RESET="${C_RESET:-\033[0m}"
+C_BOLD="${C_BOLD:-\033[1m}"
+C_CYAN="${C_CYAN:-\033[36m}"
+C_GREEN="${C_GREEN:-\033[32m}"
+C_YELLOW="${C_YELLOW:-\033[33m}"
+C_RED="${C_RED:-\033[31m}"
+C_MAGENTA="${C_MAGENTA:-\033[35m}"
+C_BLUE="${C_BLUE:-\033[34m}"
+C_WHITE="${C_WHITE:-\033[37m}"
+C_DIM="${C_DIM:-\033[2m}"
+C_GOLD="${C_GOLD:-\033[33m}"
+C_LIME="${C_LIME:-\033[92m}"
+export C_RESET C_BOLD C_CYAN C_GREEN C_YELLOW C_RED C_MAGENTA C_BLUE C_WHITE C_DIM C_GOLD C_LIME
+
+# --- Troubleshooting infrastructure ----------------------------------------------
+# phase(): clean dim section headers so boot logs are scannable top-to-bottom.
+# _egg_error_log(): central append-only error journal (egg-level failures only)
+# at .logs/launcher-errors.log so failures can be diagnosed after the fact even
+# when panel scrollback is gone. Every styled error line is journalled too.
+phase() { printf "\n%b── %s %b\n" "${C_DIM}" "$*" "────────────────────────────────────────────────${C_RESET}"; }
+
+ERROR_LOG=""
+_egg_error_log() {
+    if [ -z "${ERROR_LOG:-}" ]; then
+        local d="${SERVER_DIR:-${PWD}}/.logs"
+        if mkdir -p "${d}" 2>/dev/null && [ -w "${d}" ]; then
+            ERROR_LOG="${d}/launcher-errors.log"
+        else
+            ERROR_LOG="/tmp/potenfyr-errors.log"
+        fi
+    fi
+    printf '[%s] [%s] [panel=%s] %s\n' \
+        "$(date '+%Y-%m-%dT%H:%M:%S%z' 2>/dev/null || date)" \
+        "${1:-egg}" "${PANEL_TYPE:-unknown}" "${2:-unknown error}" \
+        >> "${ERROR_LOG}" 2>/dev/null || true
+}
 
 # ---------------------------------------------------------------- logging dir
 _pf_log_dir() {
@@ -83,10 +124,21 @@ _diag() { # _diag <message> <level> [logfile]
 # Console formatters (house style; degrade gracefully without color vars)
 _c() { eval "printf '%s' \"\${${1}:-}\""; }
 
-log()   { printf '\033[36m\033[1m%s~\033[0m \033[1m%s\033[0m\n'     "$(_pf_prompt)" "$(pf_sanitize "$*")"; _diag "$*" INFO; }
-ok()    { printf '\033[36m\033[1m%s~\033[0m \033[32m\033[1m[ok]\033[0m %s\n'    "$(_pf_prompt)" "$(pf_sanitize "$*")"; _diag "$*" OK; }
-warn()  { printf '\033[36m\033[1m%s~\033[0m \033[33m\033[1m[warn]\033[0m %s\n'  "$(_pf_prompt)" "$(pf_sanitize "$*")" >&2; _diag "$*" WARN; }
-error() { printf '\033[36m\033[1m%s~\033[0m \033[31m\033[1m[error]\033[0m %s\n' "$(_pf_prompt)" "$(pf_sanitize "$*")" >&2; _diag "$*" ERROR; }
+if [ "${CLI_THEME}" = "classic" ]; then
+    log()   { printf '\033[36m\033[1m%s~\033[0m \033[1m%s\033[0m\n'     "$(_pf_prompt)" "$(pf_sanitize "$*")"; _diag "$*" INFO; }
+    ok()    { printf '\033[36m\033[1m%s~\033[0m \033[32m\033[1m[ok]\033[0m %s\n'    "$(_pf_prompt)" "$(pf_sanitize "$*")"; _diag "$*" OK; }
+    warn()  { printf '\033[36m\033[1m%s~\033[0m \033[33m\033[1m[warn]\033[0m %s\n'  "$(_pf_prompt)" "$(pf_sanitize "$*")" >&2; _diag "$*" WARN; }
+    error() { printf '\033[36m\033[1m%s~\033[0m \033[31m\033[1m[error]\033[0m %s\n' "$(_pf_prompt)" "$(pf_sanitize "$*")" >&2; _diag "$*" ERROR; _egg_error_log "${PF_COMPONENT:-egg}" "$*"; }
+    info()  { printf '\033[36m\033[1m%s~\033[0m \033[34m\033[1m[i]\033[0m %s\n'     "$(_pf_prompt)" "$(pf_sanitize "$*")"; _diag "$*" INFO; }
+else
+    log()   { printf '%b%s%b %b\n' "${C_LIME}${C_BOLD}" "</> database-eggs ▸" "${C_RESET}" "$(pf_sanitize "$*")"; _diag "$*" INFO; }
+    ok()    { printf '%b%s%b %b\n' "${C_LIME}${C_BOLD}" "</> database-eggs ✔" "${C_RESET}" "${C_GREEN}$(pf_sanitize "$*")${C_RESET}"; _diag "$*" OK; }
+    warn()  { printf '%b%s%b %b\n' "${C_GOLD}${C_BOLD}" "</> database-eggs ⚠" "${C_RESET}" "${C_YELLOW}$(pf_sanitize "$*")${C_RESET}" >&2; _diag "$*" WARN; }
+    error() { printf '%b%s%b %b\n' "${C_RED}${C_BOLD}" "</> database-eggs ✖" "${C_RESET}" "${C_RED}$(pf_sanitize "$*")${C_RESET}" >&2; _diag "$*" ERROR; _egg_error_log "${PF_COMPONENT:-egg}" "$*"; }
+    info()  { printf '%b%s%b %b\n' "${C_CYAN}${C_BOLD}" "</> database-eggs ℹ" "${C_RESET}" "$(pf_sanitize "$*")"; _diag "$*" INFO; }
+fi
+# House-compatible alias used by install-db-version.sh
+err() { error "$@"; }
 
 # ------------------------------------------------------------ trace dumper
 pf_stack_lines() { # prints numbered call stack; safe under any bash
