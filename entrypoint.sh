@@ -17,6 +17,11 @@
 # dumps are disabled so crashes cannot eat server disk space.
 umask 022
 ulimit -c 0 2>/dev/null || true
+# tini -g signals the whole process group on panel Stop, which kills the
+# console-mirror tee before the launcher finishes its shutdown messages - the
+# shell then dies of SIGPIPE (exit 141) mid-stop. Ignore SIGPIPE in the
+# launcher: every database daemon we run installs its own SIGPIPE handling.
+trap '' PIPE
 
 export GOTOOLCHAIN="${GOTOOLCHAIN:-local}"
 
