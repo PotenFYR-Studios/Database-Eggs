@@ -184,13 +184,22 @@ ensure_engine_binary() {
 
 ensure_engine_binary "${PROJECT_TYPE}"
 
+# Distro-extracted engine binaries may need bundled shared libraries
+# (libssl etc. under bin/lib-extra) even for --version checks.
+if [ -d "${SERVER_DIR}/bin/lib-extra" ]; then
+    export LD_LIBRARY_PATH="${SERVER_DIR}/bin/lib-extra:${LD_LIBRARY_PATH:-}"
+fi
+
 # ---------------------------------------------------------------------------
 # Data Instance Manager (Non-Destructive Engine/Version Switching)
 # ---------------------------------------------------------------------------
 # Every engine+series gets an isolated instance folder under data/.
 # - Same-series restarts reuse the identical instance (zero friction).
 # - Breaking version switches NEVER touch old data: a fresh instance is
-#   created and the console clearly states where previous data is preserved.
+#   created, the previous data is additionally snapshotted into archive/
+#   (ARCHIVE_ON_SWITCH=1, default), and the console clearly states where
+#   previous data is preserved. Credentials in .env are never touched by
+#   version switches, so clients keep authenticating unchanged.
 # - Explicit DATA_DIR overrides bypass this manager entirely (power users).
 # ---------------------------------------------------------------------------
 data_notice() { # data_notice <title> <line1> [line2] ...
@@ -204,6 +213,43 @@ data_notice() { # data_notice <title> <line1> [line2] ...
         printf "${_yel}${_bold}│${_rst}  %-58s ${_yel}${_bold}│${_rst}\n" "${l:0:57}" >&2
     done
     printf "${_yel}${_bold}└─────────────────────────────────────────────────────────────┘${_rst}\n\n" >&2
+}
+
+# Non-destructive snapshot of a data directory into ./archive/<engine>/.
+# The original data is NEVER moved or deleted; the archive is an additional
+# compressed copy so version switches/upgrade rollbacks are always possible.
+archive_data_dir() { # archive_data_dir <source_dir> <engine> <label>
+    local src="$1" pt="$2" label="$3"
+    [ "${ARCHIVE_ON_SWITCH:-1}" = "1" ] || return 0
+    [ -d "${src}" ] || return 0
+    [ -n "$(ls -A "${src}" 2>/dev/null)" ] || return 0
+    local adir="${SERVER_DIR}/archive/${pt}"
+    mkdir -p "${adir}" 2>/dev/null || return 0
+    local ts out
+    ts=$(date -u +%Y%m%d-%H%M%S 2>/dev/null || echo manual)
+    out="${adir}/${label}-${ts}.tar.gz"
+    if tar -czf "${out}.tmp" -C "${src}" . 2>/dev/null && [ -s "${out}.tmp" ]; then
+        mv -f "${out}.tmp" "${out}"
+        ok "Archived previous ${pt} data (${label}) -> ${out#"${SERVER_DIR}"/} (original kept in place)."
+        _egg_error_log "launcher" "archived ${pt} data (${label}) to ${out}" >/dev/null 2>&1 || true
+    else
+        rm -f "${out}.tmp" 2>/dev/null || true
+        warn "Could not archive previous ${pt} data (${label}); original data remains untouched at ${src#"${SERVER_DIR}"/}."
+    fi
+    return 0
+}
+
+# Snapshot every non-empty instance of a DIFFERENT series of the current
+# engine (called once, exactly when a new series instance is created).
+archive_previous_series_instances() { # archive_previous_series_instances <engine> <new_series>
+    local pt="$1" series="$2" prev
+    [ -d "${SERVER_DIR}/data/${pt}" ] || return 0
+    while IFS= read -r prev; do
+        [ -n "${prev}" ] || continue
+        [ "$(basename "${prev}")" != "${series}" ] || continue
+        archive_data_dir "${prev}" "${pt}" "v$(basename "${prev}")-to-v${series}"
+    done < <(find "${SERVER_DIR}/data/${pt}" -mindepth 1 -maxdepth 1 -type d 2>/dev/null)
+    return 0
 }
 
 prepare_data_instance() {
@@ -237,7 +283,7 @@ prepare_data_instance() {
         while IFS= read -r e; do
             [ -z "${e}" ] && continue
             case "${e}" in
-                .*|postgresql|mariadb|mysql|mongodb|redis|valkey|keydb|dragonfly|memcached|\
+                .*|archive|postgresql|mariadb|mysql|mongodb|redis|valkey|keydb|dragonfly|memcached|\
 cassandra|aerospike|cockroachdb|tidb|yugabytedb|meilisearch|qdrant|typesense|\
 pocketbase|minio|influxdb|clickhouse|victoriametrics|surrealdb|neo4j|dgraph|\
 garage|seaweedfs|questdb|elasticsearch|opensearch|solr|manticoresearch|milvus|\
@@ -263,6 +309,9 @@ ferretdb|rethinkdb|custom)
     fi
 
     if ! legacy_data_present; then
+        # One-time per switch: snapshot any previous series instance (the new
+        # series folder itself is created fresh below).
+        archive_previous_series_instances "${pt}" "${series}"
         printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
         export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
         return 0
@@ -283,22 +332,26 @@ ferretdb|rethinkdb|custom)
                 return 0
             fi
             # Breaking major switch -> brand new isolated instance, old data untouched
+            archive_data_dir "${root}" "${pt}" "legacy-v${legacy_major:-unknown}-to-v${series}"
             printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
             export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
             data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
                 "Requested PostgreSQL v${series}; old cluster is v${legacy_major:-unknown}." \
                 "A FRESH instance was created at: ./data/postgresql/${series}" \
                 "Previous data PRESERVED at: ./data  (delete manually when ready)." \
+                "Credentials unchanged (.env) - clients keep working." \
                 "To keep serving old data instead: set DB_VERSION=${legacy_major:-<old>}."
             return 0
             ;;
         mariadb|mysql|mongodb|cassandra|aerospike|cockroachdb)
             # Cross-major unsafe formats -> never mix; isolate new instance
+            archive_data_dir "${root}" "${pt}" "legacy-to-v${series}"
             printf 'engine=%s series=%s created=%s\n' "${pt}" "${series}" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${stamp}"
             export DATA_DIR="${target}"; export ACTIVE_DATA_DIR="${target}"
             data_notice "VERSION SWITCH - NEW DATA INSTANCE" \
                 "Fresh ${pt} v${series} instance: ./data/${pt}/${series}" \
                 "Legacy files in ./data are PRESERVED (not deleted)." \
+                "Credentials retained from .env - clients keep working." \
                 "Verify migrations, then remove ./data manually if unwanted."
             return 0
             ;;
@@ -316,12 +369,21 @@ ferretdb|rethinkdb|custom)
 prepare_data_instance
 
 # ---------------------------------------------------------------------------
+# Git Repository Sync (GIT_REPO_URL / GIT_BRANCH / GIT_TOKEN)
+# ---------------------------------------------------------------------------
+# Clones the user's repository into the workspace on first boot; on later
+# boots a cheap metadata lookup detects new commits, archives the previous
+# code into ./archive/git-sync/ and replaces only the repo-managed files.
+# Database data, credentials (.env) and runtime dirs are never touched.
+if command -v sync_git_repo >/dev/null 2>&1; then
+    sync_git_repo
+fi
+
+# ---------------------------------------------------------------------------
 # Strict Version Verification (no silent downgrades, ever)
 # ---------------------------------------------------------------------------
 verify_running_version() {
     local req="${DB_VERSION:-latest}"
-    [ "${req}" = "latest" ] && return 0
-    [ "${req}" = "stable" ] && return 0
     local bin_name="" actual=""
     case "${PROJECT_TYPE}" in
         postgresql)
@@ -341,12 +403,43 @@ verify_running_version() {
             local mo="${SERVER_DIR}/bin/mongod"; [ -x "${mo}" ] || mo="$(command -v mongod 2>/dev/null || true)"
             [ -n "${mo}" ] && actual=$("${mo}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             ;;
-        redis)     command -v redis-server >/dev/null 2>&1 && actual=$(redis-server --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        redis)
+            local rb="${SERVER_DIR}/bin/redis-server"
+            [ -x "${rb}" ] || rb="$(command -v redis-server 2>/dev/null || true)"
+            [ -n "${rb}" ] && actual=$("${rb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
         valkey)
             local vk="${SERVER_DIR}/bin/valkey-server"; [ -x "${vk}" ] || vk="$(command -v valkey-server 2>/dev/null || true)"
             [ -n "${vk}" ] && actual=$("${vk}" --version | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
             ;;
         dragonfly) [ -x "${SERVER_DIR}/bin/dragonfly" ] && actual=$("${SERVER_DIR}/bin/dragonfly" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1) ;;
+        keydb)
+            local kb="${SERVER_DIR}/bin/keydb-server"; [ -x "${kb}" ] || kb="$(command -v keydb-server 2>/dev/null || true)"
+            [ -n "${kb}" ] && actual=$("${kb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
+        memcached)
+            local mcb="${SERVER_DIR}/bin/memcached"; [ -x "${mcb}" ] || mcb="$(command -v memcached 2>/dev/null || true)"
+            [ -n "${mcb}" ] && actual=$("${mcb}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
+        meilisearch|typesense|qdrant|pocketbase|clickhouse|minio|surrealdb|ferretdb|cockroachdb|cockroach|dolt|etcd|nats|immudb|influxdb|victoriametrics|seaweedfs|weed|garage|weaviate|quickwit|manticoresearch|manticore|milvus|libsql|sqld)
+            local vb=""
+            case "${PROJECT_TYPE}" in
+                meilisearch) vb="meilisearch" ;;
+                typesense) vb="typesense-server" ;;
+                pocketbase) vb="pocketbase" ;;
+                surrealdb) vb="surreal" ;;
+                minio) vb="minio" ;;
+                influxdb) vb="influxd" ;;
+                victoriametrics) vb="victoria-metrics-prod" ;;
+                seaweedfs|weed) vb="weed" ;;
+                libsql|sqld) vb="sqld" ;;
+                manticoresearch|manticore) vb="searchd" ;;
+                *) vb="${PROJECT_TYPE}" ;;
+            esac
+            local vbin="${SERVER_DIR}/bin/${vb}"
+            [ -x "${vbin}" ] || vbin="$(command -v "${vb}" 2>/dev/null || true)"
+            [ -n "${vbin}" ] && actual=$("${vbin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            ;;
         *) return 0 ;;
     esac
 
@@ -358,11 +451,18 @@ verify_running_version() {
     export EFFECTIVE_DB_VERSION="${actual}"
     local req_major="${req%%.*}" act_major="${actual%%.*}"
     # Installer runs as a subshell: substitution decisions reach us via marker
-    # files, never environment variables.
+    # files, never environment variables. Announcements fire for EVERY request
+    # (latest included) - substitutions are never silent.
     if [ -f "${SERVER_DIR}/bin/.versions/${PROJECT_TYPE}-system-fallback" ]; then
         warn "Running container-provided ${PROJECT_TYPE} ${actual}: the pinned version '${req}' could not be provisioned in this environment (see logs/installer.log)."
         warn "Exact-version service resumes automatically once provisioning becomes possible (build tools, root, or reachable upstream)."
         _egg_error_log "launcher" "version contract substituted: requested ${PROJECT_TYPE} ${req}, serving container-provided ${actual} (system-fallback)"
+        return 0
+    fi
+    if [ -f "${SERVER_DIR}/bin/.versions/${PROJECT_TYPE}-pkg-fallback" ]; then
+        warn "Running distro-provisioned ${PROJECT_TYPE} ${actual}: upstream publishes no prebuilt '${req}' binary and this container has no build toolchain, so the closest distro package is serving."
+        warn "Exact-version service resumes automatically when a build toolchain (gcc/make) or root is available."
+        _egg_error_log "launcher" "version contract substituted: requested ${PROJECT_TYPE} ${req}, serving distro-provisioned ${actual} (pkg-fallback)"
         return 0
     fi
     if [ "${PROJECT_TYPE}" = "mysql" ] \
@@ -370,6 +470,10 @@ verify_running_version() {
        && [ -f "${SERVER_DIR}/bin/.versions/mysql-cdn-fallback" ]; then
         warn "Running container-provided ${PROJECT_TYPE} ${actual} because cdn.mysql.com was unreachable (CDN_FALLBACK_SYSTEM=1)."
         warn "Requested '${req}' will be honored automatically once Oracle's CDN is reachable again."
+        return 0
+    fi
+    if [ "${req}" = "latest" ] || [ "${req}" = "stable" ]; then
+        log "Verified engine version: ${actual} (requested ${req})"
         return 0
     fi
     if [ "${req_major}" != "${act_major}" ]; then
