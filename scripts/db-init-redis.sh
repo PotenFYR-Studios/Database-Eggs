@@ -48,6 +48,12 @@ active-defrag-ignore-bytes 100mb
 active-defrag-threshold-lower 10
 active-defrag-threshold-upper 100"
     fi
+    # SECURITY_HARDENING=1 (default) disables DEBUG-style commands;
+    # =0 keeps them available for development sessions.
+    local harden_line=""
+    if [ "${SECURITY_HARDENING:-1}" != "0" ]; then
+        harden_line="rename-command DEBUG \"\""
+    fi
 
     if [ ! -f "${redis_conf}" ]; then
         log "Generating performance-tuned & hardened ${PROJECT_TYPE^^} configuration..."
@@ -95,7 +101,7 @@ ${DB_PASSWORD:+requirepass ${DB_PASSWORD}}
 ${DB_ROOT_PASSWORD:+masterauth ${DB_ROOT_PASSWORD}}
 
 # Security Hardening (Disable dangerous debugging commands in production)
-rename-command DEBUG ""
+${harden_line}
 EOF
         ok "Created performance-tuned ${redis_conf}"
     else
@@ -137,6 +143,11 @@ start_redis_family() {
     local conf_dir="${SERVER_DIR}/config"
     local redis_conf="${conf_dir}/redis.conf"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+
+    # Distro-extracted binaries may need bundled shared libraries (libssl etc.)
+    if [ -d "${SERVER_DIR}/bin/lib-extra" ]; then
+        export LD_LIBRARY_PATH="${SERVER_DIR}/bin/lib-extra:${LD_LIBRARY_PATH:-}"
+    fi
 
     # Self-healing check: if configuration is missing, run init
     if [ ! -f "${redis_conf}" ]; then

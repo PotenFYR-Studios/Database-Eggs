@@ -455,6 +455,11 @@ stamp_matches() { [ -f "${stamp_dir}/${ENGINE}" ] && grep -q "^${RESOLVED:-${VER
 mark_engine_ready() {
     # Successful provisioning clears any prior system-fallback substitution
     rm -f "${stamp_dir}/${ENGINE}-system-fallback" 2>/dev/null || true
+    if [ "${PF_PKG_FALLBACK:-0}" = "1" ]; then
+        printf '%s\n' "${RESOLVED}" > "${stamp_dir}/${ENGINE}-pkg-fallback" 2>/dev/null || true
+    else
+        rm -f "${stamp_dir}/${ENGINE}-pkg-fallback" 2>/dev/null || true
+    fi
     stamp_ok
     ok "Engine '${ENGINE}' ${RESOLVED} ready (${INSTALL_DIR})"
 }
@@ -517,6 +522,25 @@ provisioned_series_matches() { # provisioned_series_matches <bin_path> <resolved
         [0-9]*)        [ "${got%%.*}" = "${want%%.*}" ] ;;
         *)             return 1 ;;
     esac
+}
+
+# Version-aware reuse for single-binary engines (meilisearch, qdrant, ...):
+# when a DIFFERENT version is requested, drop the old binary so the engine
+# case below re-provisions. Binaries whose version is not parseable (e.g.
+# MinIO release-tag strings) are always kept.
+ensure_single_binary_version() { # ensure_single_binary_version <binary_name>
+    local b="${INSTALL_DIR}/$1" got
+    [ -x "${b}" ] || return 0
+    case "${RESOLVED:-latest}" in ""|latest|default) return 0 ;; esac
+    got="$(installed_binary_version "${b}" 2>/dev/null || true)"
+    [ -n "${got}" ] || return 0
+    if provisioned_series_matches "${b}" "${RESOLVED}"; then
+        log "$1 ${got} already provisioned (matches '${RESOLVED}')."
+        return 0
+    fi
+    warn "Existing $1 ${got} does not match requested '${RESOLVED}' - re-provisioning."
+    rm -f "${b}" 2>/dev/null || true
+    return 0
 }
 
 # -----------------------------------------------------------------------------
@@ -980,6 +1004,283 @@ bundle_pg_runtime_libs() {
 }
 
 # -----------------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+# Unprivileged Distro-Binary Provisioning (no compiler, no root required)
+# -----------------------------------------------------------------------------
+# Source builds need gcc/make, which hardened panel images do not carry. When
+# compilation is impossible, resolve the engine from public distro package
+# indexes instead - official packages.redis.io first (newest upstream builds),
+# then Debian/Ubuntu pools - download the .deb via plain HTTPS and extract
+# binaries + any missing shared libraries with dpkg-deb -x. Every candidate is
+# self-check executed; incompatible builds (newer glibc etc.) are discarded and
+# the next suite is probed. A substitution is stamped loudly, never silent.
+_deb_build_suite_list() { # _deb_build_suite_list <with_redis_official:0|1>  -> sets PF_DEB_SUITES
+    local with_official="${1:-0}" cn=""
+    if [ -r /etc/os-release ]; then
+        cn=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-}")
+    fi
+    PF_DEB_SUITES=()
+    if [ "${with_official}" = "1" ]; then
+        if [ -n "${cn}" ]; then PF_DEB_SUITES+=("https://packages.redis.io/apt|${cn}|main"); fi
+        PF_DEB_SUITES+=("https://packages.redis.io/apt|trixie|main" "https://packages.redis.io/apt|bookworm|main" "https://packages.redis.io/apt|noble|main" "https://packages.redis.io/apt|jammy|main")
+    fi
+    if [ -n "${cn}" ]; then PF_DEB_SUITES+=("https://deb.debian.org/debian|${cn}|main"); fi
+    PF_DEB_SUITES+=(
+        "https://deb.debian.org/debian|trixie|main"
+        "https://deb.debian.org/debian|bookworm|main"
+        "https://deb.debian.org/debian|bullseye|main"
+        "https://archive.ubuntu.com/ubuntu|noble|universe"
+        "https://archive.ubuntu.com/ubuntu|noble|main"
+        "https://archive.ubuntu.com/ubuntu|jammy|universe"
+        "https://archive.ubuntu.com/ubuntu|jammy|main"
+        "https://archive.ubuntu.com/ubuntu|focal|universe"
+    )
+}
+
+_deb_index_text() { # _deb_index_text <tag> <packages_gz_url>  (6h disk cache, prints Packages text)
+    local tag="$1" url="$2"
+    local f="/tmp/.pf-debidx-${tag}"
+    local now ts body
+    now=$(date -u +%s 2>/dev/null || echo 0)
+    if [ -s "${f}" ]; then
+        ts=$(head -n1 "${f}" 2>/dev/null)
+        case "${ts}" in ''|*[!0-9]*) : ;; *)
+            if [ $((now - ts)) -le 21600 ]; then tail -n +2 "${f}" 2>/dev/null; return 0; fi
+            ;; esac
+    fi
+    body=$(fetch "${url}" - 2>/dev/null | gzip -dc 2>/dev/null)
+    [ -n "${body}" ] || return 1
+    printf '%s\n%s\n' "${now}" "${body}" > "${f}" 2>/dev/null || true
+    printf '%s\n' "${body}"
+}
+
+_deb_pkg_lookup() { # _deb_pkg_lookup <index_text> <package> -> "version<TAB>poolpath"
+    awk 'BEGIN { RS=""; FS="\n" }
+        {
+            hit=0; v=""; f=""
+            for (i=1; i<=NF; i++) {
+                if ($i ~ ("^Package: " p "$")) hit=1
+                else if (hit && $i ~ /^Version:/)  v=substr($i, 10)
+                else if (hit && $i ~ /^Filename:/) f=substr($i, 11)
+            }
+            if (hit && f != "") { print v "\t" f; exit }
+        }' p="$2" <<< "$1"
+}
+
+_soname_packages() { # _soname_packages <soname> -> candidate distro package names
+    case "$1" in
+        libssl.so.*|libcrypto.so.*) printf 'libssl3t64\nlibssl3\nlibssl1.1' ;;
+        libsystemd.so.*)            printf 'libsystemd0' ;;
+        libevent-2.1.so.*)          printf 'libevent-2.1-7t64\nlibevent-2.1-7\nlibevent-2.1-6' ;;
+        libevent-2.0.so.*)          printf 'libevent-2.0-5' ;;
+        libhiredis.so.*)            printf 'libhiredis1.1.0\nlibhiredis1.0.0\nlibhiredis0.14' ;;
+        libjemalloc.so.*)           printf 'libjemalloc2\nlibjemalloc1' ;;
+        libmbedtls.so.*|libmbedcrypto.so.*) printf 'libmbedcrypto7t64\nlibmbedcrypto3\nlibmbedtls14\nlibmbedtls12' ;;
+        *)                          local b="${1%%.so*}"; [ -n "${b}" ] && printf '%s0\n%s\n' "${b}" "${b}" ;;
+    esac
+}
+
+_deb_bundle_missing_libs() { # _deb_bundle_missing_libs <prefix> <index_text> <binary>
+    local prefix="$1" idx="$2" bin="$3"
+    command -v ldd >/dev/null 2>&1 || return 0
+    local libs_extra="${INSTALL_DIR}/lib-extra"
+    mkdir -p "${libs_extra}" 2>/dev/null || return 1
+    local round soname miss pkg lookup path tmp_deb progressed
+    for round in 1 2 3; do
+        miss=$(LD_LIBRARY_PATH="${libs_extra}:${LD_LIBRARY_PATH:-}" ldd "${bin}" 2>/dev/null | awk '/not found/{print $1}')
+        if [ -z "${miss}" ]; then return 0; fi
+        progressed=0
+        for soname in ${miss}; do
+            if [ -e "${libs_extra}/${soname}" ]; then continue; fi
+            for pkg in $(_soname_packages "${soname}"); do
+                lookup=$(_deb_pkg_lookup "${idx}" "${pkg}")
+                [ -n "${lookup}" ] || continue
+                path="${lookup#*$'\t'}"
+                tmp_deb=$(mktemp 2>/dev/null) || continue
+                if fetch "${prefix}/${path}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${libs_extra}/.bundle" 2>/dev/null; then
+                    find "${libs_extra}/.bundle" -name '*.so*' -exec cp -a {} "${libs_extra}/" \; 2>/dev/null || true
+                    rm -rf "${libs_extra}/.bundle"
+                    progressed=1
+                fi
+                rm -f "${tmp_deb}"
+                if [ -e "${libs_extra}/${soname}" ]; then break; fi
+            done
+        done
+        [ "${progressed}" = "1" ] || return 1
+    done
+    return 0
+}
+
+# Locate a REAL executable inside an extracted package tree. A plain
+# 'find -name <bin>' also matches non-binary namesakes (e.g. the redis-server
+# logrotate config in /etc/logrotate.d), which then fail the self-check. A
+# valid candidate must be executable, live outside doc/config dirs and carry
+# the ELF magic bytes.
+_find_elf_binary() { # _find_elf_binary <extract-dir> <binary-name>
+    local root="$1" name="$2" cand
+    while IFS= read -r cand; do
+        case "${cand}" in
+            */etc/*|*/usr/share/*|*/usr/doc/*|*/usr/share/doc/*) continue ;;
+        esac
+        [ -x "${cand}" ] || continue
+        if [ "$(head -c 4 "${cand}" 2>/dev/null | od -An -tx1 | tr -d ' 
+')" = "7f454c46" ]; then
+            printf '%s' "${cand}"
+            return 0
+        fi
+    done < <(find "${root}" -type f -name "${name}" 2>/dev/null)
+    return 1
+}
+
+deb_extract_engine() { # deb_extract_engine <suite> [suite...] -- <pkg:bin> [pkg:bin...]
+    # <suite> = "<index_url_prefix>|<suite>|<component>"  (first bin = server, must self-check)
+    have dpkg-deb || return 1
+    local -a suites=()
+    while [ $# -gt 0 ] && [ "$1" != "--" ]; do suites+=("$1"); shift; done
+    if [ "${1:-}" = "--" ]; then shift; fi
+    [ $# -ge 1 ] || return 1
+    local -a pairs=("$@")
+
+    local want_series=""
+    case "${RESOLVED}" in [0-9]*.[0-9]*|[0-9]*) want_series="${RESOLVED%%.*}" ;; esac
+    # shellcheck disable=SC2034
+    local want_full="${RESOLVED}"
+
+    local s prefix suite comp idx tag lookup ver pair pkg bin
+    local pass
+    # Version the system package serves (if any) - pass 2 must not re-serve it.
+    _pf_deb_sysver=""
+    local sysbin="${pairs[0]#*:}"
+    if command -v "${sysbin}" >/dev/null 2>&1; then
+        _pf_deb_sysver=$(installed_binary_version "$(command -v "${sysbin}")" 2>/dev/null || true)
+    fi
+    for pass in 1 2; do
+        for s in "${suites[@]}"; do
+            prefix="${s%%|*}"; suite="${s#*|}"; comp="${suite#*|}"; suite="${suite%%|*}"
+            tag=$(printf '%s' "${prefix}${suite}${comp}" | tr -c 'a-zA-Z0-9' '-')
+            idx=$(_deb_index_text "${tag}" "${prefix}/dists/${suite}/${comp}/binary-${ARCH_DEB}/Packages.gz" 2>/dev/null) || continue
+            [ -n "${idx}" ] || continue
+
+            # Pass 1: only suites whose server package matches the requested series.
+            if [ "${pass}" = "1" ]; then
+                lookup=$(_deb_pkg_lookup "${idx}" "${pairs[0]%%:*}")
+                [ -n "${lookup}" ] || continue
+                ver="${lookup%%$'\t'*}"; ver="${ver##*:}"; ver="${ver%%-*}"
+                case "${ver}" in
+                    "${want_full}"|"${want_full}".*|"${want_full}"-*) : ;;
+                    *) continue ;;
+                esac
+            else
+                # Pass 2 accepts any version, but never re-installs exactly what
+                # the system package already provides (that would be a no-op
+                # dressed up as provisioning).
+                if [ -n "${_pf_deb_sysver:-}" ]; then
+                    lookup=$(_deb_pkg_lookup "${idx}" "${pairs[0]%%:*}")
+                    if [ -n "${lookup}" ]; then
+                        ver="${lookup%%$'\t'*}"; ver="${ver##*:}"; ver="${ver%%-*}"
+                        if [ "${ver}" = "${_pf_deb_sysver}" ]; then continue; fi
+                    fi
+                fi
+            fi
+
+            # Fetch + extract every requested package from this suite.
+            local ok_suite=1 found_any=0 tmp_deb ext_dir
+            local -a tmpdirs=()
+            for pair in "${pairs[@]}"; do
+                pkg="${pair%%:*}"; bin="${pair#*:}"
+                lookup=$(_deb_pkg_lookup "${idx}" "${pkg}")
+                if [ -z "${lookup}" ]; then
+                    # CLI companions are optional; the first (server) pkg is not.
+                    if [ "${pkg}" = "${pairs[0]%%:*}" ]; then ok_suite=0; fi
+                    continue
+                fi
+                local dpath="${lookup#*$'\t'}"
+                tmp_deb=$(mktemp 2>/dev/null) || { ok_suite=0; break; }
+                ext_dir=$(mktemp -d 2>/dev/null) || { rm -f "${tmp_deb}"; ok_suite=0; break; }
+                if ! fetch "${prefix}/${dpath}" "${tmp_deb}" || [ ! -s "${tmp_deb}" ] \
+                   || ! dpkg-deb -x "${tmp_deb}" "${ext_dir}" 2>/dev/null; then
+                    rm -rf "${ext_dir}" "${tmp_deb}"
+                    [ "${pkg}" = "${pairs[0]%%:*}" ] && ok_suite=0
+                    continue
+                fi
+                rm -f "${tmp_deb}"
+                tmpdirs+=("${ext_dir}")
+                local found
+                found=$(_find_elf_binary "${ext_dir}" "${bin}")
+                if [ -n "${found}" ]; then
+                    cp -f "${found}" "${INSTALL_DIR}/${bin}"
+                    chmod 755 "${INSTALL_DIR}/${bin}" 2>/dev/null || true
+                    found_any=1
+                elif [ "${pkg}" = "${pairs[0]%%:*}" ]; then
+                    ok_suite=0
+                fi
+            done
+            [ "${ok_suite}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
+            [ "${found_any}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
+
+            local server_bin="${pairs[0]#*:}"
+            [ -x "${INSTALL_DIR}/${server_bin}" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
+
+            # Runtime self-check; close missing-library gaps from the same suite.
+            if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${server_bin}" --version >/dev/null 2>&1; then
+                _deb_bundle_missing_libs "${prefix}" "${idx}" "${INSTALL_DIR}/${server_bin}" || true
+                if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${server_bin}" --version >/dev/null 2>&1; then
+                    for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+                    # Rejected build: purge its binaries so nothing broken is left
+                    # behind posing as a provisioned engine.
+                    for pair in "${pairs[@]}"; do
+                        rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
+                    done
+                    continue   # incompatible build (glibc too new etc.) -> next suite
+                fi
+            fi
+
+            for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+            local got
+            # Probe with the bundled libs path: distro binaries can fail to load
+            # without them, which would leave the requested version in RESOLVED
+            # instead of the version actually being served.
+            got=$(LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" installed_binary_version "${INSTALL_DIR}/${server_bin}" 2>/dev/null || true)
+            if [ -n "${got}" ]; then RESOLVED="${got}"; fi
+            PF_PKG_FALLBACK=1
+            ok "Provisioned ${ENGINE} ${RESOLVED} from distro packages (${suite} ${comp}); no compiler needed."
+            return 0
+        done
+    done
+    return 1
+}
+
+apk_extract_engine() { # apk_extract_engine <main|community> <pkg> <bin> [bin...]
+    [ -d /lib/ld-musl-x86_64.so.1 ] || [ -d /lib/ld-musl-aarch64.so.1 ] || return 1
+    local repo="$1" pkg="$2"; shift 2
+    local a="${ARCH_ALT}"
+    case "${ARCH_TYPE}" in amd64) a="x86_64" ;; arm64) a="aarch64" ;; arm) a="armv7" ;; 386) a="x86" ;; esac
+    local base="https://dl-cdn.alpinelinux.org/alpine/latest-stable/${repo}/${a}"
+    local listing href tmp_apk ext b found found_any=0
+    listing=$(fetch "${base}/" - 2>/dev/null) || return 1
+    href=$(printf '%s' "${listing}" | grep -oE "${pkg}-[0-9][^\"]*\.apk" | sort -V | tail -n1)
+    [ -n "${href}" ] || return 1
+    tmp_apk=$(mktemp 2>/dev/null) || return 1
+    fetch "${base}/${href}" "${tmp_apk}" || { rm -f "${tmp_apk}"; return 1; }
+    ext=$(mktemp -d 2>/dev/null) || { rm -f "${tmp_apk}"; return 1; }
+    tar -xzf "${tmp_apk}" -C "${ext}" 2>/dev/null || { rm -rf "${ext}" "${tmp_apk}"; return 1; }
+    rm -f "${tmp_apk}"
+    for b in "$@"; do
+        found=$(_find_elf_binary "${ext}" "${b}")
+        if [ -n "${found}" ] && LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${found}" --version >/dev/null 2>&1; then
+            cp -f "${found}" "${INSTALL_DIR}/${b}"
+            chmod 755 "${INSTALL_DIR}/${b}" 2>/dev/null || true
+            found_any=1
+        fi
+    done
+    rm -rf "${ext}"
+    [ "${found_any}" = "1" ] || return 1
+    RESOLVED="$(LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" installed_binary_version "${INSTALL_DIR}/$1" 2>/dev/null || printf '%s' "${href##*/}")"
+    PF_PKG_FALLBACK=1
+    ok "Provisioned ${ENGINE} ${RESOLVED} from Alpine packages (musl host)."
+    return 0
+}
+
 # MongoDB (+ mongosh companion for first-run provisioning)
 # -----------------------------------------------------------------------------
 ensure_mongosh() {
@@ -1093,20 +1394,30 @@ build_from_source() {
     return 0
 }
 
-gh_release_install() { # gh_release_install <repo> <asset_regex> <inner_name> <final_name>
+gh_release_install() { # gh_release_install <repo> <asset_regex> <inner_name> <final_name> [version]
     local repo="$1" regex="$2" inner="$3" final="$4"
     [ -x "${INSTALL_DIR}/${final}" ] && { log "${final} already present."; return 0; }
+    # Optional 5th arg pins the asset to the requested version: without it the
+    # newest release always won, silently ignoring version pins.
+    local ver_filter="${5:-}"
+    [[ "${ver_filter}" != v* ]] || ver_filter="${ver_filter#v}"
     local asset_url
     asset_url=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=30" - | \
         if have jq; then
-            jq -r --arg re "${regex}" '[.[].assets[].browser_download_url | select(test($re))][0] // empty' 2>/dev/null
+            if [ -n "${ver_filter}" ]; then
+                jq -r --arg re "${regex}" --arg vf "${ver_filter}" \
+                    '[.[].assets[].browser_download_url | select(test($re)) | select(test($vf))][0] // empty' 2>/dev/null
+            else
+                jq -r --arg re "${regex}" '[.[].assets[].browser_download_url | select(test($re))][0] // empty' 2>/dev/null
+            fi
         else
             grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*"' \
                 | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/' \
                 | grep -E "${regex}" \
+                | { if [ -n "${ver_filter}" ]; then grep -F -- "${ver_filter}" || true; else cat; fi; } \
                 | head -n1
         fi)
-    [ -z "${asset_url}" ] && { warn "No release asset matched '${regex}' for ${repo}."; return 1; }
+    [ -z "${asset_url}" ] && { warn "No release asset matched '${regex}' for ${repo} (version filter: '${ver_filter:-none}')."; return 1; }
     log "Fetching $(basename "${asset_url}") ..."
     local tmp_dl; tmp_dl=$(mktemp)
     fetch "${asset_url}" "${tmp_dl}" || { rm -f "${tmp_dl}"; warn "Download failed."; return 1; }
@@ -1172,40 +1483,67 @@ install_redis_family() {
     fi
     case "${ENGINE}" in
         redis)
-            if [ -x "${INSTALL_DIR}/redis-server" ] && provisioned_series_matches "${INSTALL_DIR}/redis-server" "${RESOLVED}"; then
-                log "Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") already provisioned (matches '${RESOLVED}')."
-                return 0
+            if [ -x "${INSTALL_DIR}/redis-server" ]; then
+                if [ "${RESOLVED}" = "latest" ] || provisioned_series_matches "${INSTALL_DIR}/redis-server" "${RESOLVED}"; then
+                    log "Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") already provisioned (matches '${RESOLVED}')."
+                    return 0
+                fi
+                warn "Existing Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") does not match requested '${RESOLVED}' - re-provisioning."
             fi
-            [ -x "${INSTALL_DIR}/redis-server" ] && warn "Existing Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") does not match requested '${RESOLVED}' - re-provisioning."
-            build_from_source "https://download.redis.io/releases/redis-${RESOLVED}.tar.gz" src/redis-server src/redis-cli \
+            local redis_src="https://download.redis.io/releases/redis-${RESOLVED}.tar.gz"
+            [ "${RESOLVED}" = "latest" ] && redis_src="https://download.redis.io/redis-stable.tar.gz"
+            _deb_build_suite_list 1
+            build_from_source "${redis_src}" src/redis-server src/redis-cli \
+                || deb_extract_engine "${PF_DEB_SUITES[@]}" -- redis-server:redis-server redis-tools:redis-cli \
+                || apk_extract_engine main redis redis-server redis-cli \
                 || fallback_to_system "Redis ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         valkey)
-            if [ -x "${INSTALL_DIR}/valkey-server" ] && provisioned_series_matches "${INSTALL_DIR}/valkey-server" "${RESOLVED}"; then
-                return 0
+            if [ -x "${INSTALL_DIR}/valkey-server" ]; then
+                if [ "${RESOLVED}" = "latest" ] || provisioned_series_matches "${INSTALL_DIR}/valkey-server" "${RESOLVED}"; then
+                    return 0
+                fi
             fi
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
+            _deb_build_suite_list 0
             build_from_source "https://github.com/valkey-io/valkey/archive/refs/tags/${tag}.tar.gz" src/valkey-server src/valkey-cli \
+                || deb_extract_engine "${PF_DEB_SUITES[@]}" -- valkey:valkey-server valkey-tools:valkey-cli \
+                || apk_extract_engine community valkey valkey-server valkey-cli \
                 || fallback_to_system "Valkey ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         keydb)
-            if [ -x "${INSTALL_DIR}/keydb-server" ] && provisioned_series_matches "${INSTALL_DIR}/keydb-server" "${RESOLVED}"; then
-                return 0
+            if [ -x "${INSTALL_DIR}/keydb-server" ]; then
+                if [ "${RESOLVED}" = "latest" ] || provisioned_series_matches "${INSTALL_DIR}/keydb-server" "${RESOLVED}"; then
+                    log "KeyDB $(installed_binary_version "${INSTALL_DIR}/keydb-server") already provisioned (matches '${RESOLVED}')."
+                    return 0
+                fi
+                warn "Existing KeyDB $(installed_binary_version "${INSTALL_DIR}/keydb-server") does not match requested '${RESOLVED}' - re-provisioning."
             fi
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
+            _deb_build_suite_list 0
             build_from_source "https://github.com/EQ-Alpha/KeyDB/archive/refs/tags/${tag}.tar.gz" keydb-server keydb-cli \
-                || fallback_to_system "KeyDB ${RESOLVED} cannot be compiled here."
+                || deb_extract_engine "${PF_DEB_SUITES[@]}" -- keydb-server:keydb-server keydb-tools:keydb-cli \
+                || apk_extract_engine community keydb keydb-server keydb-cli \
+                || fallback_to_system "KeyDB ${RESOLVED} cannot be compiled here (no gcc/make, unprivileged)."
             ;;
         memcached)
-            if [ -x "${INSTALL_DIR}/memcached" ] && provisioned_series_matches "${INSTALL_DIR}/memcached" "${RESOLVED}"; then
-                return 0
+            if [ -x "${INSTALL_DIR}/memcached" ]; then
+                if [ "${RESOLVED}" = "latest" ] || provisioned_series_matches "${INSTALL_DIR}/memcached" "${RESOLVED}"; then
+                    log "memcached $(installed_binary_version "${INSTALL_DIR}/memcached") already provisioned (matches '${RESOLVED}')."
+                    return 0
+                fi
+                warn "Existing memcached $(installed_binary_version "${INSTALL_DIR}/memcached") does not match requested '${RESOLVED}' - re-provisioning."
             fi
             apt_try_install libevent-dev || true
             ldconfig 2>/dev/null || true
+            _deb_build_suite_list 0
             build_from_source "https://memcached.org/files/memcached-${RESOLVED}.tar.gz" memcached \
+                || deb_extract_engine "${PF_DEB_SUITES[@]}" -- memcached:memcached \
+                || apk_extract_engine main memcached memcached \
                 || fallback_to_system "memcached ${RESOLVED} cannot be compiled here (libevent-dev missing)."
             ;;
         dragonfly)
+            ensure_single_binary_version "dragonfly"
             [ -x "${INSTALL_DIR}/dragonfly" ] && return 0
             local tag="${RESOLVED}"; [[ "${tag}" != v* ]] && tag="v${tag}"
             local asset="dragonfly-x86_64.tar.gz"
@@ -1233,6 +1571,7 @@ esac
 
 case "${ENGINE}" in
     pocketbase)
+        ensure_single_binary_version "pocketbase"
         TAG="${RESOLVED#v}"; [ -z "${TAG}" -o "${TAG}" = "latest" ] && TAG=$(gh_latest_tag "pocketbase/pocketbase" | sed 's/^v//')
         [ -z "${TAG}" ] && TAG="0.25.0"
         if [ ! -x "${INSTALL_DIR}/pocketbase" ]; then
@@ -1248,6 +1587,7 @@ case "${ENGINE}" in
         ;;
 
     surrealdb|surreal)
+        ensure_single_binary_version "surreal"
         TAG="${RESOLVED}"
         { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "surrealdb/surrealdb")
         [ -z "${TAG}" ] && TAG="v2.0.4"
@@ -1269,6 +1609,7 @@ case "${ENGINE}" in
         ;;
 
     meilisearch)
+        ensure_single_binary_version "meilisearch"
         # Repo canonicalized to meilisearch/meilisearch; assets renamed to
         # linux-amd64/linux-aarch64/linux-riscv64 (ARCH_TYPE matches exactly).
         TAG="${RESOLVED}"
@@ -1290,6 +1631,7 @@ case "${ENGINE}" in
         ;;
 
     qdrant)
+        ensure_single_binary_version "qdrant"
         TAG="${RESOLVED}"
         { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "qdrant/qdrant")
         [ -z "${TAG}" ] && TAG="v1.12.1"
@@ -1321,6 +1663,7 @@ case "${ENGINE}" in
         ;;
 
     typesense)
+        ensure_single_binary_version "typesense-server"
         TAG="${RESOLVED#v}"
         { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "typesense/typesense" | sed 's/^v//')
         [ -z "${TAG}" ] && TAG="27.0"

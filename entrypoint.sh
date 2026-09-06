@@ -172,14 +172,34 @@ mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SER
 # Remove obsolete root scripts copied by previous egg versions so old servers run cleanly on latest image scripts.
 # Signature-gated (must contain the studio header) so user files with the same
 # name are never touched.
-for _egg_script in run.sh entrypoint.sh; do
-    if [ -f "${SERVER_DIR}/${_egg_script}" ] && grep -q "PotenFYR Studios" "${SERVER_DIR}/${_egg_script}" 2>/dev/null; then
-        rm -f "${SERVER_DIR}/${_egg_script}" 2>/dev/null || true
+# A .git directory means this workspace is a SOURCE CHECKOUT (developer clone),
+# not a panel-managed server volume - never self-clean there, or running the
+# entrypoint from a clone would delete the repo's own launcher files.
+if [ ! -d "${SERVER_DIR}/.git" ]; then
+    for _egg_script in run.sh entrypoint.sh; do
+        if [ -f "${SERVER_DIR}/${_egg_script}" ] && grep -q "PotenFYR Studios" "${SERVER_DIR}/${_egg_script}" 2>/dev/null; then
+            rm -f "${SERVER_DIR}/${_egg_script}" 2>/dev/null || true
+        fi
+    done
+    unset _egg_script
+fi
+# Only remove the helper-script copies of OLD egg versions - and only when the
+# directory carries exclusively PotenFYR-signed scripts. A user (or git-synced)
+# scripts/ directory with any unsigned file is never touched.
+if [ ! -d "${SERVER_DIR}/.git" ] && [ -d "${SERVER_DIR}/scripts" ] && [ -f /usr/local/bin/password-gen.sh ]; then
+    _pf_scripts_managed=1
+    while IFS= read -r _pf_sf; do
+        case "${_pf_sf}" in
+            *.sh) grep -q "PotenFYR Studios" "${_pf_sf}" 2>/dev/null || { _pf_scripts_managed=0; break; } ;;
+            *) _pf_scripts_managed=0; break ;;
+        esac
+    done < <(find "${SERVER_DIR}/scripts" -maxdepth 1 -type f 2>/dev/null)
+    if [ "${_pf_scripts_managed}" = "1" ]; then
+        rm -rf "${SERVER_DIR}/scripts" 2>/dev/null || true
+    else
+        warn "Keeping ${SERVER_DIR}/scripts - it contains non-runtime (user) files."
     fi
-done
-unset _egg_script
-if [ -d "${SERVER_DIR}/scripts" ] && [ -f /usr/local/bin/password-gen.sh ]; then
-    rm -rf "${SERVER_DIR}/scripts" 2>/dev/null || true
+    unset _pf_scripts_managed _pf_sf
 fi
 
 # Fallback bootstrap for generic images (only when not running the official pre-baked image)
@@ -192,12 +212,12 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
         REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
-            for h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh; do
+            for h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh db-init-git.sh; do
                 curl -fsSL --retry 2 "${REPO_BASE}/scripts/${h}" -o "${RUNTIME_DIR}/${h}" 2>/dev/null || true
             done
         elif command -v wget >/dev/null 2>&1; then
             wget -qO "${RUNTIME_DIR}/run.sh" "${REPO_BASE}/run.sh" 2>/dev/null || true
-            for h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh; do
+            for h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh db-init-git.sh; do
                 wget -qO "${RUNTIME_DIR}/${h}" "${REPO_BASE}/scripts/${h}" 2>/dev/null || true
             done
         fi
@@ -270,7 +290,8 @@ apply_persisted() {
 }
 
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
-            AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR KEEP_BACKUP \
+            AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR ARCHIVE_ON_SWITCH \
+            GIT_REPO_URL GIT_BRANCH GIT_TOKEN GIT_ARCHIVE_ON_UPDATE \
             PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND \
             EGG_UPDATE_URL AUTO_UPDATE_EGG PANEL_STOP_WATCHER CLI_THEME CLI_BANNER_GRADIENT; do
     apply_persisted "${_key}"
@@ -339,7 +360,7 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
                                 mv -f "${_egg_target}.update" "${_egg_target}" 2>/dev/null || true
                                 chmod +x "${_egg_target}" 2>/dev/null || true
                                 printf '%s\n' "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
-                                printf '%s\n' "$(_egg_hash_new)" > "${_egg_lhash}" 2>/dev/null || true
+                                printf '%s\n' "${_egg_hash_new}" > "${_egg_lhash}" 2>/dev/null || true
                                 ok "Launcher self-updated from EGG_UPDATE_URL."
                             else
                                 rm -f "${_egg_target}.update" 2>/dev/null || true
@@ -368,6 +389,20 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
                         if [ "${_launcher_ok:-0}" = "1" ]; then
                             echo "${_egg_hash_new}" > "${_egg_hashfile}" 2>/dev/null || true
                             ok "Egg update detected - launcher refreshed from ${_base}."
+                            # Refresh the modular handlers from the same branch so a
+                            # new launcher never runs against stale helper scripts.
+                            for _h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh db-init-git.sh; do
+                                if curl -fsSL --retry 2 --max-time 30 "${_base}/scripts/${_h}" -o "${RUNTIME_DIR}/.${_h}.update" 2>/dev/null \
+                                   && [ -s "${RUNTIME_DIR}/.${_h}.update" ] \
+                                   && grep -q "PotenFYR Studios" "${RUNTIME_DIR}/.${_h}.update" 2>/dev/null; then
+                                    head -c 2 "${RUNTIME_DIR}/.${_h}.update" | grep -q $'\r' && sed -i 's/\r$//' "${RUNTIME_DIR}/.${_h}.update" 2>/dev/null || true
+                                    mv -f "${RUNTIME_DIR}/.${_h}.update" "${RUNTIME_DIR}/${_h}" 2>/dev/null || true
+                                else
+                                    rm -f "${RUNTIME_DIR}/.${_h}.update" 2>/dev/null || true
+                                fi
+                            done
+                            unset _h
+                            chmod +x "${RUNTIME_DIR}"/*.sh 2>/dev/null || true
                         else
                             warn "Egg update detected but launcher refresh failed - continuing with installed launcher."
                         fi
@@ -624,14 +659,46 @@ print_banner() {
 print_banner
 
 # Runtime Environment Card
+# Values are clamped (36 chars) so long paths/UUIDs can never smear the box.
+_card_val() { local v="${1:-}"; printf '%s' "${v:0:36}"; }
+_pf_uuid="${P_SERVER_UUID:-${FEATHER_SERVER_UUID:-${SERVER_UUID:-${WISP_SERVER_UUID:-${CONVOY_SERVER_UUID:-}}}}}"
+if [ -n "${_pf_uuid}" ]; then _pf_uuid="${_pf_uuid:0:8}••••${_pf_uuid: -4}"; else _pf_uuid="not exposed"; fi
+_pf_user_name="$(id -un 2>/dev/null || echo "uid$(id -u 2>/dev/null || echo '?')")"
+case "${AUTO_UPDATE_EGG:-1}" in 0|false|off) _pf_eggupd="Disabled" ;; *) _pf_eggupd="Enabled" ;; esac
+if [ -n "${GIT_REPO_URL:-}" ]; then
+    _pf_gitsync="${GIT_REPO_URL##*/}"
+    [ -n "${GIT_BRANCH:-}" ] && _pf_gitsync="${_pf_gitsync} @ ${GIT_BRANCH}"
+    [ -n "${GIT_TOKEN:-}" ] && _pf_gitsync="${_pf_gitsync} (auth)"
+else
+    _pf_gitsync="Not configured"
+fi
+case "${PERFORMANCE_TUNING:-1}" in 0|false|off) _pf_memtune="Off (manual limits)" ;; *) _pf_memtune="Auto (${SERVER_MEMORY:-1024} MB limit)" ;; esac
+# Entry Point mirrors the exec resolution at the bottom of this script.
+if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
+    _pf_entry="./run.custom.sh"
+elif [ -n "${LAUNCHER_OVERRIDE:-}" ] && [ -f "${LAUNCHER_OVERRIDE}" ]; then
+    _pf_entry="${LAUNCHER_OVERRIDE#"${SERVER_DIR}"/}"
+else
+    _pf_entry="${RUNTIME_DIR}/run.sh"
+fi
 printf "${C_LIME}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Listen Address" "${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "${SERVER_MEMORY} MB"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database / Schema" "${DB_NAME:-default}"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Detected Panel" "${PANEL_TYPE:-standalone}"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Security Mode" "Strict Cryptographic / SCRAM / Auth"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database Engine" "$(_card_val "${PROJECT_TYPE^^} (v${DB_VERSION})")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Listen Address" "$(_card_val "${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "$(_card_val "${SERVER_MEMORY:-1024} MB")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Memory Tuning" "$(_card_val "${_pf_memtune}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database / Schema" "$(_card_val "${DB_NAME:-default}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Host Platform" "$(_card_val "${PANEL_TYPE:-standalone}${PANEL_NAME:+$([ "${PANEL_NAME}" != "${PANEL_TYPE}" ] && printf ' (%s)' "${PANEL_NAME}")}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Server UUID" "$(_card_val "${_pf_uuid}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Security Mode" "$(_card_val "Strict Cryptographic / SCRAM / Auth")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Egg Self-Update" "$(_card_val "${_pf_eggupd}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Git Repo Sync" "$(_card_val "${_pf_gitsync}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Entry Point" "$(_card_val "${_pf_entry}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Process User" "$(_card_val "$(id -u 2>/dev/null || echo '?') (${_pf_user_name})")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Architecture" "$(_card_val "$(uname -m 2>/dev/null || echo '?') ($(uname -s 2>/dev/null || echo 'Linux'))")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Working Dir" "$(_card_val "${SERVER_DIR}")"
 printf "${C_LIME}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
+unset -f _card_val
+unset _pf_uuid _pf_user_name _pf_eggupd _pf_gitsync _pf_memtune _pf_entry
 
 log "Executing startup launcher..."
 

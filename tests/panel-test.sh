@@ -56,7 +56,7 @@ docker exec db-t1 grep -q "database-eggs" /home/container/.logs/console.log 2>/d
     && ok "console mirror .logs/console.log active" || bad "console mirror missing"
 docker exec db-t1 grep -q "boot @" /home/container/.logs/console.log 2>/dev/null \
     && ok "boot header in mirror" || bad "boot header missing"
-docker logs db-t1 2>&1 | grep -q "Detected Panel" && ok "boot card shows detected panel row" || bad "boot card panel row"
+docker logs db-t1 2>&1 | grep -q "Host Platform" && ok "boot card shows host platform row" || bad "boot card panel row"
 
 # ---------------------------------------------------------------- T2: STOP
 echo "== T2: stop from panel (SIGTERM to PID 1) =="
@@ -168,11 +168,11 @@ fw_seen=0
 card_seen=0
 for i in $(seq 1 90); do
     docker logs db-t9 2>&1 | grep -aq "panel=feather" && fw_seen=1
-    docker logs db-t9 2>&1 | grep -a "Detected Panel" | grep -aq "feather" && { card_seen=1; break; }
+    docker logs db-t9 2>&1 | grep -a "Host Platform" | grep -aq "feather" && { card_seen=1; break; }
     sleep 1
 done
 [ "$fw_seen" = "1" ] && ok "Feather Panel detected via P_SERVER_UUID_SHORT" || { bad "panel detection (Feather)"; docker logs db-t9 2>&1 | grep -aiE "panel=" | head -3; }
-[ "$card_seen" = "1" ] && ok "boot card shows Detected Panel: feather" || { bad "card Detected Panel"; docker logs db-t9 2>&1 | grep -a "Detected Panel" | head -2; }
+[ "$card_seen" = "1" ] && ok "boot card shows Host Platform: feather" || { bad "card Host Platform"; docker logs db-t9 2>&1 | grep -a "Host Platform" | head -2; }
 docker rm -f db-t9 >/dev/null 2>&1
 
 # ------------------------------------- T10: LAUNCHER FILE ISOLATION

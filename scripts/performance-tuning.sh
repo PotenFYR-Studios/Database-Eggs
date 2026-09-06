@@ -17,6 +17,8 @@ calculate_system_specs() {
 
 # --- MariaDB / MySQL Auto-Tuning --------------------------------------------
 tune_mariadb_mysql() {
+    # PERFORMANCE_TUNING=0 keeps every buffer/cache limit at engine defaults.
+    [ "${PERFORMANCE_TUNING:-1}" = "1" ] || return 0
     calculate_system_specs
     local mem_mb="${MEM_TOTAL_MB}"
 
@@ -55,6 +57,8 @@ tune_mariadb_mysql() {
 
 # --- PostgreSQL Auto-Tuning (production cluster grade) -----------------------
 tune_postgresql() {
+    # PERFORMANCE_TUNING=0 keeps every buffer/cache limit at engine defaults.
+    [ "${PERFORMANCE_TUNING:-1}" = "1" ] || return 0
     calculate_system_specs
     local mem_mb="${MEM_TOTAL_MB}"
 
@@ -112,6 +116,8 @@ tune_postgresql() {
 
 # --- Redis / Valkey / KeyDB Auto-Tuning (production grade) -------------------
 tune_redis_family() {
+    # PERFORMANCE_TUNING=0 keeps every buffer/cache limit at engine defaults.
+    [ "${PERFORMANCE_TUNING:-1}" = "1" ] || return 0
     calculate_system_specs
     local mem_mb="${MEM_TOTAL_MB}"
 
@@ -150,6 +156,8 @@ tune_redis_family() {
 
 # --- MongoDB Auto-Tuning (production grade) ----------------------------------
 tune_mongodb() {
+    # PERFORMANCE_TUNING=0 keeps every buffer/cache limit at engine defaults.
+    [ "${PERFORMANCE_TUNING:-1}" = "1" ] || return 0
     calculate_system_specs
     local mem_mb="${MEM_TOTAL_MB}"
 
@@ -177,14 +185,18 @@ apply_host_tunables() {
     #    WiredTiger snapshots). Only relevant to those engines - never warn
     #    for MariaDB/PostgreSQL/etc.
     case "${PROJECT_TYPE:-}" in
-        redis|valkey|keydb|dragonfly|mongodb)
+        redis|valkey|keydb|mongodb)
             if [ "${REDIS_OVERCOMMIT_MEMORY:-1}" = "1" ]; then
-                if [ "${can_sysctl}" = "1" ]; then
+                local cur_oc
+                cur_oc=$(cat /proc/sys/vm/overcommit_memory 2>/dev/null || echo "?")
+                if [ "${cur_oc}" = "1" ]; then
+                    ok "vm.overcommit_memory=1 verified (fork-based background saves are safe)."
+                elif [ "${can_sysctl}" = "1" ]; then
                     sysctl -qw vm.overcommit_memory=1 2>/dev/null \
                         && ok "Host tunable applied: vm.overcommit_memory=1" \
-                        || warn "Could not set vm.overcommit_memory (host restriction)."
+                        || warn "Could not set vm.overcommit_memory (host restriction). Background saves may fail under memory pressure."
                 else
-                    warn "${PROJECT_TYPE} background-save safety: host should set vm.overcommit_memory=1 (needs root on the HOST: sysctl vm.overcommit_memory=1)."
+                    warn "Background-save safety: host reports vm.overcommit_memory=${cur_oc:-unknown}. Ask the HOST operator to run: sysctl vm.overcommit_memory=1 (set REDIS_OVERCOMMIT_MEMORY=0 to silence)."
                 fi
             fi
             ;;

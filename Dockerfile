@@ -70,10 +70,28 @@ RUN apt-get update && \
     && rm -rf /var/lib/postgresql/*
 
 # Standalone Engine Binaries (Universal & Dedicated Variants)
+# Full multi-arch mapping matching the CI build matrix
+# (amd64, arm64, arm/v7, s390x, ppc64le, riscv64). Upstream standalone
+# binaries exist for amd64/arm64 only; other architectures rely on the
+# distro packages installed above and the runtime's per-arch installers.
 RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
-    if [ "${TARGETARCH}" = "arm64" ]; then \
-        arch_type="arm64"; arch_alt="aarch64"; arch_gnu="aarch64-unknown-linux-gnu"; \
-    fi; \
+    case "${TARGETARCH}" in \
+        arm64) \
+            arch_type="arm64"; arch_alt="aarch64"; arch_gnu="aarch64-unknown-linux-gnu"; \
+            ;; \
+        arm) \
+            arch_type="arm"; arch_alt="armv7l"; arch_gnu="arm-unknown-linux-gnueabihf"; \
+            ;; \
+        s390x) \
+            arch_type="s390x"; arch_alt="s390x"; arch_gnu="s390x-unknown-linux-gnu"; \
+            ;; \
+        ppc64le) \
+            arch_type="ppc64le"; arch_alt="ppc64le"; arch_gnu="powerpc64le-unknown-linux-gnu"; \
+            ;; \
+        riscv64) \
+            arch_type="riscv64"; arch_alt="riscv64"; arch_gnu="riscv64-unknown-linux-gnu"; \
+            ;; \
+    esac; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "meilisearch" ]; then \
         for i in 1 2 3; do \
             curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/meilisearch/meilisearch/releases/download/v1.53.1/meilisearch-linux-${arch_type}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
