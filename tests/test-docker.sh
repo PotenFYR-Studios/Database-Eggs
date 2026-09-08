@@ -206,7 +206,7 @@ run_db_test() {
 
         # Execute verification command or port check inside container
         if [ -n "${test_cmd}" ]; then
-            if docker exec "${container_name}" bash -c "${test_cmd}" >/dev/null 2>&1; then
+            if docker exec "${container_name}" bash -c "export PATH=\"/home/container/bin:/home/container/.runtimes/bin:\${PATH}\"; ${test_cmd}" >/dev/null 2>&1; then
                 is_ready=0
                 break
             fi
@@ -275,7 +275,7 @@ MATRIX=(
     'run_db_test "memcached" "11211" "" ""'
 
     # 3. Document & Multi-Model
-    'run_db_test "mongodb" "27017" "" "mongod --version 2>/dev/null | grep -qE '"'"'db version v7\.'"'"'" "7.0"'
+    'run_db_test "mongodb" "27017" "" "(ss -tuln 2>/dev/null | grep -qE '"'"':27017(\b| |$)'"'"' || mongosh --quiet --port 27017 --eval '"'"'db.adminCommand({ping:1})'"'"' 2>/dev/null) && (mongod --version 2>/dev/null || /home/container/bin/mongod --version 2>/dev/null) | grep -qE '"'"'db version v7\.'"'"'" "7.0"'
     'run_db_test "surrealdb" "8000" "" "curl -fsSL http://127.0.0.1:8000/health 2>/dev/null || curl -fsSL http://127.0.0.1:8000/status 2>/dev/null || curl -fsSL http://127.0.0.1:8000/version 2>/dev/null"'
 
     # 4. Search & Vector Engines

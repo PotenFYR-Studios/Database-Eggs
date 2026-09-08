@@ -28,7 +28,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     LC_ALL=en_US.UTF-8 \
     LANGUAGE=en_US:en \
     RUNTIME_VARIANT=${RUNTIME_VARIANT} \
-    PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
+    PATH="/home/container/bin:/home/container/.runtimes/bin:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
 # Install common system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -154,7 +154,7 @@ COPY scripts/ /usr/local/bin/
 RUN chmod +x /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/*.sh 2>/dev/null || true
 
 USER container
-ENV USER=container HOME=/home/container
+ENV USER=container HOME=/home/container PATH="/home/container/bin:/home/container/.runtimes/bin:${PATH}"
 WORKDIR /home/container
 
 ENTRYPOINT ["/usr/bin/tini", "-g", "--", "/entrypoint.sh"]
