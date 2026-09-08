@@ -1532,7 +1532,7 @@ ensure_mongosh() {
     url=$(fetch "https://api.github.com/repos/mongodb-js/mongosh/releases?per_page=5" - 2>/dev/null         | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-'${os_arch}'-openssl3\.tgz"'         | head -n1 | sed -E 's/.*"([^"]*)"$//')
     [ -z "${url}" ] && url=$(fetch "https://api.github.com/repos/mongodb-js/mongosh/releases?per_page=5" - 2>/dev/null         | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-'${os_arch}'-openssl11\.tgz"'         | head -n1 | sed -E 's/.*"([^"]*)"$//')
     # Legacy direct URL as a final fallback for cached mirrors.
-    [ -z "${url}" ] && url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${ARCH_ALT}.tgz"
+    [ -z "${url}" ] && url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${os_arch}.tgz"
     local tmp_tar; tmp_tar=$(mktemp)
     if fetch "${url}" "${tmp_tar}"; then
         local ext="${INSTALL_DIR}/.msh.$$"
