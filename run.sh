@@ -98,7 +98,7 @@ build_isolated_environment() {
 }
 build_isolated_environment
 
-export PATH="/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR}/bin:${SERVER_DIR}/.runtimes/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
+export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/.runtimes/bin:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
 
 # Source .env if available to load active credentials and parameters
 if [ -f "${SERVER_DIR}/.env" ]; then

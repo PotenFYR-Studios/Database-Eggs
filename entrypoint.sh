@@ -233,7 +233,7 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ] && [ ! -f /usr/local/bin/run.sh ] && [ ! -f 
     fail "Fatal: Runtime launcher unavailable."
 fi
 
-export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:${SERVER_DIR}/bin:${RUNTIME_DIR}:/usr/local/bin:${PATH}"
+export PATH="${SERVER_DIR}/bin:${RUNTIME_DIR}:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/local/bin:${PATH}"
 
 # Source performance and helper scripts safely
 [ -f "${RUNTIME_DIR}/performance-tuning.sh" ] && source "${RUNTIME_DIR}/performance-tuning.sh" 2>/dev/null || true
@@ -551,7 +551,7 @@ fi
 
 # Generate user environment shortcuts for terminal CLI usage (.profile and .bashrc)
 {
-    printf 'export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:%s/bin:%s:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
+    printf 'export PATH="%s/bin:%s:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/local/bin:${PATH}"\n' "${SERVER_DIR}" "${RUNTIME_DIR}"
     printf '[ -f "%s/.env" ] && set -a && source "%s/.env" 2>/dev/null && set +a\n' "${SERVER_DIR}" "${SERVER_DIR}"
     printf 'export DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
     printf 'export DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
