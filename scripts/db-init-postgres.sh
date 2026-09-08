@@ -343,7 +343,7 @@ EOF
 
         local superuser="${POSTGRES_USER:-postgres}"
 
-        if [ -n "${DB_USER:-}" ] && [ "${DB_USER}" != "${superuser}" ] && [ -n "${DB_PASSWORD:-}" ]; then
+        if [ "${PF_USERS_MODE:-legacy}" = "legacy" ] && [ -n "${DB_USER:-}" ] && [ "${DB_USER}" != "${superuser}" ] && [ -n "${DB_PASSWORD:-}" ]; then
             psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d postgres >/dev/null 2>&1 <<EOSQL || true
 CREATE USER "${DB_USER}" WITH ENCRYPTED PASSWORD '${DB_PASSWORD}';
 EOSQL
@@ -446,5 +446,11 @@ start_postgres() {
     log "Starting PostgreSQL ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."
     "${pg_bin}" -D "${data_dir}" -k "${socket_dir}" -p "${SERVER_PORT}" -h "${BIND_ADDRESS:-0.0.0.0}" ${EXTRA_ARGS:-} < /dev/null &
     local daemon_pid=$!
+
+    # Multi-user account reconciliation (idempotent, retries while daemon warms up)
+    if command -v pf_users_reconcile_pgsql >/dev/null 2>&1; then
+        pf_users_reconcile_pgsql "${POSTGRES_USER:-postgres}"
+    fi
+
     supervise_daemon "${daemon_pid}" "stop_postgres"
 }

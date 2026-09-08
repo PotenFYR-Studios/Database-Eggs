@@ -133,7 +133,7 @@ EOSCRIPT
         ok "Created admin root user."
 
         # Create application database and user
-        if [ -n "${DB_NAME:-}" ] && [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
+        if [ "${PF_USERS_MODE:-legacy}" = "legacy" ] && [ -n "${DB_NAME:-}" ] && [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
             "${msh}" --quiet --port "${SERVER_PORT}" -u "root" -p "${DB_ROOT_PASSWORD}" --authenticationDatabase "admin" "${DB_NAME}" >/dev/null 2>&1 <<EOSCRIPT
 db.createUser({
   user: "${DB_USER}",
@@ -205,6 +205,11 @@ start_mongo_family() {
         log "Starting MongoDB ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (WiredTiger Cache: ${TUNED_MONGO_CACHE_GB:-auto}GB)..."
         "${mongod_bin}" --config "${mongod_conf}" ${EXTRA_ARGS:-} < /dev/null &
         daemon_pid=$!
+
+        # Multi-user account reconciliation (idempotent, retries while daemon warms up)
+        if command -v pf_users_reconcile_mongo >/dev/null 2>&1; then
+            pf_users_reconcile_mongo "$(find_mongo_bin "mongosh" 2>/dev/null || echo mongosh)"
+        fi
     fi
 
     supervise_daemon "${daemon_pid}" "stop_mongo_family"

@@ -56,3 +56,9 @@ desktop.ini
 .fake_stdin.txt
 .fake_console_case.sh
 .wtest.sh
+
+.rtk/
+CLAUDE.md
+
+# ---- Local helper tooling (not part of the public image/test surface) ----
+.tools/

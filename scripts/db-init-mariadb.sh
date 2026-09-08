@@ -186,7 +186,11 @@ EOF
         }
 
         local init_log="${SERVER_DIR}/logs/mariadb_init.log"
-        "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --socket="${socket_path}" > "${init_log}" 2>&1 &
+        # MariaDB 12.x defaults root@localhost to unix_socket auth, which an
+        # unprivileged (uid 988) init cannot use. Run the bootstrap daemon with
+        # skip-grant-tables and FLUSH PRIVILEGES inside the session so the root
+        # password + accounts are provisioned reliably on every major version.
+        "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --skip-grant-tables --socket="${socket_path}" > "${init_log}" 2>&1 &
         local tmp_pid=$!
 
         # Wait for socket
@@ -209,6 +213,7 @@ EOF
             client_bin=$(find_mariadb_bin "mariadb" "mysql") || client_bin="mysql"
 
             "${client_bin}" -u root --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
+FLUSH PRIVILEGES;
 DELETE FROM mysql.user WHERE User='';
 DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
@@ -226,7 +231,7 @@ EOSQL
                 ok "Created database \`${DB_NAME}\`"
             fi
 
-            if [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
+            if [ "${PF_USERS_MODE:-legacy}" = "legacy" ] && [ -n "${DB_USER:-}" ] && [ -n "${DB_PASSWORD:-}" ] && [ "${DB_USER}" != "root" ]; then
                 "${client_bin}" -u root -p"${DB_ROOT_PASSWORD}" --socket="${socket_path}" >/dev/null 2>&1 <<EOSQL || true
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASSWORD}';
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASSWORD}';
@@ -299,5 +304,11 @@ start_mariadb_mysql() {
     log "Starting ${PROJECT_TYPE^^} ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}..."
     "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
     local daemon_pid=$!
+
+    # Multi-user account reconciliation (idempotent, retries while daemon warms up)
+    if command -v pf_users_reconcile_mysql >/dev/null 2>&1; then
+        pf_users_reconcile_mysql "$(find_mariadb_bin "mariadb" "mysql" 2>/dev/null || echo mysql)"
+    fi
+
     supervise_daemon "${daemon_pid}" "stop_mariadb_mysql"
 }
