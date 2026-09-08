@@ -161,7 +161,9 @@ load_companions() {
             mongosh)
                 if ! command -v mongosh >/dev/null 2>&1 && [ ! -x "${target_bin}/mongosh" ]; then
                     log "Injecting MongoDB Shell (mongosh) companion into ${target_dir}..."
-                    local msh_url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${arch_alt}.tgz"
+                    local msh_arch="x64"
+                    [ "${arch_alt}" = "aarch64" ] && msh_arch="arm64"
+                    local msh_url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${msh_arch}.tgz"
                     if curl -fsSL --retry 3 "${msh_url}" 2>/dev/null | tar -xz -C "${target_dir}/" 2>/dev/null; then
                         cp -f "${target_dir}"/mongosh-*/bin/mongosh "${target_bin}/mongosh" 2>/dev/null || true
                         chmod +x "${target_bin}/mongosh" 2>/dev/null || true
