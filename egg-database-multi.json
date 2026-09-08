@@ -1,314 +1,314 @@
 {
-  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
-  "meta": {
-    "version": "PTDL_v2",
-    "update_url": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json"
-  },
-  "exported_at": "2026-08-22T04:00:00+00:00",
-  "name": "Multi Database",
-  "author": "support@potenfyr.in",
-  "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
-  "features": [
-    "pid_limit"
-  ],
-  "docker_images": {
-    "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
-  },
-  "file_denylist": [],
-  "startup": "if [ -f /entrypoint.sh ]; then exec bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then exec bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then exec bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | exec bash; fi",
-  "config": {
-    "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
-    "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
-    "stop": "^C",
-    "logs": "{}"
-  },
-  "scripts": {
-    "installation": {
-      "script": "#!/bin/sh\n# PotenFYR Studios - Multi-Database Universal Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# A .git directory means this volume is a SOURCE CHECKOUT, not a panel server\n# volume - never self-clean there (protects developer clones AND any repo the\n# user synced into the workspace that kept its history).\nif [ ! -d \"${SERVER_DIR}/.git\" ]; then\n# Remove obsolete scripts copied by previous egg versions - ONLY when they are\n# PotenFYR-signed runtime files. User files (e.g. synced from GIT_REPO_URL)\n# with the same names are never touched, so a panel Reinstall cannot wipe them.\nfor _f in \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\"; do\n    if [ -f \"${_f}\" ] && grep -q \"PotenFYR Studios\" \"${_f}\" 2>/dev/null; then\n        rm -f \"${_f}\" 2>/dev/null || true\n    fi\ndone\nunset _f\nif [ -d \"${SERVER_DIR}/scripts\" ]; then\n    _managed=1\n    for _sf in \"${SERVER_DIR}/scripts\"/* \"${SERVER_DIR}/scripts\"/.*; do\n        [ -e \"${_sf}\" ] || continue\n        case \"${_sf}\" in\n            */.|*/..) continue ;;\n            *.sh) grep -q \"PotenFYR Studios\" \"${_sf}\" 2>/dev/null || _managed=0 ;;\n            *) _managed=0 ;;\n        esac\n    done\n    if [ \"${_managed}\" = \"1\" ]; then\n        rm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n    else\n        echo \"[install] Keeping ./scripts - it contains non-runtime (user) files.\"\n    fi\n    unset _managed _sf\nfi\nfi\n\n# Extra downloads requested via the EXTRA_URLS startup variable (install time,\n# idempotent on reinstall). One entry per line, either \"dest/name|url\"\n# (relative to the server dir) or a plain URL (stored under bin/).\nif [ -n \"${EXTRA_URLS:-}\" ]; then\n    echo \"[install] Processing EXTRA_URLS...\"\n    printf '%s\\n' \"${EXTRA_URLS}\" | tr '\\r' '\\n' | while IFS= read -r _line; do\n        _line=$(printf '%s' \"${_line}\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')\n        [ -n \"${_line}\" ] || continue\n        case \"${_line}\" in \\#*) continue ;; esac\n        case \"${_line}\" in\n            *\\|*) _url=\"${_line#*|}\"; _dest=\"${_line%%|*}\" ;;\n            *)    _url=\"${_line}\"; _dest=\"bin/$(basename \"${_line}\")\" ;;\n        esac\n        case \"${_url}\" in\n            http://*|https://*) : ;;\n            *) echo \"[install] WARN: skipping non-http entry: $(printf '%s' \"${_url}\" | cut -c1-24)...\"; continue ;;\n        esac\n        if [ -z \"${_dest}\" ] || [ \"${_dest}\" = \"${_url}\" ]; then\n            echo \"[install] WARN: no destination for entry, skipping\"; continue\n        fi\n        _out=\"${SERVER_DIR}/${_dest}\"\n        _outdir=$(dirname \"${_out}\")\n        mkdir -p \"${_outdir}\" 2>/dev/null || true\n        if command -v curl >/dev/null 2>&1; then\n            curl -fsSL --retry 3 --max-time 300 -o \"${_out}\" \"${_url}\" \\\n                && echo \"[install] downloaded ${_dest}\" \\\n                || echo \"[install] WARN: download failed: ${_dest}\"\n        elif command -v wget >/dev/null 2>&1; then\n            wget -qO \"${_out}\" \"${_url}\" \\\n                && echo \"[install] downloaded ${_dest}\" \\\n                || echo \"[install] WARN: download failed: ${_dest}\"\n        else\n            echo \"[install] WARN: neither curl nor wget available for EXTRA_URLS\"\n        fi\n    done\nfi\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
-      "container": "debian:stable-slim",
-      "entrypoint": "bash"
-    }
-  },
-  "variables": [
-    {
-      "name": "Database Type",
-      "description": "Engine to run (installed isolated inside the container on demand).\nSQL: mariadb, mysql, postgresql, cockroachdb, yugabytedb, tidb, dolt\nNoSQL: mongodb, ferretdb, arangodb, orientdb, ravendb, cassandra, aerospike, rethinkdb\nIn-Memory: redis, valkey, keydb, dragonfly, memcached, etcd, nats, immudb\nVector/Search: meilisearch, typesense, qdrant, elasticsearch, opensearch, solr, manticoresearch, milvus, weaviate, quickwit\nTime-Series/Storage: influxdb, clickhouse, victoriametrics, questdb, seaweedfs, garage, minio, pocketbase\nGraph/Ledger: neo4j, dgraph, surrealdb | Misc: sqld, custom",
-      "env_variable": "DATABASE_TYPE",
-      "default_value": "mariadb",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:32",
-      "field_type": "text"
+    "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+    "meta": {
+        "version": "PTDL_v2",
+        "update_url": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json"
     },
-    {
-      "name": "Database Version",
-      "description": "Version to run. 'latest' auto-resolves upstream newest. Series like 18 or 11.4 resolve to the latest patch automatically; full versions (8.0.45) are used as-is. Switching majors never deletes old data - a fresh data/<engine>/<version> instance is created and the old one is preserved.",
-      "env_variable": "DB_VERSION",
-      "default_value": "latest",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:128",
-      "field_type": "text"
+    "exported_at": "2026-08-22T04:00:00+00:00",
+    "name": "Multi Database",
+    "author": "support@potenfyr.in",
+    "description": "One egg. Every database. Every version. Supports 55+ SQL, NoSQL, In-Memory, Vector, Time-Series, Search, Graph and Object-Storage engines. Versions install isolated inside the container on demand from startup variables ('latest' auto-resolves). Switching engine or major version never deletes previous data - instances are kept per version until you remove them manually.",
+    "features": [
+        "pid_limit"
+    ],
+    "docker_images": {
+        "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
     },
-    {
-      "name": "Strict Version Enforcement",
-      "description": "1 = refuse to start if the exact requested version cannot be provided (no silent downgrades). 0 = warn and fall back to best available binary.",
-      "env_variable": "STRICT_VERSION",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
+    "file_denylist": [],
+    "startup": "if [ -f /entrypoint.sh ]; then exec bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then exec bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then exec bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | exec bash; fi",
+    "config": {
+        "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
+        "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
+        "stop": "^C",
+        "logs": "{}"
     },
-    {
-      "name": "Database Name",
-      "description": "The default database/schema to create on startup.",
-      "env_variable": "DB_NAME",
-      "default_value": "database",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:64",
-      "field_type": "text"
+    "scripts": {
+        "installation": {
+            "script": "#!/bin/sh\n# PotenFYR Studios - Multi-Database Universal Installer\nif [ -d /mnt/server ]; then\n    cd /mnt/server || exit 1\nelif [ -d /home/container ]; then\n    cd /home/container || exit 1\nelse\n    cd \"$(pwd)\" || exit 1\nfi\nSERVER_DIR=\"$(pwd)\"\n\nmkdir -p \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\"\n\n# A .git directory means this volume is a SOURCE CHECKOUT, not a panel server\n# volume - never self-clean there (protects developer clones AND any repo the\n# user synced into the workspace that kept its history).\nif [ ! -d \"${SERVER_DIR}/.git\" ]; then\n# Remove obsolete scripts copied by previous egg versions - ONLY when they are\n# PotenFYR-signed runtime files. User files (e.g. synced from GIT_REPO_URL)\n# with the same names are never touched, so a panel Reinstall cannot wipe them.\nfor _f in \"${SERVER_DIR}/run.sh\" \"${SERVER_DIR}/entrypoint.sh\"; do\n    if [ -f \"${_f}\" ] && grep -q \"PotenFYR Studios\" \"${_f}\" 2>/dev/null; then\n        rm -f \"${_f}\" 2>/dev/null || true\n    fi\ndone\nunset _f\nif [ -d \"${SERVER_DIR}/scripts\" ]; then\n    _managed=1\n    for _sf in \"${SERVER_DIR}/scripts\"/* \"${SERVER_DIR}/scripts\"/.*; do\n        [ -e \"${_sf}\" ] || continue\n        case \"${_sf}\" in\n            */.|*/..) continue ;;\n            *.sh) grep -q \"PotenFYR Studios\" \"${_sf}\" 2>/dev/null || _managed=0 ;;\n            *) _managed=0 ;;\n        esac\n    done\n    if [ \"${_managed}\" = \"1\" ]; then\n        rm -rf \"${SERVER_DIR}/scripts\" 2>/dev/null || true\n    else\n        echo \"[install] Keeping ./scripts - it contains non-runtime (user) files.\"\n    fi\n    unset _managed _sf\nfi\nfi\n\n# Extra downloads requested via the EXTRA_URLS startup variable (install time,\n# idempotent on reinstall). One entry per line, either \"dest/name|url\"\n# (relative to the server dir) or a plain URL (stored under bin/).\nif [ -n \"${EXTRA_URLS:-}\" ]; then\n    echo \"[install] Processing EXTRA_URLS...\"\n    printf '%s\\n' \"${EXTRA_URLS}\" | tr '\\r' '\\n' | while IFS= read -r _line; do\n        _line=$(printf '%s' \"${_line}\" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')\n        [ -n \"${_line}\" ] || continue\n        case \"${_line}\" in \\#*) continue ;; esac\n        case \"${_line}\" in\n            *\\|*) _url=\"${_line#*|}\"; _dest=\"${_line%%|*}\" ;;\n            *)    _url=\"${_line}\"; _dest=\"bin/$(basename \"${_line}\")\" ;;\n        esac\n        case \"${_url}\" in\n            http://*|https://*) : ;;\n            *) echo \"[install] WARN: skipping non-http entry: $(printf '%s' \"${_url}\" | cut -c1-24)...\"; continue ;;\n        esac\n        if [ -z \"${_dest}\" ] || [ \"${_dest}\" = \"${_url}\" ]; then\n            echo \"[install] WARN: no destination for entry, skipping\"; continue\n        fi\n        _out=\"${SERVER_DIR}/${_dest}\"\n        _outdir=$(dirname \"${_out}\")\n        mkdir -p \"${_outdir}\" 2>/dev/null || true\n        if command -v curl >/dev/null 2>&1; then\n            curl -fsSL --retry 3 --max-time 300 -o \"${_out}\" \"${_url}\" \\\n                && echo \"[install] downloaded ${_dest}\" \\\n                || echo \"[install] WARN: download failed: ${_dest}\"\n        elif command -v wget >/dev/null 2>&1; then\n            wget -qO \"${_out}\" \"${_url}\" \\\n                && echo \"[install] downloaded ${_dest}\" \\\n                || echo \"[install] WARN: download failed: ${_dest}\"\n        else\n            echo \"[install] WARN: neither curl nor wget available for EXTRA_URLS\"\n        fi\n    done\nfi\n\nchown -R 988:988 \"${SERVER_DIR}\" 2>/dev/null || true\nchmod -R 755 \"${SERVER_DIR}/data\" \"${SERVER_DIR}/config\" \"${SERVER_DIR}/logs\" \"${SERVER_DIR}/bin\" 2>/dev/null || true\n\necho \"[install] Server environment prepared successfully.\"\n",
+            "container": "debian:stable-slim",
+            "entrypoint": "bash"
+        }
     },
-    {
-      "name": "Database Username",
-      "description": "Default application database user.",
-      "env_variable": "DB_USER",
-      "default_value": "dbuser",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|string|max:64",
-      "field_type": "text"
-    },
-    {
-      "name": "Database User Password",
-      "description": "Password for the application user. Leave as 'auto' to generate an ultra-strong 32+ char random cryptographic password.",
-      "env_variable": "DB_PASSWORD",
-      "default_value": "auto",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:128",
-      "field_type": "text"
-    },
-    {
-      "name": "Root / Admin / Master Password",
-      "description": "Password for Root, Superuser, Admin, or Master Key. Leave as 'auto' to auto-generate a secure random secret.",
-      "env_variable": "DB_ROOT_PASSWORD",
-      "default_value": "auto",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:128",
-      "field_type": "text"
-    },
-    {
-      "name": "Auto Generate Strong Secrets",
-      "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and update startup environment variables.",
-      "env_variable": "AUTO_GENERATE_CREDENTIALS",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Save Credentials to .env",
-      "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
-      "env_variable": "SAVE_TO_ENV",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Dynamic Performance Auto-Tuning",
-      "description": "1 = Automatically calculate buffer pools, cache sizes, memory limits, and I/O threads based on allocated container RAM and CPU cores.",
-      "env_variable": "PERFORMANCE_TUNING",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Production Security Hardening",
-      "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
-      "env_variable": "SECURITY_HARDENING",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Extra Daemon Arguments",
-      "description": "Additional custom CLI flags passed directly to the database daemon on startup.",
-      "env_variable": "EXTRA_ARGS",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:512",
-      "field_type": "text"
-    },
-    {
-      "name": "Extra Download URLs",
-      "description": "Extra files to download at install time (one per line, e.g. 'dest/name|url' or plain URL).",
-      "env_variable": "EXTRA_URLS",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:1024",
-      "field_type": "text"
-    },
-    {
-      "name": "Custom Startup Command",
-      "description": "Command to run when DATABASE_TYPE=custom.",
-      "env_variable": "CUSTOM_COMMAND",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:512",
-      "field_type": "text"
-    },
-    {
-      "name": "Smart Companion & Extra Runtimes",
-      "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
-      "env_variable": "EXTRA_RUNTIMES",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:256",
-      "field_type": "text"
-    },
-    {
-      "name": "Archive On Version Switch",
-      "description": "1 = when switching engine versions/upgrading, snapshot the previous data directory into ./archive/<engine>/ (compressed copy; originals are never deleted) so rollback is always possible. Credentials in .env are retained across switches either way. 0 = skip archiving.",
-      "env_variable": "ARCHIVE_ON_SWITCH",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Redis Overcommit Memory",
-      "description": "1 = attempt vm.overcommit_memory=1 on the host for safe Redis fork()/background saves (requires root; otherwise prints one guidance line). Set 0 to skip entirely.",
-      "env_variable": "REDIS_OVERCOMMIT_MEMORY",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Host Somaxconn",
-      "description": "Attempt net.core.somaxconn on the host for connection-heavy engines (0 = skip). Needs root; unprivileged runs print guidance only.",
-      "env_variable": "HOST_SOMAXCONN",
-      "default_value": "0",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|numeric|min:0,max:65535",
-      "field_type": "text"
-    },
-    {
-      "name": "Disable Transparent Huge Pages",
-      "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
-      "env_variable": "HOST_DISABLE_THP",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Git Repository URL",
-      "description": "https GitHub repository to sync into the server workspace on startup (e.g. https://github.com/owner/repo or owner/repo). Leave empty to disable. On the first boot the repo is cloned; on later boots new commits are detected, the previous code is archived into ./archive/git-sync/ and only repo-managed files are replaced. Database data (data/), credentials (.env), bin/, logs/, config/ are never touched.",
-      "env_variable": "GIT_REPO_URL",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:512",
-      "field_type": "text"
-    },
-    {
-      "name": "Git Branch",
-      "description": "Branch to track in the Git repository (empty = the repo's default branch).",
-      "env_variable": "GIT_BRANCH",
-      "default_value": "",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:128",
-      "field_type": "text"
-    },
-    {
-      "name": "Git Access Token",
-      "description": "Admin-only access token for PRIVATE repositories (classic PAT or fine-grained, read-only is enough). Never logged, never written to disk. Leave empty for public repos.",
-      "env_variable": "GIT_TOKEN",
-      "default_value": "",
-      "user_viewable": false,
-      "user_editable": false,
-      "rules": "nullable|string|max:256",
-      "field_type": "text"
-    },
-    {
-      "name": "Git Archive On Update",
-      "description": "1 = when new commits are detected, snapshot the previous synced code into ./archive/git-sync/ before updating (rollback always possible). 0 = replace without archiving.",
-      "env_variable": "GIT_ARCHIVE_ON_UPDATE",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Egg Update URL",
-      "description": "Check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed (raw GitHub egg JSON or run.sh URL).",
-      "env_variable": "EGG_UPDATE_URL",
-      "default_value": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:512",
-      "field_type": "text"
-    },
-    {
-      "name": "Auto Update Egg",
-      "description": "1 = check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed. 0 = disable the check entirely.",
-      "env_variable": "AUTO_UPDATE_EGG",
-      "default_value": "1",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "required|boolean",
-      "field_type": "text"
-    },
-    {
-      "name": "Panel Stop Watcher",
-      "description": "Watch console stdin for stop commands ('stop', '^C', 'exit', ...) delivered as text by TTY daemons (Feather Panel and other Wings-family stops). auto = on for all consoles; 0 = disable (keep stdin for the database); 1 = force on.",
-      "env_variable": "PANEL_STOP_WATCHER",
-      "default_value": "auto",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:16",
-      "field_type": "text"
-    },
-    {
-      "name": "Console Theme",
-      "description": "Console output style. 'db' = agent theme (</> database-eggs prefixes); 'classic' = the previous [PotenFYR] bracket style.",
-      "env_variable": "CLI_THEME",
-      "default_value": "db",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:16",
-      "field_type": "text"
-    },
-    {
-      "name": "Banner Gradient",
-      "description": "Boot banner color gradient: auto (random per boot), citrus, aurora, sunset, ocean, candy, spectrum, or none (flat).",
-      "env_variable": "CLI_BANNER_GRADIENT",
-      "default_value": "auto",
-      "user_viewable": true,
-      "user_editable": true,
-      "rules": "nullable|string|max:16",
-      "field_type": "text"
-    }
-  ]
+    "variables": [
+        {
+            "name": "Database Type",
+            "description": "Engine to run (installed isolated inside the container on demand).\nSQL: mariadb, mysql, postgresql, cockroachdb, yugabytedb, tidb, dolt\nNoSQL: mongodb (mongo), ferretdb, arangodb, orientdb, ravendb, cassandra, aerospike, rethinkdb\nIn-Memory/KV: redis, valkey, keydb, dragonfly, memcached, etcd, nats, immudb, consul\nVector/Search: meilisearch, typesense, qdrant, elasticsearch, opensearch, solr, manticoresearch, milvus, weaviate, quickwit\nTime-Series/Storage: influxdb, clickhouse, victoriametrics, prometheus, questdb, seaweedfs, garage, minio, pocketbase, loki, sqlite\nGraph/Ledger/Events: neo4j, dgraph, surrealdb, kafka | Misc: sqld, custom\nVersions: latest, stable, beta, alpha, nightly, snapshot, a major (18), a series (11.4),\nan exact version (8.0.45) or a direct https URL. Invalid/nonexistent pins are refused\nwith a 'Did you mean ...?' list of the closest published versions.",
+            "env_variable": "DATABASE_TYPE",
+            "default_value": "mariadb",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:32",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Version",
+            "description": "Version to run. 'latest' auto-resolves upstream newest. Series like 18 or 11.4 resolve to the latest patch automatically; full versions (8.0.45) are used as-is. Switching majors never deletes old data - a fresh data/<engine>/<version> instance is created and the old one is preserved.",
+            "env_variable": "DB_VERSION",
+            "default_value": "latest",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Strict Version Enforcement",
+            "description": "1 = refuse to start if the exact requested version cannot be provided (no silent downgrades). 0 = warn and fall back to best available binary.",
+            "env_variable": "STRICT_VERSION",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Name",
+            "description": "The default database/schema to create on startup.",
+            "env_variable": "DB_NAME",
+            "default_value": "database",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|string|max:64",
+            "field_type": "text"
+        },
+        {
+            "name": "Database Usernames",
+            "description": "Comma-separated database users to create/manage (no limit; e.g. 'alice,bob,carol'). Each user owns their private database '<user>_db' with full rights and also gets access to the shared database below. Adding or removing names applies on the next start: new users are created, removed users are deleted with their credentials (their database is preserved). Invalid/reserved names are skipped with a warning. Leave empty for the legacy single user 'dbuser'.",
+            "env_variable": "DB_USERNAMES",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:1024",
+            "field_type": "text"
+        },
+        {
+            "name": "Database User Passwords",
+            "description": "Comma-separated passwords positionally matched to Database Usernames (e.g. 'S3cretA,S3cretB'). An empty slot generates a fresh random password for that user. Passwords apply exactly once, at user creation: existing users' credentials are never changed by restarts or edits. Generated/stored passwords are recorded in .env and .db-users/credentials (mode 600).",
+            "env_variable": "DB_PASSWORDS",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:1024",
+            "field_type": "text"
+        },
+        {
+            "name": "Root / Admin / Master Password",
+            "description": "Password for Root, Superuser, Admin, or Master Key. Leave EMPTY (or 'auto') to auto-generate an ultra-strong random secret. If you set a password, it is used for the root account and rotates an existing root credential on the next start.",
+            "env_variable": "DB_ROOT_PASSWORD",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Generate Strong Secrets",
+            "description": "1 = Automatically generate cryptographically secure 32-character random passwords if fields are empty or 'auto', and update startup environment variables.",
+            "env_variable": "AUTO_GENERATE_CREDENTIALS",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Save Credentials to .env",
+            "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
+            "env_variable": "SAVE_TO_ENV",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Dynamic Performance Auto-Tuning",
+            "description": "1 = Automatically calculate buffer pools, cache sizes, memory limits, and I/O threads based on allocated container RAM and CPU cores.",
+            "env_variable": "PERFORMANCE_TUNING",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Production Security Hardening",
+            "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
+            "env_variable": "SECURITY_HARDENING",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Daemon Arguments",
+            "description": "Additional custom CLI flags passed directly to the database daemon on startup.",
+            "env_variable": "EXTRA_ARGS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Extra Download URLs",
+            "description": "Extra files to download at install time (one per line, e.g. 'dest/name|url' or plain URL).",
+            "env_variable": "EXTRA_URLS",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:1024",
+            "field_type": "text"
+        },
+        {
+            "name": "Custom Startup Command",
+            "description": "Command to run when DATABASE_TYPE=custom.",
+            "env_variable": "CUSTOM_COMMAND",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Smart Companion & Extra Runtimes",
+            "description": "Comma-separated companion tools to dynamically inject on-demand into .runtimes/ (e.g. python, uv, nodejs, bun, litestream, rclone, aws, psql, mongosh).",
+            "env_variable": "EXTRA_RUNTIMES",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:256",
+            "field_type": "text"
+        },
+        {
+            "name": "Archive On Version Switch",
+            "description": "1 = when switching engine versions/upgrading, snapshot the previous data directory into ./archive/<engine>/ (compressed copy; originals are never deleted) so rollback is always possible. Credentials in .env are retained across switches either way. 0 = skip archiving.",
+            "env_variable": "ARCHIVE_ON_SWITCH",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Redis Overcommit Memory",
+            "description": "1 = attempt vm.overcommit_memory=1 on the host for safe Redis fork()/background saves (requires root; otherwise prints one guidance line). Set 0 to skip entirely.",
+            "env_variable": "REDIS_OVERCOMMIT_MEMORY",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Host Somaxconn",
+            "description": "Attempt net.core.somaxconn on the host for connection-heavy engines (0 = skip). Needs root; unprivileged runs print guidance only.",
+            "env_variable": "HOST_SOMAXCONN",
+            "default_value": "0",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|numeric|min:0,max:65535",
+            "field_type": "text"
+        },
+        {
+            "name": "Disable Transparent Huge Pages",
+            "description": "1 = attempt THP=madvise on the host (reduces latency spikes for Redis/MongoDB). Needs root; unprivileged runs are silent no-ops.",
+            "env_variable": "HOST_DISABLE_THP",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Repository URL",
+            "description": "https GitHub repository to sync into the server workspace on startup (e.g. https://github.com/owner/repo or owner/repo). Leave empty to disable. On the first boot the repo is cloned; on later boots new commits are detected, the previous code is archived into ./archive/git-sync/ and only repo-managed files are replaced. Database data (data/), credentials (.env), bin/, logs/, config/ are never touched.",
+            "env_variable": "GIT_REPO_URL",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Branch",
+            "description": "Branch to track in the Git repository (empty = the repo's default branch).",
+            "env_variable": "GIT_BRANCH",
+            "default_value": "",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:128",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Access Token",
+            "description": "Admin-only access token for PRIVATE repositories (classic PAT or fine-grained, read-only is enough). Never logged, never written to disk. Leave empty for public repos.",
+            "env_variable": "GIT_TOKEN",
+            "default_value": "",
+            "user_viewable": false,
+            "user_editable": false,
+            "rules": "nullable|string|max:256",
+            "field_type": "text"
+        },
+        {
+            "name": "Git Archive On Update",
+            "description": "1 = when new commits are detected, snapshot the previous synced code into ./archive/git-sync/ before updating (rollback always possible). 0 = replace without archiving.",
+            "env_variable": "GIT_ARCHIVE_ON_UPDATE",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Egg Update URL",
+            "description": "Check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed (raw GitHub egg JSON or run.sh URL).",
+            "env_variable": "EGG_UPDATE_URL",
+            "default_value": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:512",
+            "field_type": "text"
+        },
+        {
+            "name": "Auto Update Egg",
+            "description": "1 = check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed. 0 = disable the check entirely.",
+            "env_variable": "AUTO_UPDATE_EGG",
+            "default_value": "1",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "required|boolean",
+            "field_type": "text"
+        },
+        {
+            "name": "Panel Stop Watcher",
+            "description": "Watch console stdin for stop commands ('stop', '^C', 'exit', ...) delivered as text by TTY daemons (Feather Panel and other Wings-family stops). auto = on for all consoles; 0 = disable (keep stdin for the database); 1 = force on.",
+            "env_variable": "PANEL_STOP_WATCHER",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:16",
+            "field_type": "text"
+        },
+        {
+            "name": "Console Theme",
+            "description": "Console output style. 'db' = agent theme (</> database-eggs prefixes); 'classic' = the previous [PotenFYR] bracket style.",
+            "env_variable": "CLI_THEME",
+            "default_value": "db",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:16",
+            "field_type": "text"
+        },
+        {
+            "name": "Banner Gradient",
+            "description": "Boot banner color gradient: auto (random per boot), citrus, aurora, sunset, ocean, candy, spectrum, or none (flat).",
+            "env_variable": "CLI_BANNER_GRADIENT",
+            "default_value": "auto",
+            "user_viewable": true,
+            "user_editable": true,
+            "rules": "nullable|string|max:16",
+            "field_type": "text"
+        }
+    ]
 }

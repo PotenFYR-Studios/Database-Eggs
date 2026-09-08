@@ -498,6 +498,61 @@ start_extra_engine() {
             daemon_pid=$!
             ;;
 
+        kafka)
+            local ka_base="${SERVER_DIR}/opt/kafka"
+            local ka_bin="${ka_base}/bin/kafka-server-start.sh"
+            if [ ! -x "${ka_bin}" ]; then
+                error "Kafka installation not found at ${ka_base}."
+                fail "Kafka is unavailable."
+            fi
+            # JVM: bundled Temurin runtime provisioned by the installer, else system
+            if [ -z "${JAVA_HOME:-}" ] && [ -x "${SERVER_DIR}/.runtimes/jdk17/bin/java" ]; then
+                export JAVA_HOME="${SERVER_DIR}/.runtimes/jdk17"
+                export PATH="${JAVA_HOME}/bin:${PATH}"
+            fi
+            if ! command -v java >/dev/null 2>&1; then
+                error "No JVM available for Kafka (Java provisioning failed)."
+                fail "Kafka requires Java."
+            fi
+            local ka_ctrl="${KAFKA_CONTROLLER_PORT:-$((SERVER_PORT + 1))}"
+            local ka_conf="${conf_dir}/kafka.properties"
+            mkdir -p "${data_dir}/kafka" "${SERVER_DIR}/logs/kafka"
+            cat <<EOF > "${ka_conf}"
+process.roles=broker,controller
+node.id=1
+controller.quorum.voters=1@127.0.0.1:${ka_ctrl}
+listeners=PLAINTEXT://0.0.0.0:${SERVER_PORT},CONTROLLER://127.0.0.1:${ka_ctrl}
+advertised.listeners=PLAINTEXT://${KAFKA_ADVERTISED_HOST:-${INTERNAL_IP:-127.0.0.1}}:${SERVER_PORT}
+controller.listener.names=CONTROLLER
+listener.security.protocol.map=CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+inter.broker.listener.name=PLAINTEXT
+log.dirs=${data_dir}/kafka
+num.partitions=${KAFKA_PARTITIONS:-1}
+default.replication.factor=1
+offsets.topic.replication.factor=1
+transaction.state.log.replication.factor=1
+transaction.state.log.min.isr=1
+log.retention.hours=${KAFKA_RETENTION_HOURS:-168}
+group.initial.rebalance.delay.ms=0
+EOF
+            # One-time KRaft storage format (idempotent across restarts)
+            if [ ! -f "${data_dir}/kafka/meta.properties" ]; then
+                local ka_uuid
+                ka_uuid=$("${ka_base}/bin/kafka-storage.sh" random-uuid 2>/dev/null)
+                [ -n "${ka_uuid}" ] || ka_uuid="$(head -c 16 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+                "${ka_base}/bin/kafka-storage.sh" format -t "${ka_uuid}" -c "${ka_conf}" --standalone >/dev/null 2>&1 \
+                    || "${ka_base}/bin/kafka-storage.sh" format -t "${ka_uuid}" -c "${ka_conf}" >/dev/null 2>&1 \
+                    || warn "Kafka storage format failed; broker may fail to start (check logs)."
+            fi
+            local heap_mb=$((SERVER_MEMORY > 1024 ? 1024 : SERVER_MEMORY / 2))
+            [ "${heap_mb}" -lt 256 ] && heap_mb=256
+            export KAFKA_HEAP_OPTS="${KAFKA_HEAP_OPTS:--Xmx${heap_mb}M -Xms256M}"
+            export LOG_DIR="${SERVER_DIR}/logs/kafka"
+            log "Starting Kafka (KRaft) on 0.0.0.0:${SERVER_PORT} (controller 127.0.0.1:${ka_ctrl}, heap ${heap_mb}MB)..."
+            "${ka_bin}" "${ka_conf}" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
+            ;;
+
         *)
             fail "Unknown extended engine: ${PROJECT_TYPE}"
             ;;

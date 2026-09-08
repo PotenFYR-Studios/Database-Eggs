@@ -3,9 +3,9 @@
 #  Supports Multi-Variant Dedicated Lean Builds & Universal Multi-Database Images:
 #  - RUNTIME_VARIANT=all          (Universal Multi-Database)
 #  - RUNTIME_VARIANT=mysql        (MariaDB / MySQL Server & Client)
-#  - RUNTIME_VARIANT=postgres     (PostgreSQL 16+ Server, Contrib & Client)
-#  - RUNTIME_VARIANT=mongodb      (MongoDB Community Server & Mongosh)
-#  - RUNTIME_VARIANT=redis        (Redis, Valkey, KeyDB, Dragonfly, Memcached)
+#  - RUNTIME_VARIANT=postgres     (Ubuntu PostgreSQL Server, Contrib & Client)
+#  - RUNTIME_VARIANT=mongodb      (Common base; MongoDB installed at runtime)
+#  - RUNTIME_VARIANT=redis        (Redis, Memcached; best-effort Valkey build)
 #  - RUNTIME_VARIANT=meilisearch  (Meilisearch Search Engine)
 #  - RUNTIME_VARIANT=clickhouse   (ClickHouse Analytical Server & Client)
 #  - RUNTIME_VARIANT=sqlite       (SQLite3 + Litestream Replication)
@@ -70,31 +70,35 @@ RUN apt-get update && \
     && rm -rf /var/lib/postgresql/*
 
 # Standalone Engine Binaries (Universal & Dedicated Variants)
-# Full multi-arch mapping matching the CI build matrix
-# (amd64, arm64, arm/v7, s390x, ppc64le, riscv64). Upstream standalone
-# binaries exist for amd64/arm64 only; other architectures rely on the
-# distro packages installed above and the runtime's per-arch installers.
+# Target mapping is not an engine compatibility guarantee. Standalone downloads
+# below are best-effort and upstream asset availability varies by engine/version.
+# Legacy Docker builders do not populate TARGETARCH; use the base image's dpkg
+# architecture in that case (never silently select amd64 on another CPU).
 RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
+    TARGETARCH="${TARGETARCH:-$(dpkg --print-architecture)}"; \
     case "${TARGETARCH}" in \
+        amd64) ;; \
         arm64) \
             arch_type="arm64"; arch_alt="aarch64"; arch_gnu="aarch64-unknown-linux-gnu"; \
             ;; \
-        arm) \
+        arm|armhf) \
             arch_type="arm"; arch_alt="armv7l"; arch_gnu="arm-unknown-linux-gnueabihf"; \
             ;; \
         s390x) \
             arch_type="s390x"; arch_alt="s390x"; arch_gnu="s390x-unknown-linux-gnu"; \
             ;; \
-        ppc64le) \
+        ppc64le|ppc64el) \
             arch_type="ppc64le"; arch_alt="ppc64le"; arch_gnu="powerpc64le-unknown-linux-gnu"; \
             ;; \
         riscv64) \
             arch_type="riscv64"; arch_alt="riscv64"; arch_gnu="riscv64-unknown-linux-gnu"; \
             ;; \
+        *) printf 'Unsupported build architecture: %s\n' "${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
+    meili_arch="${arch_type}"; [ "${arch_type}" != "arm64" ] || meili_arch="aarch64"; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "meilisearch" ]; then \
         for i in 1 2 3; do \
-            curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/meilisearch/meilisearch/releases/download/v1.53.1/meilisearch-linux-${arch_type}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
+            curl -fsSL -A "Mozilla/5.0 PotenFYR-Build" -o /usr/local/bin/meilisearch "https://github.com/meilisearch/meilisearch/releases/download/v1.53.1/meilisearch-linux-${meili_arch}" && [ -s /usr/local/bin/meilisearch ] && break || sleep 3; \
         done; \
         chmod +x /usr/local/bin/meilisearch 2>/dev/null || true; \
     fi; \
@@ -112,7 +116,8 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
     fi; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "redis" ]; then \
         if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
-            (apt-get update -qq && apt-get install -y -qq --no-install-recommends build-essential pkg-config \
+            apt-get update -qq && apt-get install -y -qq --no-install-recommends \
+                build-essential pkg-config libevent-dev \
                 && curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
                 && tar -xzf /tmp/valkey.tar.gz -C /tmp \
                 && make -C /tmp/valkey-8.1.3 MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1 \
@@ -124,8 +129,7 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
                 && make -C /tmp/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli >/dev/null 2>&1 \
                 && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
                 && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
-                && rm -rf /tmp/redis-stable*) || true; \
-            (apt-get purge -y --auto-remove build-essential pkg-config -qq 2>/dev/null || true); \
+                && rm -rf /tmp/redis-stable* || true; \
         fi; \
     fi; \
     chmod +x /usr/local/bin/* 2>/dev/null || true

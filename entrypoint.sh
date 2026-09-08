@@ -238,6 +238,11 @@ export PATH="/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/post
 # Source performance and helper scripts safely
 [ -f "${RUNTIME_DIR}/performance-tuning.sh" ] && source "${RUNTIME_DIR}/performance-tuning.sh" 2>/dev/null || true
 [ -f "${RUNTIME_DIR}/password-gen.sh" ] && source "${RUNTIME_DIR}/password-gen.sh" 2>/dev/null || true
+[ -f "${SERVER_DIR}/scripts/db-init-users.sh" ] && source "${SERVER_DIR}/scripts/db-init-users.sh" 2>/dev/null || true
+for _uf in "${RUNTIME_DIR}/db-init-users.sh" /usr/local/bin/db-init-users.sh; do
+    [ -f "${_uf}" ] && source "${_uf}" 2>/dev/null && break || true
+done
+unset _uf
 
 # Default Timezone
 TZ="${TZ:-UTC}"
@@ -292,6 +297,7 @@ apply_persisted() {
 for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT_PASSWORD \
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR ARCHIVE_ON_SWITCH \
             GIT_REPO_URL GIT_BRANCH GIT_TOKEN GIT_ARCHIVE_ON_UPDATE \
+            DB_USERNAMES DB_PASSWORDS \
             PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND \
             EGG_UPDATE_URL AUTO_UPDATE_EGG PANEL_STOP_WATCHER CLI_THEME CLI_BANNER_GRADIENT; do
     apply_persisted "${_key}"
@@ -495,18 +501,23 @@ if [ "${AUTO_GENERATE_CREDENTIALS}" = "1" ]; then
     if [ -z "${DB_PASSWORD:-}" ] || [ "${DB_PASSWORD}" = "auto" ] || [ "${DB_PASSWORD}" = "generate" ]; then
         DB_PASSWORD=$(gen_rand 32 urlsafe)
     fi
-    # Production floor: engines like Meilisearch reject master keys < 32 chars.
-    # Short user-supplied values are transparently upgraded to strong secrets.
-    if [ "${#DB_ROOT_PASSWORD}" -lt 32 ] 2>/dev/null; then
-        warn "DB_ROOT_PASSWORD shorter than 32 chars; upgrading to a cryptographically strong secret."
-        DB_ROOT_PASSWORD=$(gen_rand 32 urlsafe)
-    fi
-    if [ "${#DB_PASSWORD}" -lt 32 ] 2>/dev/null; then
-        warn "DB_PASSWORD shorter than 32 chars; upgrading to a cryptographically strong secret."
-        DB_PASSWORD=$(gen_rand 32 urlsafe)
-    fi
+    # Explicitly provided passwords are respected exactly as given (the user
+    # owns them; the multi-user engine applies them verbatim). Only empty or
+    # 'auto' values are generated, and the generator always emits 32+ chars.
 fi
 
+# --- Multi-User Account Plan (DB_USERNAMES / DB_PASSWORDS) --------------------
+# Parses the requested username list, validates it, resolves per-user
+# passwords (provided, or freshly generated for NEW users only - existing
+# users' credentials are never changed), and exports PF_USERS* for the
+# engine reconcilers, .env writer and boot card. Legacy installs with an
+# empty DB_USERNAMES keep the historical single-user behaviour untouched.
+if command -v pf_users_plan >/dev/null 2>&1; then
+    pf_users_plan "${DB_USERNAMES:-}" "${DB_PASSWORDS:-}" "${DB_USER:-dbuser}" "${DB_PASSWORD:-}" "${DB_ROOT_PASSWORD:-}"
+    # Primary user drives legacy consumers (CLI tools, db-cli, .env aliases).
+    DB_USER="${PF_USERS_PRIMARY}"
+    DB_PASSWORD="$(pf_users_primary_password)"
+fi
 DB_USER="${DB_USER:-dbuser}"
 DB_NAME="${DB_NAME:-database}"
 export DB_ROOT_PASSWORD DB_PASSWORD DB_USER DB_NAME
@@ -530,6 +541,10 @@ if [ "${SAVE_TO_ENV}" = "1" ] || [ "${SAVE_TO_ENV}" = "true" ] || [ "${SAVE_TO_E
         printf 'DB_PASSWORD="%s"\n' "${DB_PASSWORD}"
         printf 'DB_ROOT_PASSWORD="%s"\n' "${DB_ROOT_PASSWORD}"
         printf 'DB_VERSION=%s\n' "${DB_VERSION}"
+        if [ "${PF_USERS_MODE:-legacy}" = "multi" ]; then
+            printf 'DB_USERNAMES=%s\n' "${PF_USERS}"
+            printf 'DB_PASSWORDS="%s"\n' "$(pf_users_passwords_csv 2>/dev/null || true)"
+        fi
     } > "${ENV_FILE}" 2>/dev/null || true
     chmod 600 "${ENV_FILE}" 2>/dev/null || true
 fi
@@ -658,6 +673,16 @@ print_banner() {
 
 print_banner
 
+_pf_host="${PANEL_TYPE:-standalone}"
+if [ -n "${PANEL_NAME:-}" ] && [ "${PANEL_NAME}" != "${PANEL_TYPE}" ]; then _pf_host="${_pf_host} (${PANEL_NAME})"; fi
+# Users row: clamped list (e.g. "alice, bob (+3 more)").
+_pf_users_row="${PF_USERS:-}"
+if [ -n "${_pf_users_row}" ] && [ "${#_pf_users_row}" -gt 36 ]; then
+    _pf_first="$(printf '%s' "${_pf_users_row}" | cut -d, -f1)"
+    _pf_second="$(printf '%s' "${_pf_users_row}" | cut -d, -f2)"
+    _pf_count="$(printf '%s' "${_pf_users_row}" | awk -F, '{print NF}')"
+    _pf_users_row="${_pf_first}, ${_pf_second} (+$((_pf_count - 2)) more)"
+fi
 # Runtime Environment Card
 # Values are clamped (36 chars) so long paths/UUIDs can never smear the box.
 _card_val() { local v="${1:-}"; printf '%s' "${v:0:36}"; }
@@ -667,12 +692,21 @@ _pf_user_name="$(id -un 2>/dev/null || echo "uid$(id -u 2>/dev/null || echo '?')
 case "${AUTO_UPDATE_EGG:-1}" in 0|false|off) _pf_eggupd="Disabled" ;; *) _pf_eggupd="Enabled" ;; esac
 if [ -n "${GIT_REPO_URL:-}" ]; then
     _pf_gitsync="${GIT_REPO_URL##*/}"
-    [ -n "${GIT_BRANCH:-}" ] && _pf_gitsync="${_pf_gitsync} @ ${GIT_BRANCH}"
-    [ -n "${GIT_TOKEN:-}" ] && _pf_gitsync="${_pf_gitsync} (auth)"
+    if [ -n "${GIT_BRANCH:-}" ]; then _pf_gitsync="${_pf_gitsync} @ ${GIT_BRANCH}"; fi
+    if [ -n "${GIT_TOKEN:-}" ]; then _pf_gitsync="${_pf_gitsync} (auth)"; fi
 else
     _pf_gitsync="Not configured"
 fi
 case "${PERFORMANCE_TUNING:-1}" in 0|false|off) _pf_memtune="Off (manual limits)" ;; *) _pf_memtune="Auto (${SERVER_MEMORY:-1024} MB limit)" ;; esac
+_pf_host="${PANEL_TYPE:-standalone}"
+if [ -n "${PANEL_NAME:-}" ] && [ "${PANEL_NAME}" != "${PANEL_TYPE}" ]; then _pf_host="${_pf_host} (${PANEL_NAME})"; fi
+_pf_users_row="${PF_USERS:-}"
+if [ -n "${_pf_users_row}" ] && [ "${#_pf_users_row}" -gt 36 ]; then
+    _pf_first="$(printf '%s' "${_pf_users_row}" | cut -d, -f1)"
+    _pf_second="$(printf '%s' "${_pf_users_row}" | cut -d, -f2)"
+    _pf_count="$(printf '%s' "${_pf_users_row}" | awk -F, '{print NF}')"
+    _pf_users_row="${_pf_first}, ${_pf_second} (+$((_pf_count - 2)) more)"
+fi
 # Entry Point mirrors the exec resolution at the bottom of this script.
 if [ -f "${SERVER_DIR}/run.custom.sh" ]; then
     _pf_entry="./run.custom.sh"
@@ -687,7 +721,8 @@ printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_CYAN}%-3
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Allocated Memory" "$(_card_val "${SERVER_MEMORY:-1024} MB")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Memory Tuning" "$(_card_val "${_pf_memtune}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database / Schema" "$(_card_val "${DB_NAME:-default}")"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Host Platform" "$(_card_val "${PANEL_TYPE:-standalone}${PANEL_NAME:+$([ "${PANEL_NAME}" != "${PANEL_TYPE}" ] && printf ' (%s)' "${PANEL_NAME}")}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Users" "$(_card_val "${_pf_users_row:-legacy single user}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Host Platform" "$(_card_val "${_pf_host}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Server UUID" "$(_card_val "${_pf_uuid}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Security Mode" "$(_card_val "Strict Cryptographic / SCRAM / Auth")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Egg Self-Update" "$(_card_val "${_pf_eggupd}")"
@@ -698,7 +733,7 @@ printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Working Dir" "$(_card_val "${SERVER_DIR}")"
 printf "${C_LIME}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
 unset -f _card_val
-unset _pf_uuid _pf_user_name _pf_eggupd _pf_gitsync _pf_memtune _pf_entry
+unset _pf_uuid _pf_user_name _pf_eggupd _pf_gitsync _pf_memtune _pf_entry _pf_host _pf_users_row _pf_first _pf_second _pf_count
 
 log "Executing startup launcher..."
 

@@ -148,6 +148,9 @@ ensure_engine_binary() {
         clickhouse) bin_needed="clickhouse" ;;
         typesense) bin_needed="typesense-server" ;;
         victoriametrics) bin_needed="victoriametrics" ;;
+        prometheus) bin_needed="prometheus" ;;
+        consul) bin_needed="consul" ;;
+        loki) bin_needed="loki" ;;
         ferretdb) bin_needed="ferretdb" ;;
     esac
 
@@ -494,6 +497,11 @@ verify_running_version
 
 # --- Connection Summary Helper (Strictly Masked - No Cleartext Passwords in Logs)
 print_connection_guide() {
+    local _pf_users_count=1 _pf_user_note=""
+    if [ -n "${PF_USERS:-}" ] && [ "${PF_USERS_MODE:-legacy}" = "multi" ]; then
+        _pf_users_count="$(printf '%s' "${PF_USERS}" | awk -F, '{print NF}')"
+        [ "${_pf_users_count}" -gt 1 ] && _pf_user_note=" (primary)"
+    fi
     printf "\n"
     printf "${C_GREEN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_GREEN}${C_BOLD}✓  DATABASE READY - SECURE CONNECTION DETAILS${C_RESET}             ${C_GREEN}${C_BOLD}│${C_RESET}\n"
@@ -502,7 +510,8 @@ print_connection_guide() {
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Host (Internal)" "${INTERNAL_IP:-127.0.0.1}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Port" "${SERVER_PORT:-3306}"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Database" "${DB_NAME:-database}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}${_pf_user_note:-}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Total Users" "${_pf_users_count:-1} (see .db-users/credentials)"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "•••••••••••• [Protected]"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "•••••••••••• [Protected]"
     printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Credentials" "$([ -f "${SERVER_DIR}/.env" ] && echo "Saved in .env & Startup Environment" || echo "Active in Startup Environment")"
@@ -832,7 +841,7 @@ case "${PROJECT_TYPE}" in
         print_connection_guide
         start_redis_family
         ;;
-    mongodb|ferretdb)
+    mongodb|mongo|ferretdb)
         init_mongo_family
         print_connection_guide
         start_mongo_family
@@ -842,7 +851,7 @@ case "${PROJECT_TYPE}" in
         print_connection_guide
         start_surreal_family
         ;;
-    cockroachdb|cockroach|tidb|dolt|sqld|libsql|etcd|nats|immudb|dgraph|arangodb|orientdb|ravendb|cassandra|aerospike|yugabytedb|yugabyte)
+    cockroachdb|cockroach|tidb|dolt|sqld|libsql|etcd|nats|immudb|dgraph|arangodb|orientdb|ravendb|cassandra|aerospike|yugabytedb|yugabyte|kafka)
         init_extra_engine
         print_connection_guide
         start_extra_engine
@@ -852,7 +861,7 @@ case "${PROJECT_TYPE}" in
         print_connection_guide
         start_search_family
         ;;
-    pocketbase|minio|influxdb|clickhouse|victoriametrics|couchdb|neo4j|questdb|seaweedfs|weed|garage)
+    pocketbase|minio|influxdb|clickhouse|victoriametrics|couchdb|neo4j|questdb|seaweedfs|weed|garage|prometheus|consul|loki|sqlite)
         init_storage_family
         print_connection_guide
         start_storage_family
