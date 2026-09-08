@@ -952,6 +952,10 @@ install_postgresql() {
     if [ -n "${want_major}" ] && [ -x "/usr/lib/postgresql/${want_major}/bin/postgres" ]; then
         log "PostgreSQL ${want_major} present in system paths."
         echo "/usr/lib/postgresql/${want_major}/bin" > "${INSTALL_DIR}/.versions/postgresql-path"
+        local b
+        for b in "/usr/lib/postgresql/${want_major}/bin/"*; do
+            [ -f "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/$(basename "${b}")" 2>/dev/null || true
+        done
         return 0
     fi
 
@@ -987,6 +991,16 @@ install_postgresql() {
         # provisioned before bundling was introduced (uuid-ossp needs
         # libossp-uuid.so.16 at CREATE EXTENSION time).
         bundle_pg_runtime_libs "${dest}/lib-extra"
+        local b
+        for b in "${dest}/bin/"*; do
+            [ -f "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/$(basename "${b}")" 2>/dev/null || true
+        done
+        mkdir -p "${INSTALL_DIR}/lib-extra" 2>/dev/null || true
+        if [ -d "${dest}/lib-extra" ]; then
+            for b in "${dest}/lib-extra/"*; do
+                [ -e "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/lib-extra/$(basename "${b}")" 2>/dev/null || true
+            done
+        fi
         return 0
     fi
 
@@ -1036,6 +1050,16 @@ install_postgresql() {
     fi
     LD_LIBRARY_PATH="${dest}/lib-extra:${LD_LIBRARY_PATH:-}" \
         "${dest}/bin/postgres" --version >/dev/null 2>&1 || fail "Installed PostgreSQL binary failed self-check."
+    local b
+    for b in "${dest}/bin/"*; do
+        [ -f "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/$(basename "${b}")" 2>/dev/null || true
+    done
+    mkdir -p "${INSTALL_DIR}/lib-extra" 2>/dev/null || true
+    if [ -d "${dest}/lib-extra" ]; then
+        for b in "${dest}/lib-extra/"*; do
+            [ -e "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/lib-extra/$(basename "${b}")" 2>/dev/null || true
+        done
+    fi
     return 0
 }
 

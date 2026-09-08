@@ -129,9 +129,14 @@ init_postgres() {
     # Bundled runtime libs (libxml2/icu/libossp-uuid) must be visible to the
     # server AND every backend that loads contrib extensions (uuid-ossp).
     local _pg_home=""
-    _pg_home="$(dirname "$(dirname "${initdb_bin}")" 2>/dev/null || true)"
+    local _real_initdb
+    _real_initdb=$(readlink -f "${initdb_bin}" 2>/dev/null || echo "${initdb_bin}")
+    _pg_home="$(dirname "$(dirname "${_real_initdb}")" 2>/dev/null || true)"
     if [ -d "${_pg_home}/lib-extra" ]; then
         export LD_LIBRARY_PATH="${_pg_home}/lib-extra:${LD_LIBRARY_PATH:-}"
+    fi
+    if [ -d "${_pg_home}/lib" ]; then
+        export LD_LIBRARY_PATH="${_pg_home}/lib:${LD_LIBRARY_PATH:-}"
     fi
 
     local first_run=0
@@ -440,7 +445,10 @@ start_postgres() {
 
     # Standalone installs may bundle extra libs (gnu builds) - prefer them
     local pg_home
-    pg_home="$(dirname "$(dirname "${pg_bin}")")"
+    local real_pg_bin
+    real_pg_bin=$(readlink -f "${pg_bin}" 2>/dev/null || echo "${pg_bin}")
+    pg_home="$(dirname "$(dirname "${real_pg_bin}")")"
+    [ -d "${pg_home}/lib-extra" ] && export LD_LIBRARY_PATH="${pg_home}/lib-extra:${LD_LIBRARY_PATH:-}"
     [ -d "${pg_home}/lib" ] && export LD_LIBRARY_PATH="${pg_home}/lib:${LD_LIBRARY_PATH:-}"
 
     log "Starting PostgreSQL ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT} (Shared Buffers: ${TUNED_PG_SHARED_BUFFERS:-auto})..."

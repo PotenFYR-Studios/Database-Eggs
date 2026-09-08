@@ -141,9 +141,13 @@ load_companions() {
             psql|postgresql-client)
                 if ! command -v psql >/dev/null 2>&1 && [ ! -x "${target_bin}/psql" ]; then
                     log "Injecting PostgreSQL client tools..."
-                    if [ -f /usr/lib/postgresql/16/bin/psql ]; then
-                        ln -sf /usr/lib/postgresql/16/bin/psql "${target_bin}/psql" 2>/dev/null || true
-                    fi
+                    local psql_cand
+                    for psql_cand in $(ls -1d /usr/lib/postgresql/*/bin/psql 2>/dev/null | sort -V -r); do
+                        if [ -x "${psql_cand}" ]; then
+                            ln -sf "${psql_cand}" "${target_bin}/psql" 2>/dev/null || true
+                            break
+                        fi
+                    done
                 fi
                 export PATH="${target_bin}:${PATH}"
                 ;;
