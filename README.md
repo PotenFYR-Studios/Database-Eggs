@@ -1,6 +1,6 @@
 # Database Eggs
 
-One egg. Every database. Every version. Every panel. Installs, auto-tunes, secures, and runs **55+ database engines** at **any upstream version** with everything isolated inside your container. Cryptographically strong secrets, performance auto-tuning, automatic panel detection, deep crash diagnostics, non-destructive version switching, and compatibility across **Pterodactyl, Pelican, Feather, Wisp, Convoy, Cytopanel, Jexactyl, PufferPanel, AMP**, Kubernetes/OpenShift, and native Docker.
+One egg with a shared database runtime. The dispatcher contains **46 database/cache/search/storage entries plus 5 ancillary services**, excluding aliases and `custom`. These are implemented code paths, **not 51 verified engines or a promise of every upstream version**. Installation and startup depend on the engine, version, CPU architecture, available upstream artifacts, and container libraries. The runtime includes credential generation, tuning, panel detection, diagnostics, and version switching for panel-managed containers and native Docker.
 
 [![GitHub License](https://img.shields.io/github/license/PotenFYR-Studios/Database-Eggs?style=for-the-badge&color=blue)](LICENSE)
 [![Docker Image](https://img.shields.io/badge/Docker-GHCR-blue?style=for-the-badge&logo=docker)](https://github.com/PotenFYR-Studios/Database-Eggs/pkgs/container/database-eggs)
@@ -44,10 +44,10 @@ One egg. Every database. Every version. Every panel. Installs, auto-tunes, secur
 
 ## What Is This?
 
-A single egg plus a single container image that runs **any** of 55+ database engines at **any** released version:
+A single egg plus a shared container image with engine-specific installation and startup handlers:
 
 - You set two variables: `DATABASE_TYPE` and `DB_VERSION`.
-- On boot, the runtime downloads exactly that engine/version **into your own server folder** (nothing touches the host), configures tuned settings, provisions users/databases with strong random passwords, and starts it.
+- On boot, the runtime attempts to obtain that engine/version **inside your container/server volume**, then runs the engine-specific initialization and startup handler. Provisioning and tuning coverage vary by engine.
 - Change either variable anytime: old data is never deleted; new instances are created alongside and the console tells you where everything lives.
 
 No per-database eggs. No image rebuilds for new versions. No root required.
@@ -84,14 +84,28 @@ Credentials appear in the console (masked), in `.env` (mode 600), and in startup
 | Category | Values for `DATABASE_TYPE` |
 | :--- | :--- |
 | SQL | `mariadb` `mysql` `postgresql` `cockroachdb` `yugabytedb` `tidb` `dolt` |
-| Document | `mongodb` `ferretdb` `arangodb` `orientdb` `ravendb` `couchdb` |
-| In-Memory/KV | `redis` `valkey` `keydb` `dragonfly` `memcached` `etcd` `nats` `immudb` |
+| Document/Backend | `mongodb` `ferretdb` `arangodb` `orientdb` `ravendb` `couchdb` `pocketbase` |
+| In-Memory/KV | `redis` `valkey` `keydb` `dragonfly` `memcached` `etcd` `immudb` |
 | Vector/Search | `meilisearch` `typesense` `qdrant` `elasticsearch` `opensearch` `solr` `manticoresearch` `milvus` `weaviate` `quickwit` |
 | Time-Series | `influxdb` `clickhouse` `victoriametrics` `questdb` |
 | Object Storage | `minio` `seaweedfs` `garage` |
 | Graph/Ledger | `neo4j` `dgraph` `surrealdb` |
 | Wide-Column/Misc | `cassandra` `aerospike` `rethinkdb` `sqld` `sqlite` |
+| Ancillary services (not counted as database entries) | `nats` `kafka` `prometheus` `consul` `loki` |
 | Anything else | `custom` |
+
+### Coverage, not certification
+
+Static audit of `run.sh`, `scripts/install-db-version.sh`, and the `db-init-*.sh` handlers:
+
+- **51 distinct named dispatch targets**: 46 database/cache/search/storage entries and 5 ancillary services. Storage systems, caches, search engines, the PocketBase backend, and the FerretDB compatibility layer are included in the broader catalog; they are not all independent database servers.
+- All named targets route to initialization/startup code. A handler existing does not prove its configuration or provisioning works for every release.
+- **49 targets have explicit installer branches** (44 of the 46 catalog entries, plus the 5 services). Several branches are best-effort downloads rather than validated installations.
+- **SQLite** uses the image's distro `sqlite3` package; there is no version-specific SQLite installer or network database daemon. **CouchDB** has a startup handler but neither a dedicated version installer nor a baked package in this Dockerfile: supply a compatible installation yourself.
+- Aliases `postgres`, `mongo`, `cockroach`, `yugabyte`, `manticore`, `weed`, and `libsql` do not add engines. `custom` and companion tools such as Litestream do not add engines either.
+- `RUNTIME_VARIANT=all` is a shared base, not every catalog binary preinstalled. Apt supplies MariaDB, PostgreSQL, Redis, Memcached, and SQLite; other build-time downloads are best-effort. MongoDB and most extended targets are provisioned at runtime. The `mysql` image variant bakes MariaDB, not Oracle MySQL; the `postgres` variant uses Ubuntu's PostgreSQL package, not a guaranteed 16+ release.
+
+The version examples below describe intended requests, not a tested release matrix. In particular, Milvus may lack a standalone upstream artifact, and several extended installers still use architecture-specific or fallback asset patterns. Validate your exact engine/version/platform combination before production use.
 
 <details>
 <summary><strong>Full Engine Matrix (ports + highlights)</strong></summary>
@@ -110,10 +124,12 @@ Credentials appear in the console (masked), in `.env` (mode 600), and in startup
 | ArangoDB | `arangodb` | `latest`, `3.12` | 8529 | Multi-model + AQL |
 | OrientDB | `orientdb` | `latest` | 2424 | Graph/document (JRE injected) |
 | RavenDB | `ravendb` | `latest` | 8080 | ACID documents |
+| CouchDB | `couchdb` | externally supplied | 5984 | Startup handler only; no built-in installer |
 | Redis | `redis` | `6.2`-`7.4` | 6379 | RDB+AOF, io-threads |
-| Valkey | `valkey` | `latest` | 6379 | Baked binary, instant start |
+| Valkey | `valkey` | `latest` | 6379 | Best-effort baked source build or runtime install |
 | KeyDB | `keydb` | `latest` | 6379 | Multithreaded (source build) |
 | Dragonfly | `dragonfly` | `latest` | 6379 | Modern ultra-fast |
+| Memcached | `memcached` | distro/runtime-dependent | 11211 | In-memory cache |
 | Etcd | `etcd` | `latest`, `3.5` | 2379 | v3 API single-node |
 | NATS | `nats` | `latest` | 4222 | JetStream included |
 | Immudb | `immudb` | `latest` | 3322 | Tamper-proof ledger |
@@ -141,7 +157,12 @@ Credentials appear in the console (masked), in `.env` (mode 600), and in startup
 | Aerospike | `aerospike` | `latest`, `7.x` | 3000 | Real-time NoSQL |
 | RethinkDB | `rethinkdb` | `latest` | 28015 | Changefeeds |
 | libSQL | `sqld` | `latest` | 8080 | Server-side SQLite |
+| SQLite | `sqlite` | distro package | none | Embedded file database; optional Litestream |
 | PocketBase | `pocketbase` | `latest` | 8090 | Backend + admin UI |
+| Kafka | `kafka` | `latest` | 9092 | Ancillary event-streaming service |
+| Prometheus | `prometheus` | `latest` | 9090 | Ancillary monitoring service |
+| Consul | `consul` | `latest` | 8500 | Ancillary service discovery |
+| Loki | `loki` | `latest` | 3100 | Ancillary log service |
 | Custom | `custom` | any URL | any | Bring your own |
 
 </details>
@@ -161,7 +182,7 @@ Credentials appear in the console (masked), in `.env` (mode 600), and in startup
 | `v2.1.0` | Tag form accepted |
 | `https://...` | Direct download URL (Custom Engines) |
 
-Invalid values are rejected immediately with usage guidance. The server never boots "something close".
+These are request forms, not a guarantee that an upstream artifact exists. Resolution and verification coverage differ by engine; unavailable builds, ABI mismatches, or missing dependencies can prevent startup. Do not assume a successful image build proves a requested database version works.
 
 ### Strict Version Contract
 
@@ -269,18 +290,22 @@ Set `PERFORMANCE_TUNING=0` to manage configs yourself (files under `config/` are
 
 ## Architecture & OS Support
 
-| Host arch | Status |
-| :--- | :--- |
-| amd64 (x86_64) | Full: every engine, every version |
-| arm64 (aarch64) | Full: native builds wherever upstream ships them |
-| arm/v7 (armhf) | Broad: PG standalone builds; others fall back to system engines with clear notice |
-| s390x (IBM Z) | Broad: MongoDB official builds + fallback elsewhere |
-| ppc64le (Power) | Broad: MinIO/VictoriaMetrics + fallback |
-| riscv64 | Emerging: source-built and Java-based engines compile on demand |
+The Dockerfile uses **Ubuntu 22.04 (glibc)**. A live `docker manifest inspect ubuntu:22.04` audit found all six Linux platforms below (attestation entries marked `unknown/unknown` are not platforms). A base-image manifest is **not** evidence that every package, upstream binary, full runtime image, or database release works on that platform.
 
-- Multi-arch manifest: plain `docker pull` selects the right variant.
-- Engines without upstream builds for an arch print one honest warning and serve the container-provided engine (strict contract preserved wherever real builds exist).
-- OS: any Linux base works. libc family (glibc vs musl) is auto-detected; musl hosts receive musl-linked builds (e.g. standalone PostgreSQL), glibc-only tarballs gracefully use system packages on Alpine-style hosts.
+| Image platform | Base manifest | Verification in this audit |
+| :--- | :--- | :--- |
+| `linux/amd64` | Present | Native Ubuntu container execution and targeted Dockerfile architecture-stage build passed; no full universal build |
+| `linux/arm64` | Present (`v8`) | Mapping and Meilisearch `aarch64` asset name checked; no native/emulated execution |
+| `linux/arm/v7` | Present | Shell mapping checked only; package/engine execution unverified |
+| `linux/s390x` | Present | Shell mapping checked only; package/engine execution unverified |
+| `linux/ppc64le` | Present | Shell mapping checked only; package/engine execution unverified |
+| `linux/riscv64` | Present | Shell mapping checked only; package/engine execution unverified |
+
+- The audit host had amd64 Docker but no Buildx. Foreign-architecture builds/runs were unavailable in this audit; no privileged emulation was installed. Supplying `TARGETARCH=arm64` to a native shell test checks string selection, **not** ARM execution.
+- CI requests these six platforms. Successful CI publication and the resulting GHCR manifest must be checked separately; the workflow matrix alone is not proof of a published multi-arch image. `docker pull` selects a matching platform only when that image tag actually publishes one.
+- Standalone downloads in the Dockerfile mostly tolerate failure. A successful build can therefore omit optional binaries, even on amd64. Runtime installers also have engine-specific gaps; there is no universal source-build or compatible-system-binary fallback.
+- Keep `STRICT_VERSION=1` when an exact release matters, and verify the actual binary/version and readiness. Disabling strict checking does not make an incompatible architecture or ABI usable.
+- Host distribution does not change the container's libc: Ubuntu containers on Alpine hosts still use Ubuntu/glibc userspace. Replacing the base with Alpine/musl or another distribution is not a verified build path. Java-based engines still need a compatible JRE and sometimes native libraries.
 
 ---
 
@@ -374,13 +399,13 @@ CI workflows: `docker-image.yml` (multi-arch build + publish + stale-version cle
 ## Repository Layout
 
 ```text
-egg-database-multi.json      The universal egg (single egg, 55+ engines)
+egg-database-multi.json      Shared egg (see audited coverage above)
 Dockerfile                   Multi-arch universal image
 entrypoint.sh                Panel detection, secrets, crash safety bootstrap
 run.sh                       Dispatcher: version contract + data instances
 scripts/
 ├── lib-diagnostics.sh       Central logging/traces/crash library
-├── install-db-version.sh    55+ engine installer + latest resolver
+├── install-db-version.sh    Engine-specific installers + version resolver
 ├── db-init-postgres.sh      PostgreSQL handler
 ├── db-init-mariadb.sh       MariaDB/MySQL handler
 ├── db-init-redis.sh         In-memory family

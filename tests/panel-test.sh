@@ -147,14 +147,15 @@ docker run --rm -v "$VOL:/home/container" "$IMG" bash -c 'grep -q "notarealengin
     && ok "failure recorded in .logs/launcher-errors.log" || bad "failure not journalled"
 
 # ------------------------------------------- T8: VERSION-CONTRACT RESILIENCE
-echo "== T8: pinned version that cannot be provisioned degrades loudly, never silently =="
-v_out=$( (sleep 20; echo stop) | docker run -i --rm \
-    -e DATABASE_TYPE=redis -e DB_VERSION=9.9.9 -e SERVER_PORT=16384 \
-    -e DB_PASSWORD=TestPassword123!Secure -e DB_ROOT_PASSWORD=RootPassword123!Secure \
-    -e AUTO_UPDATE_EGG=0 "$IMG" 2>&1 )
-echo "$v_out" | grep -q "system-fallback\|could not be provisioned" \
-    && ok "system fallback substitution announced" || bad "silent version substitution"
-echo "$v_out" | grep -q "Ready to accept connections" && ok "server still boots under fallback" || bad "fallback broke boot"
+echo "== T8: explicit offline fallback and readiness-gated console stop =="
+# Upstream release availability belongs to installer tests, not lifecycle tests.
+# Send stop after readiness instead of racing startup downloads with a sleep.
+if IMAGE_NAME="$IMG" bash tests/test-panel-version.sh; then
+    ok "explicit fallback announced and authenticated client served"
+    ok "readiness-gated console stop completed cleanly"
+else
+    bad "offline fallback / console-stop regression"
+fi
 
 # ------------------------------------------------- T9: FEATHER PANEL DETECTION
 echo "== T9: Feather Panel detection (P_SERVER_UUID + P_SERVER_UUID_SHORT) =="

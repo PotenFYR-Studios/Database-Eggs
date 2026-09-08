@@ -286,6 +286,125 @@ EOF
             "${garage_bin}" -c "${garage_conf}" server ${EXTRA_ARGS:-} < /dev/null &
             daemon_pid=$!
             ;;
+        prometheus)
+            local pm_bin="${SERVER_DIR}/bin/prometheus"
+            [ -x "${pm_bin}" ] || pm_bin="$(command -v prometheus 2>/dev/null || true)"
+            if [ -z "${pm_bin}" ] || [ ! -x "${pm_bin}" ]; then
+                error "Prometheus binary not found in container PATH or bin/ directory."
+                fail "Prometheus is unavailable."
+            fi
+            mkdir -p "${data_dir}"
+            if [ ! -f "${conf_dir}/prometheus.yml" ]; then
+                log "Generating Prometheus configuration..."
+                cat <<EOF > "${conf_dir}/prometheus.yml"
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ['127.0.0.1:${SERVER_PORT}']
+EOF
+            fi
+            log "Starting Prometheus TSDB on 0.0.0.0:${SERVER_PORT}..."
+            "${pm_bin}" --config.file="${conf_dir}/prometheus.yml" \
+                --storage.tsdb.path="${data_dir}" \
+                --storage.tsdb.retention.time="${PROMETHEUS_RETENTION:-15d}" \
+                --web.listen-address="0.0.0.0:${SERVER_PORT}" \
+                --web.enable-lifecycle ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
+            ;;
+        consul)
+            local cs_bin="${SERVER_DIR}/bin/consul"
+            [ -x "${cs_bin}" ] || cs_bin="$(command -v consul 2>/dev/null || true)"
+            if [ -z "${cs_bin}" ] || [ ! -x "${cs_bin}" ]; then
+                error "Consul binary not found in container PATH or bin/ directory."
+                fail "Consul is unavailable."
+            fi
+            mkdir -p "${data_dir}"
+            log "Starting Consul KV server (HTTP/API on 0.0.0.0:${SERVER_PORT})..."
+            "${cs_bin}" agent -server -bootstrap-expect=1 -ui \
+                -data-dir="${data_dir}" \
+                -client=0.0.0.0 \
+                -http-port="${SERVER_PORT}" \
+                -advertise=127.0.0.1 \
+                ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
+            ;;
+        loki)
+            local lk_bin="${SERVER_DIR}/bin/loki"
+            [ -x "${lk_bin}" ] || lk_bin="$(command -v loki 2>/dev/null || true)"
+            if [ -z "${lk_bin}" ] || [ ! -x "${lk_bin}" ]; then
+                error "Loki binary not found in container PATH or bin/ directory."
+                fail "Loki is unavailable."
+            fi
+            mkdir -p "${data_dir}/chunks" "${data_dir}/rules"
+            if [ ! -f "${conf_dir}/loki.yml" ]; then
+                log "Generating Loki configuration..."
+                cat <<EOF > "${conf_dir}/loki.yml"
+auth_enabled: false
+server:
+  http_listen_address: 0.0.0.0
+  http_listen_port: ${SERVER_PORT}
+  grpc_listen_port: ${LOKI_GRPC_PORT:-$((SERVER_PORT + 1))}
+common:
+  path_prefix: ${data_dir}
+  storage:
+    filesystem:
+      chunks_directory: ${data_dir}/chunks
+      rules_directory: ${data_dir}/rules
+  replication_factor: 1
+  ring:
+    kvstore: inmemory
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: tsdb
+      object_store: filesystem
+      schema: v13
+      index:
+        prefix: index_
+        period: 24h
+EOF
+            fi
+            log "Starting Loki (log database) on 0.0.0.0:${SERVER_PORT}..."
+            "${lk_bin}" -config.file="${conf_dir}/loki.yml" ${EXTRA_ARGS:-} < /dev/null &
+            daemon_pid=$!
+            ;;
+        sqlite)
+            # SQLite is embedded: no network daemon. Bootstrap the database
+            # file, then optionally supervise Litestream replication; with no
+            # replica target the container stays open so the panel console can
+            # drive `sqlite3` directly against the workspace database.
+            local db_file="${data_dir}/${DB_NAME:-database}.db"
+            if [ ! -f "${db_file}" ]; then
+                if command -v sqlite3 >/dev/null 2>&1; then
+                    sqlite3 "${db_file}" "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;" </dev/null 2>/dev/null || true
+                else
+                    touch "${db_file}"
+                fi
+                ok "Initialized SQLite database ${db_file}"
+            fi
+            local ls_bin=""
+            [ -x "${SERVER_DIR}/bin/litestream" ] && ls_bin="${SERVER_DIR}/bin/litestream"
+            [ -z "${ls_bin}" ] && ls_bin="$(command -v litestream 2>/dev/null || true)"
+            if [ -n "${ls_bin}" ] && [ -n "${LITESTREAM_REPLICA_URL:-}" ]; then
+                cat <<EOF > "${conf_dir}/litestream.yml"
+dbs:
+  - path: ${db_file}
+    replicas:
+      - url: ${LITESTREAM_REPLICA_URL}
+EOF
+                log "Starting Litestream replication of ${db_file} ..."
+                "${ls_bin}" replicate -config "${conf_dir}/litestream.yml" ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
+            else
+                [ -z "${LITESTREAM_REPLICA_URL:-}" ] && log "Tip: set LITESTREAM_REPLICA_URL (e.g. s3://bucket/db) to enable continuous replication."
+                log "SQLite is embedded (no daemon) - holding container open for 'sqlite3 ${db_file}' console use."
+                sleep infinity < /dev/null &
+                daemon_pid=$!
+            fi
+            ;;
         *)
             fail "Unknown storage/analytical engine: ${PROJECT_TYPE}"
             ;;

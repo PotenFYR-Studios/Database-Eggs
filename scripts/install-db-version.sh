@@ -74,9 +74,12 @@ case "${ARCH}" in
     s390x)
         ARCH_TYPE="s390x"; ARCH_ALT="s390x"; ARCH_DEB="s390x"
         ARCH_GNU="s390x-unknown-linux-gnu"; ARCH_MUSL="s390x-unknown-linux-musl" ;;
-    ppc64le|ppc64)
+    ppc64le)
         ARCH_TYPE="ppc64le"; ARCH_ALT="ppc64le"; ARCH_DEB="ppc64el"
         ARCH_GNU="powerpc64le-unknown-linux-gnu"; ARCH_MUSL="powerpc64le-unknown-linux-musl" ;;
+    ppc64)
+        ARCH_TYPE="ppc64"; ARCH_ALT="ppc64"; ARCH_DEB="ppc64"
+        ARCH_GNU="powerpc64-unknown-linux-gnu"; ARCH_MUSL="powerpc64-unknown-linux-musl" ;;
     riscv64)
         ARCH_TYPE="riscv64"; ARCH_ALT="riscv64"; ARCH_DEB="riscv64"
         ARCH_GNU="riscv64-unknown-linux-gnu"; ARCH_MUSL="riscv64-unknown-linux-musl" ;;
@@ -84,11 +87,11 @@ case "${ARCH}" in
         ARCH_TYPE="386"; ARCH_ALT="i686"; ARCH_DEB="i386"
         ARCH_GNU="i686-unknown-linux-gnu"; ARCH_MUSL="i686-unknown-linux-musl" ;;
     *)
-        # Unknown future architectures: fall back to closest common naming,
-        # every installer probes URLs before trusting them anyway.
-        warn "Unrecognized architecture '${ARCH}'; assuming 64-bit little-endian."
-        ARCH_TYPE="amd64"; ARCH_ALT="x86_64"; ARCH_DEB="amd64"
-        ARCH_GNU="x86_64-unknown-linux-gnu"; ARCH_MUSL="x86_64-unknown-linux-musl" ;;
+        # A successful URL probe does not prove CPU compatibility. Preserve
+        # the native name so capability gates cannot select amd64 by mistake.
+        warn "Unrecognized architecture '${ARCH}'; no binary compatibility assumed."
+        ARCH_TYPE="${ARCH}"; ARCH_ALT="${ARCH}"; ARCH_DEB="${ARCH}"
+        ARCH_GNU="${ARCH}-unknown-linux-gnu"; ARCH_MUSL="${ARCH}-unknown-linux-musl" ;;
 esac
 
 # Which engines publish binaries for THIS architecture? Prevents pointless
@@ -106,6 +109,10 @@ engine_supports_arch() {
         clickhouse:amd64|clickhouse:arm64)                      return 0 ;;
         influxdb:amd64|influxdb:arm64|influxdb:arm)             return 0 ;;
         victoriametrics:amd64|victoriametrics:arm64|\
+        prometheus:amd64|prometheus:arm64|prometheus:arm|\
+        consul:amd64|consul:arm64|consul:arm|\
+        loki:amd64|loki:arm64|loki:arm|\
+        kafka:amd64|kafka:arm64|kafka:arm|kafka:s390x|kafka:ppc64le) return 0 ;;
         victoriametrics:arm|victoriametrics:ppc64le|\
         victoriametrics:386)                                    return 0 ;;
         pocketbase:amd64|pocketbase:arm64)                      return 0 ;;
@@ -118,7 +125,7 @@ engine_supports_arch() {
         dolt:amd64|dolt:arm64)                                  return 0 ;;
         *)
             case "${e}" in
-                etcd|nats|immudb|dgraph|seaweedfs|weaviate|quickwit|milvus|libsql|sqld|garage|manticoresearch|manticore|yugabytedb|yugabyte|arangodb|ravendb|orientdb|elasticsearch|opensearch|solr|cassandra|aerospike|questdb|neo4j|rethinkdb|keydb|valkey|redis|memcached|custom)
+                etcd|nats|immudb|dgraph|seaweedfs|weaviate|quickwit|milvus|libsql|sqld|garage|manticoresearch|manticore|yugabytedb|yugabyte|arangodb|ravendb|orientdb|elasticsearch|opensearch|solr|cassandra|aerospike|questdb|neo4j|rethinkdb|keydb|valkey|redis|memcached|sqlite|custom)
                     # Source-built, Java-based, tarball-distributed or
                     # deb-extracted engines: attempt regardless of arch.
                     return 0 ;;
@@ -150,6 +157,8 @@ no_arch_build_fallback() {
 fallback_to_system() {
     local reason="$1"
     warn "${reason}"
+    # Wrong-but-close: point the user at versions that DO exist upstream.
+    pf_suggest_versions "${VERSION}"
     warn "Falling back to the container-provided ${ENGINE}. Your pinned version '${VERSION}' could not be provisioned in this environment."
     warn "To serve the exact version: run on a base image with build tools, grant root, or choose DB_VERSION=latest."
     printf '%s\n' "${RESOLVED}" > "${stamp_dir}/${ENGINE}-system-fallback" 2>/dev/null || true
@@ -208,7 +217,8 @@ gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
             fi)
     else
         tag=$(fetch "https://api.github.com/repos/${1}/releases/latest" - 2>/dev/null | _json_tags)
-        [ -z "${tag}" ] && tag=$(fetch "https://api.github.com/repos/${1}/releases?per_page=5" - 2>/dev/null | _json_tags)
+        # The release list can start with a prerelease. If the stable API
+        # fails, use its stable-only web redirect below, never the list head.
     fi
     if [ -z "${tag}" ] && [ "${pre}" != "1" ]; then
         # Rate-limit / API outage fallback: scrape the releases/latest HTTP
@@ -227,18 +237,213 @@ gh_latest_tag() { # gh_latest_tag <owner/repo> [include_prereleases]
 }
 
 # Validate user-supplied version input; reject injection/garbage early with
-# actionable guidance. Accepts: latest|stable|beta|alpha|nightly|edge|default,
-# x / x.y / x.y.z, optional v prefix, or full https URLs.
+# actionable guidance. Accepts: latest|stable|beta|alpha|nightly|snapshot|edge|
+# default, x / x.y / x.y.z, optional v prefix, or full https URLs.
 validate_version_input() {
     local v="${VERSION}"
     case "${v}" in
-        ""|latest|stable|beta|alpha|nightly|edge|dev|default) return 0 ;;
+        ""|latest|stable|beta|alpha|nightly|snapshot|edge|dev|default) return 0 ;;
         https://*|http://*) return 0 ;;
         v[0-9]*|[0-9]*) [[ "${v#[v]}" =~ ^[0-9]+(\.[0-9]+){0,3}([-._]?[A-Za-z0-9]+)*$ ]] && return 0 ;;
     esac
+    # Wrong-but-close: before rejecting, surface published versions that look
+    # like what the user typed (e.g. '11.6' -> '11.4 / 11.8' for MariaDB).
+    pf_suggest_versions "${v}"
     fail "Invalid DB_VERSION '${v}'. Valid forms: latest | stable | beta | alpha |
-  nightly | a major (18), series (11.4), exact version (8.0.45, v2.1.0),
-  or a direct download URL."
+  nightly | snapshot | a major (18), series (11.4), exact version (8.0.45,
+  v2.1.0), or a direct download URL."
+}
+
+# -----------------------------------------------------------------------------
+# Closest-version suggestion engine
+# Failure-path helper: when a requested version is invalid, nonexistent, or
+# unprovisionable, gather the engine's genuinely published versions (cached,
+# at most one endoflife.date + one GitHub call) and surface the closest
+# matches so a wrong-but-close pin can be corrected in one look. Best-effort
+# only: silent when upstream lookups fail, never fatal, never on the happy path.
+# -----------------------------------------------------------------------------
+pf_eol_product() { # pf_eol_product <engine> -> endoflife.date product id ("" if none)
+    case "$1" in
+        postgresql|postgres)   echo "postgresql" ;;
+        mariadb)               echo "mariadb" ;;
+        mysql)                 echo "mysql" ;;
+        mongodb|mongo)         echo "mongodb" ;;
+        redis)                 echo "redis" ;;
+        valkey)                echo "valkey" ;;
+        memcached)             echo "memcached" ;;
+        cassandra)             echo "cassandra" ;;
+        clickhouse)            echo "clickhouse" ;;
+        cockroachdb|cockroach) echo "cockroachdb" ;;
+        neo4j)                 echo "neo4j" ;;
+        influxdb)              echo "influxdb" ;;
+        elasticsearch)         echo "elasticsearch" ;;
+        opensearch)            echo "opensearch" ;;
+        solr)                  echo "solr" ;;
+        couchdb)               echo "couchdb" ;;
+        tidb)                  echo "tidb" ;;
+        aerospike)             echo "aerospike" ;;
+        *)                     echo "" ;;
+    esac
+}
+
+pf_suggest_repo() { # pf_suggest_repo <engine> -> GitHub repo whose release tags enumerate versions
+    case "$1" in
+        dragonfly)                 echo "dragonflydb/dragonfly" ;;
+        keydb)                     echo "EQ-Alpha/KeyDB" ;;
+        ferretdb)                  echo "FerretDB/FerretDB" ;;
+        yugabytedb|yugabyte)       echo "yugabyte/yugabyte-db" ;;
+        tidb)                      echo "pingcap/tidb" ;;
+        dolt)                      echo "dolthub/dolt" ;;
+        etcd)                      echo "etcd-io/etcd" ;;
+        nats)                      echo "nats-io/nats-server" ;;
+        immudb)                    echo "codenotary/immudb" ;;
+        arangodb)                  echo "arangodb/arangodb" ;;
+        orientdb)                  echo "orientechnologies/orientdb" ;;
+        ravendb)                   echo "ravendb/ravendb" ;;
+        dgraph)                    echo "dgraph-io/dgraph" ;;
+        victoriametrics)           echo "VictoriaMetrics/VictoriaMetrics" ;;
+        prometheus)                echo "prometheus/prometheus" ;;
+        loki)                      echo "grafana/loki" ;;
+        manticoresearch|manticore) echo "manticoresoftware/manticoresearch" ;;
+        milvus)                    echo "milvus-io/milvus" ;;
+        weaviate)                  echo "weaviate-io/weaviate" ;;
+        quickwit)                  echo "quickwit-oss/quickwit" ;;
+        questdb)                   echo "questdb/questdb" ;;
+        seaweedfs|weed)            echo "seaweedfs/seaweedfs" ;;
+        garage)                    echo "dxflrs/garage" ;;
+        libsql|sqld)               echo "tursodatabase/libsql" ;;
+        surrealdb)                 echo "surrealdb/surrealdb" ;;
+        pocketbase)                echo "pocketbase/pocketbase" ;;
+        meilisearch)               echo "getmeili/meilisearch" ;;
+        qdrant)                    echo "qdrant/qdrant" ;;
+        typesense)                 echo "typesense/typesense" ;;
+        rethinkdb)                 echo "rethinkdb/rethinkdb" ;;
+        mongodb|mongo)             echo "mongodb/mongodb" ;;
+        redis)                     echo "redis/redis" ;;
+        valkey)                    echo "valkey-io/valkey" ;;
+        mariadb)                   echo "MariaDB/server" ;;
+        *)                         echo "" ;;
+    esac
+}
+
+# Reduce an arbitrary tag ("mariadb-11.8.1", "v2.1.0", "7.2.4-alpine") to its
+# leading numeric version core. Empty output when the string carries no digits.
+_pf_numeric_core() {
+    printf '%s' "$1" | sed -E 's/^[^0-9]*//; s/[^0-9.].*$//; s/\.\.*/./g; s/^\.//; s/\.$//'
+}
+
+_pf_ver_triple() { # -> "major minor patch" ("x x x" when there is no numeric core)
+    local core
+    core=$(_pf_numeric_core "$1")
+    [ -z "${core}" ] && { printf 'x x x'; return; }
+    local IFS='.'
+    # shellcheck disable=SC2086
+    set -- ${core} 0 0 0
+    printf '%s %s %s' "$1" "$2" "$3"
+}
+
+pf_ver_score() { # pf_ver_score <requested> <candidate> -> distance (lower = closer)
+    local r1 r2 r3 c1 c2 c3 d
+    read -r r1 r2 r3 <<< "$(_pf_ver_triple "$1")"
+    read -r c1 c2 c3 <<< "$(_pf_ver_triple "$2")"
+    if [ "${r1}" = "x" ] || [ "${c1}" = "x" ]; then printf '9999'; return; fi
+    if [ "${r1}" != "${c1}" ]; then
+        d=$(( r1 > c1 ? r1 - c1 : c1 - r1 ))
+        printf '%s' $(( 200 + d * 10 ))
+        return
+    fi
+    if [ "${r2}" != "${c2}" ]; then
+        d=$(( r2 > c2 ? r2 - c2 : c2 - r2 ))
+        printf '%s' $(( 20 + d ))
+        return
+    fi
+    d=$(( r3 > c3 ? r3 - c3 : c3 - r3 ))
+    [ "${d}" -gt 30 ] && d=30
+    printf '%s' "${d}"
+}
+
+pf_version_catalog() { # print known published versions for ${ENGINE}, one per line
+    local product repo cf tags
+    product=$(pf_eol_product "${ENGINE}")
+    if [ -n "${product}" ]; then
+        cf="/tmp/.eofl-cache-${product}.json"
+        [ -s "${cf}" ] || fetch "https://endoflife.date/api/${product}.json" "${cf}" >/dev/null 2>&1 || true
+        if [ -s "${cf}" ]; then
+            grep -oE '"cycle"[[:space:]]*:[[:space:]]*"[^"]*"' "${cf}" 2>/dev/null | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/' | head -20
+            grep -oE '"latest"[[:space:]]*:[[:space:]]*"[^"]*"' "${cf}" 2>/dev/null | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/'
+        fi
+    fi
+    repo=$(pf_suggest_repo "${ENGINE}")
+    if [ -n "${repo}" ]; then
+        local key="ghtags-${repo//\//-}"
+        tags=$(pf_cache_get "${key}" 21600 2>/dev/null || true)
+        if [ -z "${tags}" ]; then
+            tags=$(fetch "https://api.github.com/repos/${repo}/releases?per_page=40" - 2>/dev/null | _json_list_tags 2>/dev/null | head -40 | tr '\n' ' ')
+            [ -n "${tags}" ] && pf_cache_put "${key}" "${tags}"
+        fi
+        # shellcheck disable=SC2086  # space-separated tag list, split on purpose
+        [ -n "${tags}" ] && printf '%s\n' ${tags}
+    fi
+}
+
+pf_suggest_versions() { # pf_suggest_versions <requested>  (prints 'did you mean' warnings)
+    local req="${1:-}"
+    [ -n "${req}" ] || return 0
+    case "${req}" in latest|stable|beta|alpha|nightly|snapshot|edge|dev|default|https://*|http://*) return 0 ;; esac
+    [ -n "$(_pf_numeric_core "${req#[vV]}")" ] || return 0
+    have curl || have wget || return 0
+    # One suggestion block per boot: resolve-time and failure-site hooks share it
+    [ -n "${_PF_SUGG_SHOWN:-}" ] && return 0
+
+    local all
+    all=$(pf_version_catalog 2>/dev/null) || return 0
+    [ -n "${all}" ] || return 0
+
+    local cand scored=()
+    local -A seen=()
+    while IFS= read -r cand; do
+        [ -n "${cand}" ] || continue
+        # Score numeric cores, but never turn a published prerelease tag into
+        # a stable version that may not exist. Only suggest accepted pin forms.
+        [[ "${cand}" =~ ^v?[0-9]+(\.[0-9]+){0,3}([-._]?[A-Za-z0-9]+)*$ ]] || continue
+        [ -n "${seen[${cand}]:-}" ] && continue
+        seen["${cand}"]=1
+        scored+=("$(pf_ver_score "${req}" "${cand}") ${cand}")
+    done <<< "${all}"
+    [ "${#scored[@]}" -gt 0 ] || return 0
+
+    local picks
+    picks=$(printf '%s\n' "${scored[@]}" | sort -n | head -n 3 | awk 'NF==2 {print $2}' | paste -sd, -)
+    [ -n "${picks}" ] || return 0
+    _PF_SUGG_SHOWN=1
+    warn "Did you mean: ${picks} ?"
+    warn "These are nearby ${ENGINE} versions found in upstream metadata; availability for this platform is not guaranteed."
+    warn "Hint: set DB_VERSION to one of those, or 'latest' to always track the newest release."
+}
+
+# Early sanity probe at resolve time: a pinned MAJOR that no published release
+# ever had (redis 9.x, postgres 19 today) is almost certainly a typo - say so
+# immediately. Minor/patch-level misses are deliberately NOT flagged here:
+# obsolete-but-real series keep booting, and their suggestions surface at the
+# actual provisioning failure sites instead.
+pf_warn_unpublished_major() { # pf_warn_unpublished_major <req>
+    local req="${1:-}" major="" line core matched=0
+    case "${req}" in ""|latest|stable|beta|alpha|nightly|snapshot|edge|dev|default|https://*|http://*) return 0 ;; esac
+    [[ "${req}" =~ ^[0-9]+(\.[0-9]+){0,3}$ ]] || return 0
+    major="${req%%.*}"
+    have curl || have wget || return 0
+    local all
+    all=$(pf_version_catalog 2>/dev/null) || return 0
+    [ -n "${all}" ] || return 0
+    while IFS= read -r line; do
+        [ -n "${line}" ] || continue
+        core=$(_pf_numeric_core "${line#[vV]}")
+        case "${core}" in "${major}"|"${major}".*) matched=1; break ;; esac
+    done <<< "${all}"
+    [ "${matched}" = "1" ] && return 0
+    warn "Major '${major}' was not found in the available ${ENGINE} version metadata; '${req}' may be obsolete or unavailable."
+    pf_suggest_versions "${req}"
+    return 0
 }
 
 ARCH=$(uname -m)
@@ -257,15 +462,31 @@ IS_ROOT=0
 fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
     local url="$1" out="$2"
     local UA="PotenFYR-Installer/1.0 (+https://github.com/PotenFYR-Studios/Database-Eggs)"
+    # One wall-clock budget includes retries AND the fallback client. wget's
+    # --timeout is idle-only; curl's --max-time applies anew to each retry.
+    local budget="${PF_DOWNLOAD_TIMEOUT:-300}" remaining deadline result=1
+    [[ "$budget" =~ ^[1-9][0-9]*$ ]] || { warn 'PF_DOWNLOAD_TIMEOUT must be positive seconds'; return 1; }
+    command -v timeout >/dev/null 2>&1 || { warn 'Downloads require timeout for a bounded transfer'; return 1; }
+    deadline=$((SECONDS + budget))
+    local tmp_out
     if [ "${out}" = "-" ]; then
-        curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 1800 "${url}" 2>/dev/null \
-            || wget -qO- --tries=3 --timeout=20 -U "${UA}" "${url}" 2>/dev/null
-        return
+        tmp_out=$(mktemp) || return 1
+    else
+        tmp_out="${out}.dl.$$"
     fi
-    local tmp_out="${out}.dl.$$"
     rm -f "${tmp_out}"
-    if curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time 3600 -o "${tmp_out}" "${url}" 2>/dev/null \
-       || wget -qO "${tmp_out}" --tries=3 --timeout=20 "${url}" 2>/dev/null; then
+    timeout -k 1 "${budget}" curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time "${budget}" -o "${tmp_out}" "${url}" 2>/dev/null && result=0
+    remaining=$((deadline - SECONDS))
+    if [ "$result" != 0 ] && [ "$remaining" -gt 0 ]; then
+        timeout -k 1 "${remaining}" wget -qO "${tmp_out}" --tries=3 --timeout=20 -U "${UA}" "${url}" 2>/dev/null && result=0
+    fi
+    if [ "$result" = 0 ]; then
+        if [ "${out}" = "-" ]; then
+            cat "${tmp_out}"
+            result=$?
+            rm -f "${tmp_out}"
+            return "$result"
+        fi
         if [ -s "${tmp_out}" ]; then
             mv -f "${tmp_out}" "${out}"
             return 0
@@ -316,7 +537,7 @@ eofl_resolve() { # eofl_resolve <product> <prefix>
     local v=""
     if have jq; then
         if [ -n "${prefix}" ]; then
-            v=$(jq -r --arg p "${prefix}" '[.[] | select(.cycle | startswith($p))][0].latest // empty' "${cache_file}" 2>/dev/null)
+            v=$(jq -r --arg p "${prefix}" '[.[] | select(.cycle == $p or (.cycle | startswith($p + ".")))][0].latest // empty' "${cache_file}" 2>/dev/null)
         else
             v=$(jq -r '.[0].latest // empty' "${cache_file}" 2>/dev/null)
         fi
@@ -328,7 +549,7 @@ eofl_resolve() { # eofl_resolve <product> <prefix>
         | awk -F'\t' -v p="${prefix}" '
             NF<2 {next}
             p=="" && !done {print $2; done=1; exit}
-            index($1, p)==1 {print $2; exit}')
+            $1==p || index($1, p ".")==1 {print $2; exit}')
     fi
     [ -n "${v}" ] && pf_cache_put "${key}" "${v}"
     printf '%s' "${v}"
@@ -552,9 +773,9 @@ resolve_version() {
     local req="${VERSION:-latest}"
     req=$(echo "${req}" | tr '[:upper:]' '[:lower:]')
 
-    # Release channels: stable == latest stable; beta/alpha/nightly resolve to
-    # the newest prerelease when available, else fall back to stable.
-    if [ "${req}" = "beta" ] || [ "${req}" = "alpha" ] || [ "${req}" = "nightly" ] || [ "${req}" = "edge" ] || [ "${req}" = "dev" ]; then
+    # Release channels: stable == latest stable; beta/alpha/nightly/snapshot
+    # resolve to the newest prerelease when available, else fall back to stable.
+    if [ "${req}" = "beta" ] || [ "${req}" = "alpha" ] || [ "${req}" = "nightly" ] || [ "${req}" = "snapshot" ] || [ "${req}" = "edge" ] || [ "${req}" = "dev" ]; then
         local pre_tag=""
         case "${ENGINE}" in
             postgresql)                pre_tag=$(gh_latest_tag "theseus-rs/postgresql-binaries" 1) ;;
@@ -628,6 +849,12 @@ resolve_version() {
             libsql|sqld)               v=$(gh_latest_tag "tursodatabase/libsql"); v=${v#v} ;;
             surrealdb)                 v=$(gh_latest_tag "surrealdb/surrealdb") ;;
             pocketbase)                v=$(gh_latest_tag "pocketbase/pocketbase"); v=${v#v} ;;
+            minio)
+                # GitHub source releases need not have public binaries. Resolve
+                # only the release advertised by this architecture's CDN checksum.
+                v=$(fetch "https://dl.min.io/server/minio/release/linux-${ARCH_TYPE}/minio.sha256sum" - | \
+                    sed -nE 's/^[[:xdigit:]]{64}[[:space:]]+\*?minio\.(RELEASE\.[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}-[0-9]{2}-[0-9]{2}Z)[[:space:]]*$/\1/p' | head -n1)
+                ;;
             meilisearch)               v=$(gh_latest_tag "getmeili/meilisearch") ;;
             qdrant)                    v=$(gh_latest_tag "qdrant/qdrant") ;;
             typesense)                 v=$(gh_latest_tag "typesense/typesense"); v=${v#v} ;;
@@ -668,9 +895,17 @@ resolve_version() {
     fi
 
     RESOLVED="${req}"
+    pf_warn_unpublished_major "${req}"
     return 0
 }
 resolve_version
+
+# Resolution-only mode (tests / users checking a pin): resolve and report the
+# concrete version without downloading anything.
+if [ "${PF_RESOLVE_ONLY:-0}" = "1" ]; then
+    printf '%s\n' "${RESOLVED}"
+    exit 0
+fi
 
 if [ "${PF_INSTALLER_DEBUG:-0}" = "1" ]; then
     set -x
@@ -786,6 +1021,7 @@ install_postgresql() {
             apt-get update -qq 2>/dev/null || true
             apt-get install -y -qq "postgresql-${want_major}" "postgresql-client-${want_major}" 2>/dev/null && return 0
         fi
+        pf_suggest_versions "${RESOLVED}"
         fail "PostgreSQL ${RESOLVED} installation failed (download + fallback exhausted)."
     fi
     verify_checksum "${tmp_tar}" "${url}.sha256" || { rm -f "${tmp_tar}"; fail "Checksum mismatch for PostgreSQL archive."; }
@@ -855,7 +1091,7 @@ install_mariadb() {
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
-        || { rm -f "${tmp_tar}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
+        || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
     RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
     log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"
@@ -930,8 +1166,8 @@ install_mysql() {
     local hit
     if ! hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}"); then
         rm -f "${tmp_tar}"
+        pf_suggest_versions "${RESOLVED}"
         # Oracle's CDN (Akamai) hard-blocks some datacenter/CI egress ranges.
-        # Opt-in escape hatch: serve the container-provided MySQL-compatible
         # daemon instead, loudly. Never silent; contract resumes when the CDN
         # is reachable again.
         if [ "${CDN_FALLBACK_SYSTEM:-0}" = "1" ] && { command -v mysqld >/dev/null 2>&1 || command -v mariadbd >/dev/null 2>&1; }; then
@@ -1287,7 +1523,16 @@ ensure_mongosh() {
     have mongosh && return 0
     [ -x "${INSTALL_DIR}/mongosh" ] && return 0
     log "Fetching mongosh companion (provisioning shell)..."
-    local url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${ARCH_ALT}.tgz"
+    # Asset naming changed across majors (2.3.x zips are gone; current
+    # releases ship linux-<arch>-openssl3 / -openssl11 tgz variants), so
+    # resolve the newest matching asset from the GitHub release feed.
+    local os_arch="x64"
+    [ "${ARCH_ALT}" = "aarch64" ] && os_arch="arm64"
+    local url=""
+    url=$(fetch "https://api.github.com/repos/mongodb-js/mongosh/releases?per_page=5" - 2>/dev/null         | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-'${os_arch}'-openssl3\.tgz"'         | head -n1 | sed -E 's/.*"([^"]*)"$//')
+    [ -z "${url}" ] && url=$(fetch "https://api.github.com/repos/mongodb-js/mongosh/releases?per_page=5" - 2>/dev/null         | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-'${os_arch}'-openssl11\.tgz"'         | head -n1 | sed -E 's/.*"([^"]*)"$//')
+    # Legacy direct URL as a final fallback for cached mirrors.
+    [ -z "${url}" ] && url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${ARCH_ALT}.tgz"
     local tmp_tar; tmp_tar=$(mktemp)
     if fetch "${url}" "${tmp_tar}"; then
         local ext="${INSTALL_DIR}/.msh.$$"
@@ -1355,7 +1600,7 @@ install_mongodb() {
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
-        || { rm -f "${tmp_tar}"; fail "No downloadable MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE}."; }
+        || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE}."; }
     RESOLVED="$(basename "${hit}" | sed -E 's/.*-([0-9]+\.[0-9]+\.[0-9]+)\.tgz$/\1/')"
     log "Downloading MongoDB ${RESOLVED} succeeded."
     local ext="${INSTALL_DIR}/.mgx.$$"
@@ -1611,13 +1856,15 @@ case "${ENGINE}" in
     meilisearch)
         ensure_single_binary_version "meilisearch"
         # Repo canonicalized to meilisearch/meilisearch; assets renamed to
-        # linux-amd64/linux-aarch64/linux-riscv64 (ARCH_TYPE matches exactly).
+        # linux-amd64/linux-aarch64/linux-riscv64 (arm64 uses aarch64).
         TAG="${RESOLVED}"
         { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "meilisearch/meilisearch")
         [ -z "${TAG}" ] && TAG="v1.53.1"
         [[ "${TAG}" != v* ]] && TAG="v${TAG}"
         if [ ! -x "${INSTALL_DIR}/meilisearch" ]; then
-            URL="https://github.com/meilisearch/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_TYPE}"
+            MEILI_ARCH="${ARCH_TYPE}"
+            [ "${MEILI_ARCH}" != arm64 ] || MEILI_ARCH=aarch64
+            URL="https://github.com/meilisearch/meilisearch/releases/download/${TAG}/meilisearch-linux-${MEILI_ARCH}"
             probe_url "${URL}" || URL="https://github.com/getmeili/meilisearch/releases/download/${TAG}/meilisearch-linux-${ARCH_ALT}"
             if fetch "${URL}" "${INSTALL_DIR}/meilisearch"; then
                 seal_binary "${INSTALL_DIR}/meilisearch" \
@@ -1701,6 +1948,62 @@ case "${ENGINE}" in
         fi
         ;;
 
+    prometheus)
+        TAG="${RESOLVED}"; [[ "${TAG}" != v* ]] && TAG="v${TAG}"
+        { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "prometheus/prometheus")
+        PV="${TAG#v}"
+        gh_release_install "prometheus/prometheus" "prometheus-${PV}\.linux-${ARCH_ALT}\.tar\.gz" "prometheus" "prometheus" "${PV}" \
+            || warn "Prometheus download failed."
+        ;;
+
+    consul)
+        CV="${RESOLVED#v}"
+        if [ -z "${CV}" ] || [ "${CV}" = "latest" ]; then
+            # releases.hashicorp.com index: newest directory wins (no API quota)
+            CV=$(fetch "https://releases.hashicorp.com/consul/" - 2>/dev/null | grep -oE 'consul_[0-9]+\.[0-9]+\.[0-9]+/' | sort -V | tail -n1)
+            CV="${CV#consul_}"; CV="${CV%/}"
+            [ -z "${CV}" ] && CV="1.20.1"
+        fi
+        if [ ! -x "${INSTALL_DIR}/consul" ]; then
+            URL="https://releases.hashicorp.com/consul/${CV}/consul_${CV}_linux_${ARCH_ALT}.zip"
+            tmp_zip=$(mktemp)
+            if fetch "${URL}" "${tmp_zip}" && unzip -q -o "${tmp_zip}" consul -d "${INSTALL_DIR}/"; then
+                chmod +x "${INSTALL_DIR}/consul"
+                ok "Consul ${CV} installed."
+            else warn "Consul ${CV} download failed."; fi
+            rm -f "${tmp_zip}"
+        fi
+        ;;
+
+    loki)
+        gh_release_install "grafana/loki" "loki-linux-${ARCH_ALT}\.zip" "loki" "loki" "${RESOLVED#v}" \
+            || warn "Loki download failed."
+        ;;
+
+    kafka)
+        ensure_java || true
+        KV="${RESOLVED#v}"
+        { [ -z "${KV}" ] || [ "${KV}" = "latest" ]; } && { KV=$(gh_latest_tag "apache/kafka"); KV="${KV#kafka-}"; }
+        ka_base="${SERVER_DIR:-$(pwd)}/opt/kafka"
+        if [ ! -x "${ka_base}/bin/kafka-server-start.sh" ]; then
+            disk_preflight_mb 1200
+            for ku in \
+                "https://downloads.apache.org/kafka/${KV}/kafka_2.13-${KV}.tgz" \
+                "https://archive.apache.org/dist/kafka/${KV}/kafka_2.13-${KV}.tgz"; do
+                tmp_tar=$(mktemp)
+                if fetch "${ku}" "${tmp_tar}"; then
+                    mkdir -p "${ka_base}"
+                    tar -xzf "${tmp_tar}" -C "${ka_base}" --strip-components=1
+                    ok "Kafka ${KV} installed (KRaft mode, bundled scripts)."
+                    rm -f "${tmp_tar}"
+                    break
+                fi
+                rm -f "${tmp_tar}"
+            done
+            [ -x "${ka_base}/bin/kafka-server-start.sh" ] || warn "Kafka download failed."
+        fi
+        ;;
+
     ferretdb)
         TAG="${RESOLVED}"
         { [ -z "${TAG}" ] || [ "${TAG}" = "latest" ]; } && TAG=$(gh_latest_tag "FerretDB/FerretDB")
@@ -1749,7 +2052,7 @@ case "${ENGINE}" in
 
     mysql)      install_mysql      || exit 1 ;;
 
-    mongodb)    install_mongodb    || exit 1 ;;
+    mongodb|mongo) install_mongodb    || exit 1 ;;
 
     redis|valkey|keydb|memcached|dragonfly) install_redis_family || exit 1 ;;
 
