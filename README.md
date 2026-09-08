@@ -3,7 +3,7 @@
 
 <img src="https://capsule-render.vercel.app/api?type=waving&color=0:8b5cf6,50:ec4899,100:f97316&height=220&section=header&text=Database%20Eggs&fontSize=48&fontColor=ffffff&fontAlignY=34&desc=Universal%20Multi-Database%20Runtime%20%C2%B7%2050%2B%20Engines%20%C2%B7%20Zero-Leak%20Security&descSize=18&descAlignY=55&animation=twinkling" width="100%" alt="Database Eggs Banner"/>
 
-[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code:wght@600&size=22&pause=1200&color=8B5CF6&center=true&vCenter=true&width=750&lines=One+Universal+Egg+for+Pterodactyl%2C+Pelican%2C+Feather+%26+Docker;50%2B+Production-Ready+Databases%2C+Caches+%26+Search+Engines;Hardware-Aware+Dynamic+RAM+%26+CPU+Auto-Tuning;Strict+Version+Contracts+%26+Zero-Leak+Security;By+PotenFYR+Studios+%E2%80%94+support%40potenfyr.in)](https://github.com/PotenFYR-Studios/Database-Eggs)
+[![Typing SVG](https://readme-typing-svg.demolab.com?font=Fira+Code:wght@600&size=19&pause=1200&color=8B5CF6&center=true&vCenter=true&width=800&lines=One+Universal+Egg+for+Pterodactyl%2C+Pelican%2C+Feather+%26+Docker;50%2B+Production-Ready+Databases%2C+Caches+%26+Search+Engines;Hardware-Aware+Dynamic+RAM+%26+CPU+Auto-Tuning;Strict+Version+Contracts+%26+Zero-Leak+Security;By+PotenFYR+Studios+%E2%80%94+support%40potenfyr.in)](https://github.com/PotenFYR-Studios/Database-Eggs)
 
 <p align="center">
   <a href="https://potenfyr.in"><img src="https://img.shields.io/badge/Website-potenfyr.in-8b5cf6?style=for-the-badge&logo=googlechrome&logoColor=white&labelColor=1c1e26" alt="Website" /></a>
