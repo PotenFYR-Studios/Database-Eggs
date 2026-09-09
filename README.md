@@ -543,19 +543,6 @@ TEST_ENGINES="mongodb,postgresql" ./tests/test-docker.sh
 
 <sub>📈 Live graph rendered by <a href="https://star-history.com">star-history.com</a>. Updates in real-time as users star the repository.</sub>
 
-<br><br>
-
-### 📊 Repository & Organization Overview
-
-<p align="center">
-  <a href="https://github.com/PotenFYR-Studios/Database-Eggs">
-    <img src="https://github-readme-stats.vercel.app/api/pin/?username=PotenFYR-Studios&repo=Database-Eggs&theme=tokyonight&hide_border=true" alt="Database-Eggs Pin" />
-  </a>
-  <a href="https://github.com/PotenFYR-Studios">
-    <img src="https://github-readme-stats.vercel.app/api?username=PotenFYR-Studios&show_icons=true&theme=tokyonight&hide_border=true&include_all_commits=true" alt="PotenFYR Studios Stats" />
-  </a>
-</p>
-
 </div>
 
 ---
