@@ -14,6 +14,115 @@ find_inmemory_bin() {
     command -v "${name}" 2>/dev/null || return 1
 }
 
+# Quote a value for safe use as a redis.conf directive argument. Double quotes
+# protect spaces and shell meta-characters; backslashes and quotes inside the
+# value are escaped. Redis/Valkey/KeyDB conf parsing honors these escapes.
+pf_redis_conf_quote() {
+    local v="${1:-}"
+    v="${v//\\/\\\\}"
+    v="${v//\"/\\\"}"
+    printf '"%s"' "${v}"
+}
+
+# sed replacement string escape (& and delimiter are special).
+pf_sed_escape() {
+    local v="${1:-}"
+    v="${v//\\/\\\\}"
+    v="${v//&/\\&}"
+    printf '%s' "${v}"
+}
+
+# Idempotently set a single-value directive in the generated redis.conf:
+# replaces the existing line, or appends when missing. Never leaks values
+# into the console.
+pf_redis_conf_set() { # pf_redis_conf_set <conf> <directive> <value...>
+    local conf="$1" key="$2" val="$3"
+    local esc_key esc_val
+    esc_key=$(pf_sed_escape "${key}")
+    esc_val=$(pf_sed_escape "${val}")
+    if grep -qE "^${key}[[:space:]]" "${conf}" 2>/dev/null; then
+        sed -i "s/^${key}[[:space:]].*/${key} ${esc_val}/" "${conf}" 2>/dev/null || return 1
+    else
+        printf '%s %s\n' "${key}" "${val}" >> "${conf}"
+    fi
+}
+
+# ACL user management (Redis >= 6, Valkey >= 6, KeyDB >= 6.3):
+# DB_USERNAMES/DB_PASSWORDS work on the in-memory family exactly like on SQL
+# engines - one ACL user per name with full command access, credentials
+# recorded once in .db-users/credentials, removed users dropped. Applied at
+# first readiness of the daemon via pf_redis_apply_acls. Runs on EVERY boot:
+# ACL users live in daemon memory only, so restarts must re-assert them.
+pf_redis_major_version() { # pf_redis_major_version <server-bin>
+    "$1" --version 2>/dev/null | grep -oE '[0-9]+' | head -n1
+}
+
+pf_redis_apply_acls() { # pf_redis_apply_acls <cli-bin> <port>
+    local cli="$1" port="$2"
+    command -v pf_users_plan >/dev/null 2>&1 || return 0
+    # PF_USERS_MODE=multi OR an explicit DB_USERNAMES list opts in. On restart
+    # boots where the primary user became the legacy single account, mode is
+    # 'legacy' but DB_USERNAMES still names the intended set - honor it. The
+    # historical legacy single account (no DB_USERNAMES at all) is untouched.
+    local users_csv=""
+    if [ "${PF_USERS_MODE:-legacy}" = "multi" ] && [ -n "${PF_USERS:-}" ]; then
+        users_csv="${PF_USERS}"
+    elif [ -n "${DB_USERNAMES:-}" ]; then
+        users_csv="${DB_USERNAMES}"
+    fi
+    [ -n "${users_csv}" ] || return 0
+    case "${PROJECT_TYPE}" in
+        redis|valkey|keydb) : ;;
+        *) pf_users_note_unsupported; return 0 ;;
+    esac
+    # ACL SETUSER needs Redis-family >= 6
+    local maj
+    maj=$(pf_redis_major_version "$(pf_redis_server_bin)" 2>/dev/null || echo 0)
+    case "${maj}" in ''|*[!0-9]*) return 0 ;; esac
+    [ "${maj}" -ge 6 ] || { pf_users_note_unsupported; return 0; }
+
+    [ -n "${DB_PASSWORD:-}" ] || { warn "ACL provisioning skipped (no primary password)."; return 0; }
+    local auth=(-h 127.0.0.1 -p "${port}" -a "${DB_PASSWORD}" --no-auth-warning)
+
+    local u pw stored
+    for u in ${users_csv//,/ }; do
+        if pf_users_is_new "${u}"; then
+            pw=$(pf_users_stored_password "${u}")
+            [ -n "${pw}" ] || pw="${DB_PASSWORD}"
+            if "${cli}" "${auth[@]}" ACL SETUSER "${u}" on ">${pw}" "~*" "&*" "+@all" >/dev/null 2>&1; then
+                ok "ACL user '${u}' provisioned (owns nothing destructive; full command set)."
+            else
+                warn "ACL user '${u}' could not be provisioned."
+            fi
+        else
+            # Existing user: re-assert (idempotent), never touch the password.
+            stored=$(pf_users_stored_password "${u}")
+            if [ -n "${stored}" ]; then
+                "${cli}" "${auth[@]}" ACL SETUSER "${u}" on "~*" "&*" "+@all" >/dev/null 2>&1 || true
+            fi
+        fi
+    done
+
+    # Drop users that were removed from DB_USERNAMES (their keys persist in
+    # the shared keyspace; ACL users are metadata-only).
+    local prev
+    for prev in $(pf_users_prev_list); do
+        printf ',%s,' "${users_csv}" | grep -q ",${prev}," && continue
+        if "${cli}" "${auth[@]}" ACL DELUSER "${prev}" >/dev/null 2>&1; then
+            log "Removed ACL user '${prev}' (data preserved)."
+        fi
+    done
+    return 0
+}
+
+pf_redis_server_bin() {
+    case "${PROJECT_TYPE}" in
+        valkey) find_inmemory_bin "valkey-server" || true ;;
+        keydb)  find_inmemory_bin "keydb-server" || true ;;
+        *)      find_inmemory_bin "redis-server" || true ;;
+    esac
+}
+
 init_redis_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
@@ -54,6 +163,10 @@ active-defrag-threshold-upper 100"
     if [ "${SECURITY_HARDENING:-1}" != "0" ]; then
         harden_line="rename-command DEBUG \"\""
     fi
+    # Conf values that may contain spaces/specials are quoted for redis.conf.
+    local require_line="" masterauth_line=""
+    [ -n "${DB_PASSWORD:-}" ] && require_line="requirepass $(pf_redis_conf_quote "${DB_PASSWORD}")"
+    [ -n "${DB_ROOT_PASSWORD:-}" ] && masterauth_line="masterauth $(pf_redis_conf_quote "${DB_ROOT_PASSWORD}")"
 
     if [ ! -f "${redis_conf}" ]; then
         log "Generating performance-tuned & hardened ${PROJECT_TYPE^^} configuration..."
@@ -97,15 +210,21 @@ auto-aof-rewrite-percentage 100
 auto-aof-rewrite-min-size 64mb
 
 # Security & Authentication
-${DB_PASSWORD:+requirepass ${DB_PASSWORD}}
-${DB_ROOT_PASSWORD:+masterauth ${DB_ROOT_PASSWORD}}
+${require_line}
+${masterauth_line}
 
 # Security Hardening (Disable dangerous debugging commands in production)
 ${harden_line}
 EOF
         ok "Created performance-tuned ${redis_conf}"
     else
-        sed -i "s/^port .*/port ${SERVER_PORT}/g" "${redis_conf}" 2>/dev/null || true
+        # Keep the generated configuration in sync with current variables:
+        # port, memory tuning, defrag directives, and credentials. All edits
+        # are escape-safe (values with &, |, / or spaces survive).
+        pf_redis_conf_set "${redis_conf}" "port" "${SERVER_PORT}"
+        pf_redis_conf_set "${redis_conf}" "maxmemory" "${TUNED_REDIS_MAXMEMORY}"
+        pf_redis_conf_set "${redis_conf}" "io-threads" "${TUNED_REDIS_IO_THREADS}"
+        pf_redis_conf_set "${redis_conf}" "tcp-backlog" "${TUNED_REDIS_TCP_BACKLOG:-511}"
         # Keep defrag directives in sync with the binary that will run:
         # strip always, re-add only when our jemalloc build is in use.
         sed -i "/^activedefrag/d; /^active-defrag-/d" "${redis_conf}" 2>/dev/null || true
@@ -113,15 +232,14 @@ EOF
             printf '\nactivedefrag yes\nactive-defrag-ignore-bytes 100mb\nactive-defrag-threshold-lower 10\nactive-defrag-threshold-upper 100\n' >> "${redis_conf}"
         fi
         if [ -n "${DB_PASSWORD:-}" ]; then
-            if grep -q "^requirepass" "${redis_conf}"; then
-                sed -i "s/^requirepass .*/requirepass ${DB_PASSWORD}/g" "${redis_conf}" 2>/dev/null || true
-            else
-                echo "requirepass ${DB_PASSWORD}" >> "${redis_conf}"
-            fi
+            pf_redis_conf_set "${redis_conf}" "requirepass" "$(pf_redis_conf_quote "${DB_PASSWORD}")"
+        fi
+        if [ -n "${DB_ROOT_PASSWORD:-}" ]; then
+            pf_redis_conf_set "${redis_conf}" "masterauth" "$(pf_redis_conf_quote "${DB_ROOT_PASSWORD}")"
         fi
     fi
 }
- 
+
 stop_redis_family() {
     local pid="$1"
     local cli_bin
@@ -129,8 +247,8 @@ stop_redis_family() {
 
     # Gracefully save and shutdown via CLI if accessible
     if [ -n "${cli_bin}" ] && [ "${PROJECT_TYPE}" != "memcached" ]; then
-        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} shutdown save >/dev/null 2>&1 || \
-        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} shutdown nosave >/dev/null 2>&1 || true
+        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} --no-auth-warning shutdown save >/dev/null 2>&1 || \
+        "${cli_bin}" -h 127.0.0.1 -p "${SERVER_PORT}" ${DB_PASSWORD:+-a "${DB_PASSWORD}"} --no-auth-warning shutdown nosave >/dev/null 2>&1 || true
     fi
 
     # Forward SIGTERM to daemon process
@@ -215,6 +333,20 @@ start_redis_family() {
             daemon_pid=$!
             ;;
     esac
+
+    # Multi-user ACL provisioning (waits for readiness internally, so it is
+    # safe to run right after spawn; no-op for single-user/legacy mode and
+    # engines without an ACL model such as Dragonfly/Memcached). Runs on every
+    # boot because ACL users are daemon-memory-only and vanish on restart.
+    if [ "${PROJECT_TYPE}" != "memcached" ]; then
+        local acl_cli
+        acl_cli=$(find_inmemory_bin "redis-cli") \
+            || acl_cli=$(find_inmemory_bin "valkey-cli") \
+            || acl_cli=$(find_inmemory_bin "keydb-cli") || acl_cli=""
+        if [ -n "${acl_cli}" ] && [ -n "${PF_USERS:-}${DB_USERNAMES:-}" ]; then
+            ( pf_redis_apply_acls "${acl_cli}" "${SERVER_PORT}" ) &
+        fi
+    fi
 
     supervise_daemon "${daemon_pid}" "stop_redis_family"
 }
