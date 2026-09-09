@@ -193,8 +193,12 @@ apply_host_tunables() {
                     ok "vm.overcommit_memory=1 verified (fork-based background saves are safe)."
                 elif [ "${can_sysctl}" = "1" ]; then
                     sysctl -qw vm.overcommit_memory=1 2>/dev/null \
-                        && ok "Host tunable applied: vm.overcommit_memory=1" \
-                        || warn "Could not set vm.overcommit_memory (host restriction). Background saves may fail under memory pressure."
+                        || echo 1 > /proc/sys/vm/overcommit_memory 2>/dev/null
+                    if [ "$(cat /proc/sys/vm/overcommit_memory 2>/dev/null)" = "1" ]; then
+                        ok "Host tunable applied: vm.overcommit_memory=1"
+                    else
+                        warn "Could not set vm.overcommit_memory (host restriction). Background saves may fail under memory pressure."
+                    fi
                 else
                     warn "Background-save safety: host reports vm.overcommit_memory=${cur_oc:-unknown}. Ask the HOST operator to run: sysctl vm.overcommit_memory=1 (set REDIS_OVERCOMMIT_MEMORY=0 to silence)."
                 fi

@@ -457,8 +457,13 @@ verify_running_version() {
     # files, never environment variables. Announcements fire for EVERY request
     # (latest included) - substitutions are never silent.
     if [ -f "${SERVER_DIR}/bin/.versions/${PROJECT_TYPE}-system-fallback" ]; then
-        warn "Running container-provided ${PROJECT_TYPE} ${actual}: the pinned version '${req}' could not be provisioned in this environment (see logs/installer.log)."
-        warn "Exact-version service resumes automatically once provisioning becomes possible (build tools, root, or reachable upstream)."
+        if [ "${req}" = "latest" ] || [ "${req}" = "stable" ]; then
+            warn "Serving container-provided ${PROJECT_TYPE} ${actual}: the newest upstream release could not be built in this environment (no compiler/root); keep the image current to stay up to date."
+            log "Verified engine version: ${actual} (requested ${req}, best-available)"
+        else
+            warn "Running container-provided ${PROJECT_TYPE} ${actual}: the pinned version '${req}' could not be provisioned in this environment (see logs/installer.log)."
+            warn "Exact-version service resumes automatically once provisioning becomes possible (build tools, root, or reachable upstream)."
+        fi
         _egg_error_log "launcher" "version contract substituted: requested ${PROJECT_TYPE} ${req}, serving container-provided ${actual} (system-fallback)"
         return 0
     fi

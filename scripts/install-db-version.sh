@@ -159,8 +159,12 @@ fallback_to_system() {
     warn "${reason}"
     # Wrong-but-close: point the user at versions that DO exist upstream.
     pf_suggest_versions "${VERSION}"
-    warn "Falling back to the container-provided ${ENGINE}. Your pinned version '${VERSION}' could not be provisioned in this environment."
-    warn "To serve the exact version: run on a base image with build tools, grant root, or choose DB_VERSION=latest."
+    if [ "${VERSION:-}" = "latest" ] || [ "${VERSION:-}" = "stable" ]; then
+        warn "Falling back to the container-provided ${ENGINE}: the newest upstream release could not be built or downloaded in this environment (update the server image to refresh it)."
+    else
+        warn "Falling back to the container-provided ${ENGINE}. Your pinned version '${VERSION}' could not be provisioned in this environment."
+        warn "To serve the exact version: run on a base image with build tools, grant root, or choose DB_VERSION=latest."
+    fi
     printf '%s\n' "${RESOLVED}" > "${stamp_dir}/${ENGINE}-system-fallback" 2>/dev/null || true
     RESOLVED="${RESOLVED}-system-fallback"
     stamp_ok
@@ -702,6 +706,11 @@ prune_extracted() {
     return 0
 }
 
+# Major of a dotted version string ('8.10.1' -> 8; garbage -> empty).
+pf_ver_major() {
+    printf '%s' "$1" | grep -oE '^[0-9]+' || true
+}
+
 system_version_satisfies() { # system_version_satisfies <binary> <wanted_version>
     local bin="$1" want="$2"
     [ -n "${want}" ] || return 1
@@ -709,8 +718,20 @@ system_version_satisfies() { # system_version_satisfies <binary> <wanted_version
     local got
     got="$("${bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+){0,2}' | head -n1)"
     [ -n "${got}" ] || return 1
+    # 'latest'/'default' is satisfied when an ALREADY-RUNNABLE binary serves
+    # the same series or newer than what upstream currently advertises: on a
+    # plain unprivileged panel container we cannot compile, and serving
+    # redis-stable from the image (e.g. 8.2) is strictly better than loudly
+    # substituting an OLDER distro package while claiming to pursue 'latest'.
+    case "${want}" in
+        latest|default|stable|"")
+            pf_ver_major "${got}" 2>/dev/null | grep -qE '^[0-9]+$' || return 1
+            [ "$(pf_ver_major "${got}")" -ge 6 ] || return 1
+            return 0
+            ;;
+    esac
     # Series pins ("8.4") must match major AND minor; plain major pins ("18")
-    # match on the major only. Non-numeric wants ("latest") never satisfy.
+    # match on the major only.
     case "${want}" in
         [0-9]*.[0-9]*)
             [ "${got%.*}" = "${want}" ] || [ "${got}" = "${want}" ]
@@ -1653,7 +1674,23 @@ build_from_source() {
     local bd; bd=$(mktemp -d)
     tar -xzf "${tmp_tar}" -C "${bd}" --strip-components=1 || { rm -rf "${bd}" "${tmp_tar}"; return 1; }
     rm -f "${tmp_tar}"
-    ( cd "${bd}" && make MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" ${MAKE_ARGS:-} ) >&2 || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
+    # Build ONLY the requested program targets (make goals = basenames, e.g.
+    # 'redis-server redis-cli'; 'all' restores legacy whole-tree behavior).
+    # Redis 8's default 'build' target also compiles the bundled
+    # RedisBloom/RediSearch/RedisTimeSeries modules (cmake/cargo needed,
+    # minutes of build time) and exits NONZERO when any module fails - a path
+    # target like 'src/redis-server' is likewise not a make goal here. Passing
+    # the program basenames skips the module layer entirely, builds in seconds,
+    # and keeps the exit code meaningful for every engine we compile.
+    local targets="" t_all=0 t
+    for t in "$@"; do
+        if [ "${t}" = "all" ]; then t_all=1; fi
+        targets="${targets:+${targets} }${t##*/}"
+    done
+    [ "${t_all}" = "1" ] || [ -n "${targets}" ] || targets="all"
+    if [ "${t_all}" = "1" ]; then targets="all"; fi
+    ( cd "${bd}" && make MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" ${MAKE_ARGS:-} ${targets} ) >&2 \
+        || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
     local b
     for b in "$@"; do
         [ -f "${bd}/${b}" ] && cp -f "${bd}/${b}" "${INSTALL_DIR}/${b##*/}"
@@ -1744,8 +1781,26 @@ install_redis_family() {
             ;;
     esac
 
+    # Late 'latest' re-resolution must not hide an ALREADY-RUNNABLE binary:
+    # when upstream is unreachable AND a provisioned binary exists, keep
+    # serving it quietly instead of re-running a doomed build every boot.
+    if [ -z "${RESOLVED}" ] || [ "${RESOLVED}" = "latest" ]; then
+        local prov_now=""
+        case "${ENGINE}" in
+            redis)    prov_now=$(installed_binary_version "${INSTALL_DIR}/redis-server" 2>/dev/null || true) ;;
+            valkey)   prov_now=$(installed_binary_version "${INSTALL_DIR}/valkey-server" 2>/dev/null || true) ;;
+            keydb)    prov_now=$(installed_binary_version "${INSTALL_DIR}/keydb-server" 2>/dev/null || true) ;;
+            memcached) prov_now=$(installed_binary_version "${INSTALL_DIR}/memcached" 2>/dev/null || true) ;;
+        esac
+        if [ -n "${prov_now}" ]; then
+            log "${ENGINE} ${prov_now} already provisioned; upstream 'latest' unreachable - serving provisioned binary."
+            return 0
+        fi
+    fi
+
     # System binary reuse: series pins must match major AND minor (a system
-    # Redis 6.0.16 must never silently serve a Redis 8.2 request).
+    # Redis 6.0.16 must never silently serve a Redis 8.2 request). 'latest'
+    # may be served by any modern (>=6) system binary rather than failing.
     if [ -n "${sysbin}" ] && system_version_satisfies "${sysbin}" "${RESOLVED}"; then
         log "System ${sysbin} matches requested series (${RESOLVED}); skipping source build."
         return 0
@@ -1758,6 +1813,25 @@ install_redis_family() {
                     return 0
                 fi
                 warn "Existing Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") does not match requested '${RESOLVED}' - re-provisioning."
+            fi
+            # 'latest'/'stable' + no compiler: serving the image-provided
+            # redis-stable beats an older distro substitute. Accept it when it
+            # is the same major series as the upstream newest (an ancient
+            # image still falls back loudly, telling the operator to update).
+            if [ "${VERSION:-}" = "latest" ] || [ "${VERSION:-}" = "stable" ]; then
+                local sys_now sys_req_major sys_got_major
+                sys_now=$(command -v redis-server 2>/dev/null || true)
+                sys_req_major=$(pf_ver_major "${RESOLVED}")
+                if [ -n "${sys_now}" ] && [ -n "${sys_req_major}" ]; then
+                    sys_got_major=$(pf_ver_major "$(installed_binary_version "${sys_now}" 2>/dev/null || true)")
+                    if [ -n "${sys_got_major}" ] && [ "${sys_got_major}" = "${sys_req_major}" ]; then
+                        cp -f "${sys_now}" "${INSTALL_DIR}/redis-server" 2>/dev/null || true
+                        local sys_cli; sys_cli=$(command -v redis-cli 2>/dev/null || true)
+                        [ -n "${sys_cli}" ] && cp -f "${sys_cli}" "${INSTALL_DIR}/redis-cli" 2>/dev/null || true
+                        log "Redis $(installed_binary_version "${INSTALL_DIR}/redis-server") (image-provided) serves latest-available in the same major series as upstream ${RESOLVED}."
+                        return 0
+                    fi
+                fi
             fi
             local redis_src="https://download.redis.io/releases/redis-${RESOLVED}.tar.gz"
             [ "${RESOLVED}" = "latest" ] && redis_src="https://download.redis.io/redis-stable.tar.gz"
