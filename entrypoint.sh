@@ -685,6 +685,18 @@ if [ -n "${_pf_users_row}" ] && [ "${#_pf_users_row}" -gt 36 ]; then
 fi
 # Runtime Environment Card
 # Values are clamped (36 chars) so long paths/UUIDs can never smear the box.
+# Width-aware padding: bash printf %-Ns pads by BYTES under C/POSIX locales,
+# so multibyte glyphs (masked UUID bullets) render rows at the wrong width.
+# Display columns = total bytes minus UTF-8 continuation bytes (0x80-0xBF).
+_pf_pad() { # _pf_pad <width> <utf8-string>
+    local _w="$1" _s="$2" _cols
+    _cols=$(printf '%s' "${_s}" | LC_ALL=C sed 's/[\x80-\xBF]//g' | wc -c)
+    if [ "${_cols}" -lt "${_w}" ]; then
+        printf '%s%*s' "${_s}" "$((_w - _cols))" ""
+    else
+        printf '%s' "${_s}"
+    fi
+}
 _card_val() { local v="${1:-}"; printf '%s' "${v:0:36}"; }
 _pf_uuid="${P_SERVER_UUID:-${FEATHER_SERVER_UUID:-${SERVER_UUID:-${WISP_SERVER_UUID:-${CONVOY_SERVER_UUID:-}}}}}"
 if [ -n "${_pf_uuid}" ]; then _pf_uuid="${_pf_uuid:0:8}••••${_pf_uuid: -4}"; else _pf_uuid="not exposed"; fi
@@ -723,7 +735,7 @@ printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_MAGENTA}
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_BLUE}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Database / Schema" "$(_card_val "${DB_NAME:-default}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Users" "$(_card_val "${_pf_users_row:-legacy single user}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Host Platform" "$(_card_val "${_pf_host}")"
-printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Server UUID" "$(_card_val "${_pf_uuid}")"
+printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Server UUID" "$(_pf_pad 36 "${_pf_uuid}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_YELLOW}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Security Mode" "$(_card_val "Strict Cryptographic / SCRAM / Auth")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Egg Self-Update" "$(_card_val "${_pf_eggupd}")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_GREEN}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Git Repo Sync" "$(_card_val "${_pf_gitsync}")"
@@ -732,7 +744,7 @@ printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Architecture" "$(_card_val "$(uname -m 2>/dev/null || echo '?') ($(uname -s 2>/dev/null || echo 'Linux'))")"
 printf "${C_LIME}${C_BOLD}│${C_RESET}  ${C_BOLD}%-18s${C_RESET} : ${C_DIM}%-36s${C_RESET}  ${C_LIME}${C_BOLD}│${C_RESET}\n" "Working Dir" "$(_card_val "${SERVER_DIR}")"
 printf "${C_LIME}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n\n"
-unset -f _card_val
+unset -f _card_val _pf_pad
 unset _pf_uuid _pf_user_name _pf_eggupd _pf_gitsync _pf_memtune _pf_entry _pf_host _pf_users_row _pf_first _pf_second _pf_count
 
 log "Executing startup launcher..."

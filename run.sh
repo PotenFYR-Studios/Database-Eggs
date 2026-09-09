@@ -205,15 +205,31 @@ fi
 #   version switches, so clients keep authenticating unchanged.
 # - Explicit DATA_DIR overrides bypass this manager entirely (power users).
 # ---------------------------------------------------------------------------
+# Width-aware padding for values containing multibyte glyphs (•, ⚠, …).
+# bash printf %-Ns pads by BYTES under a C/POSIX locale, so any value
+# holding UTF-8 characters renders wider than its box (the masked password
+# rows in the connection guide once jutted 14 columns past the border).
+# Display columns = total bytes minus UTF-8 continuation bytes (0x80-0xBF).
+# Locale-independent by construction - sed/wc count raw bytes under LC_ALL=C.
+_pf_pad() { # _pf_pad <width> <utf8-string>
+    local _w="$1" _s="$2" _cols
+    _cols=$(printf '%s' "${_s}" | LC_ALL=C sed 's/[\x80-\xBF]//g' | wc -c)
+    if [ "${_cols}" -lt "${_w}" ]; then
+        printf '%s%*s' "${_s}" "$((_w - _cols))" ""
+    else
+        printf '%s' "${_s}"
+    fi
+}
+
 data_notice() { # data_notice <title> <line1> [line2] ...
     local title="$1"; shift
     local _yel="${C_YELLOW:-\033[33m}" _bold="${C_BOLD:-\033[1m}" _rst="${C_RESET:-\033[0m}"
     printf "\n${_yel}${_bold}┌─────────────────────────────────────────────────────────────┐${_rst}\n" >&2
-    printf "${_yel}${_bold}│  ⚠ %-56s│${_rst}\n" "${title}" >&2
+    printf "${_yel}${_bold}│  ⚠ %s│${_rst}\n" "$(_pf_pad 57 "${title}")" >&2
     printf "${_yel}${_bold}├─────────────────────────────────────────────────────────────┤${_rst}\n" >&2
     local l
     for l in "$@"; do
-        printf "${_yel}${_bold}│${_rst}  %-58s ${_yel}${_bold}│${_rst}\n" "${l:0:57}" >&2
+        printf "${_yel}${_bold}│${_rst}  %s ${_yel}${_bold}│${_rst}\n" "$(_pf_pad 58 "${l:0:57}")" >&2
     done
     printf "${_yel}${_bold}└─────────────────────────────────────────────────────────────┘${_rst}\n\n" >&2
 }
@@ -507,19 +523,21 @@ print_connection_guide() {
         _pf_users_count="$(printf '%s' "${PF_USERS}" | awk -F, '{print NF}')"
         [ "${_pf_users_count}" -gt 1 ] && _pf_user_note=" (primary)"
     fi
+    # Masked rows below use the top-level _pf_pad helper: values containing
+    # multibyte bullets must be padded by display columns, not bytes.
     printf "\n"
     printf "${C_GREEN}${C_BOLD}┌─────────────────────────────────────────────────────────────┐${C_RESET}\n"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_GREEN}${C_BOLD}✓  DATABASE READY - SECURE CONNECTION DETAILS${C_RESET}             ${C_GREEN}${C_BOLD}│${C_RESET}\n"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_GREEN}${C_BOLD}✓  DATABASE READY - SECURE CONNECTION DETAILS${C_RESET}              ${C_GREEN}${C_BOLD}│${C_RESET}\n"
     printf "${C_GREEN}${C_BOLD}├─────────────────────────────────────────────────────────────┤${C_RESET}\n"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Host (Internal)" "${INTERNAL_IP:-127.0.0.1}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Port" "${SERVER_PORT:-3306}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Database" "${DB_NAME:-database}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}${_pf_user_note:-}"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Total Users" "${_pf_users_count:-1} (see .db-users/credentials)"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "•••••••••••• [Protected]"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "•••••••••••• [Protected]"
-    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Credentials" "$([ -f "${SERVER_DIR}/.env" ] && echo "Saved in .env & Startup Environment" || echo "Active in Startup Environment")"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Engine" "${PROJECT_TYPE^^} (v${DB_VERSION})"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Host (Internal)" "${INTERNAL_IP:-127.0.0.1}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Port" "${SERVER_PORT:-3306}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Database" "${DB_NAME:-database}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Username" "${DB_USER:-dbuser}${_pf_user_note:-}"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Total Users" "${_pf_users_count:-1} (see .db-users/credentials)"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "User Password" "$(_pf_pad 38 "•••••••••••• [Protected]")"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Root Password" "$(_pf_pad 38 "•••••••••••• [Protected]")"
+    printf "${C_GREEN}${C_BOLD}│${C_RESET}  ${C_BOLD}%-16s${C_RESET} : %-38s  ${C_GREEN}${C_BOLD}│${C_RESET}\n" "Credentials" "$([ -f "${SERVER_DIR}/.env" ] && echo "Saved in .env & Startup Environment" || echo "Active in Startup Environment")"
     printf "${C_GREEN}${C_BOLD}└─────────────────────────────────────────────────────────────┘${C_RESET}\n"
 
     printf "\n ${C_BOLD}${C_YELLOW}Quick Connection Examples (Zero-Leak Security):${C_RESET}\n"
