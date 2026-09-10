@@ -17,7 +17,7 @@
 [![Validate Eggs & Scripts](https://github.com/PotenFYR-Studios/Database-Eggs/actions/workflows/validate-eggs.yml/badge.svg)](https://github.com/PotenFYR-Studios/Database-Eggs/actions/workflows/validate-eggs.yml)
 [![Databases & Engines](https://img.shields.io/badge/Databases%20%26%20Engines-50%2B%20Supported-orange?style=flat-square&logo=databricks)](https://github.com/PotenFYR-Studios/Database-Eggs#-supported-engines--tech-stack)
 [![Docker Image](https://img.shields.io/badge/Docker%20Image-GHCR-blue?style=flat-square&logo=docker)](https://github.com/PotenFYR-Studios/Database-Eggs/pkgs/container/database-eggs)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE)
+[![License: Apache-2.0 + Commons Clause](https://img.shields.io/badge/License-Apache--2.0%20%2B%20Commons%20Clause-blue.svg?style=flat-square)](LICENSE)
 [![Platforms](https://img.shields.io/badge/Architectures-amd64%20%7C%20arm64%20%7C%20arm%2Fv7%20%7C%20s390x%20%7C%20ppc64le%20%7C%20riscv64-darkgreen?style=flat-square)](https://github.com/PotenFYR-Studios/Database-Eggs)
 [![Panels](https://img.shields.io/badge/Panels-Pterodactyl%20%7C%20Pelican%20%7C%20Feather%20%7C%20Wisp%20%7C%20Docker-9cf?style=flat-square)](https://github.com/PotenFYR-Studios/Database-Eggs)
 
@@ -567,7 +567,7 @@ We welcome contributions, feature suggestions, and engine feedback from the comm
 
 ## 📜 License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the **Apache License 2.0 with the Commons Clause** - see the [LICENSE](LICENSE) file for details. Free to fork, modify, use, and build products or services around it - but the software itself may not be sold as a paid product.
 
 <div align="center">
 
