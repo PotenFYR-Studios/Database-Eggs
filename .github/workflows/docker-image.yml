@@ -12,6 +12,9 @@ env:
   REGISTRY: ghcr.io
   IMAGE_NAME: potenfyr-studios/database-eggs
 
+permissions:
+  contents: write
+
 jobs:
   build-universal:
     name: Build universal multi-database image
