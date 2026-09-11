@@ -2,10 +2,10 @@ name: Build & Publish Universal Database Image
 
 on:
   push:
-    branches: [main]
+    branches: [master]
     tags: ["v*"]
   pull_request:
-    branches: [main]
+    branches: [master]
   workflow_dispatch:
 
 env:
@@ -46,8 +46,8 @@ jobs:
         run: |
           IMAGE_URI="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
           TAGS="${IMAGE_URI}:latest"
-          if [ "${{ github.ref }}" = "refs/heads/main" ]; then
-            TAGS="${TAGS},${IMAGE_URI}:main,${IMAGE_URI}:sha-${GITHUB_SHA::7}"
+          if [ "${{ github.ref }}" = "refs/heads/master" ]; then
+            TAGS="${TAGS},${IMAGE_URI:master,${IMAGE_URI}:sha-${GITHUB_SHA::7}"
           fi
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
             TAGS="${TAGS},${IMAGE_URI}:${GITHUB_REF#refs/tags/}"
