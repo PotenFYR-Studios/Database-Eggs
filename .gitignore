@@ -60,3 +60,5 @@ desktop.ini
 
 # ---- Local helper tooling (not part of the public image/test surface) ----
 .tools/
+# Local agent/assistant artifacts (do not commit)
+.plan
