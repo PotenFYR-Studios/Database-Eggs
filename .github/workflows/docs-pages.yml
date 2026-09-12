@@ -1,0 +1,84 @@
+name: Deploy Docs to GitHub Pages
+
+# Builds the Vite docs site in docs/ and publishes docs/dist to GitHub Pages
+# (custom domain: database-eggs.docs.potenfyr.in via docs/public/CNAME).
+# Pull requests run the build as validation only - no artifact, no deploy.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "egg-database-multi.json"
+      - ".github/workflows/docs-pages.yml"
+  pull_request:
+    branches: [master]
+    paths:
+      - "docs/**"
+      - "egg-database-multi.json"
+      - ".github/workflows/docs-pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build docs site
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      - name: Install dependencies
+        working-directory: docs
+        run: bun install --frozen-lockfile
+
+      # "build" regenerates src/data/catalog.json from the real egg JSON, runs
+      # the production Vite build into docs/dist, then prerenders every route
+      # (full body HTML + per-page meta) via scripts/prerender.ts.
+      - name: Build site
+        working-directory: docs
+        run: bun run build
+
+      # Enables Pages (build_type: workflow) on first run so the site needs
+      # no manual setup in repo settings.
+      - name: Configure Pages
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
+      - name: Upload Pages artifact
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs/dist
+
+  deploy:
+    name: Deploy to GitHub Pages
+    if: >-
+      github.ref == 'refs/heads/master' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy artifact
+        id: deployment
+        uses: actions/deploy-pages@v5

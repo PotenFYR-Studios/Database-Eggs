@@ -1,0 +1,77 @@
+name: 🐛 Bug Report
+description: The egg misbehaves (boot failure, wrong version, credential problems, panel issues).
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Fill in the details below;
+        the console log is almost always the key to a fast fix.
+  - type: dropdown
+    id: panel
+    attributes:
+      label: Which panel are you using?
+      options:
+        - Pterodactyl
+        - Pelican
+        - Feather Panel
+        - Wisp
+        - Plain Docker / Compose
+        - Other Wings-family panel
+    validations:
+      required: true
+  - type: dropdown
+    id: engine
+    attributes:
+      label: Which engine (DATABASE_TYPE)?
+      options:
+        - mariadb
+        - mysql
+        - postgresql
+        - mongodb
+        - redis / valkey
+        - meilisearch / typesense / qdrant
+        - minio / seaweedfs / garage
+        - surrealdb
+        - custom
+        - other / not engine-related
+    validations:
+      required: true
+  - type: input
+    id: db-version
+    attributes:
+      label: DB_VERSION value
+      description: The version pin you set (e.g. `latest`, `18`, `11.4`, `8.0.45`).
+      placeholder: latest
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you expect to happen instead?
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Console / log output
+      description: |
+        Paste the relevant console output. Redact passwords, but note that the
+        runtime masks credentials in stdout by default. `logs/startup_error.log`
+        and `logs/installer.log` are especially useful for boot failures.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: startup-vars
+    attributes:
+      label: Startup variables (redact secrets)
+      description: The variables you set on the server, e.g. `DATABASE_TYPE=postgresql, DB_VERSION=18, DB_USERNAMES=alice,bob`.
+      render: text
+  - type: input
+    id: image-tag
+    attributes:
+      label: Docker image tag
+      description: "`latest` or a `sha-<ref>` tag: run `docker images` or check the panel."
+      placeholder: latest

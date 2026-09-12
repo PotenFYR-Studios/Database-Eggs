@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Support Discord
+    url: https://discord.com/invite/zUaN2FPBec
+    about: Live help with panel setup, egg imports and engine questions.
+  - name: Documentation
+    url: https://database-eggs.docs.potenfyr.in
+    about: Install guide, egg catalog and examples; please check here first.
+  - name: Egg Nest (unified catalog)
+    url: https://nest.potenfyr.in
+    about: Browse every PotenFYR egg collection in one place.

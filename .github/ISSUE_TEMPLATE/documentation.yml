@@ -1,0 +1,34 @@
+name: 📚 Documentation
+description: Report an issue or gap in the README or docs site.
+labels: ["documentation"]
+body:
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where is the problem?
+      options:
+        - README.md
+        - Docs site (database-eggs.docs.potenfyr.in)
+        - CONTRIBUTING.md / SECURITY.md
+        - Egg variable descriptions (panel UI)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: location
+    attributes:
+      label: Page or section
+      placeholder: e.g. https://database-eggs.docs.potenfyr.in/docs/ § Updating the egg
+    validations:
+      required: true
+  - type: textarea
+    id: issue
+    attributes:
+      label: What's wrong?
+      description: Outdated, incorrect, unclear, or missing?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix
