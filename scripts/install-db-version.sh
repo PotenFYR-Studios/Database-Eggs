@@ -2028,7 +2028,19 @@ case "${ENGINE}" in
             if fetch "${URL}" "${INSTALL_DIR}/minio"; then
                 seal_binary "${INSTALL_DIR}/minio"
                 ok "MinIO ${RESOLVED} installed."
-            else rm -f "${INSTALL_DIR}/minio"; warn "MinIO download failed; baked binary (if any) will serve."; fi
+            else
+                # dl.min.io stopped serving community downloads (project
+                # archived, 410 Gone); official binaries remain on GitHub
+                # release assets. 'latest' pins to the last release that
+                # shipped assets there.
+                local gh_tag="${RESOLVED}"
+                { [ -z "${gh_tag}" ] || [ "${gh_tag}" = "latest" ]; } && gh_tag="RELEASE.2025-09-07T16-13-09Z"
+                URL="https://github.com/minio/minio/releases/download/${gh_tag}/minio.linux-${ARCH_TYPE}.${gh_tag}"
+                if fetch "${URL}" "${INSTALL_DIR}/minio"; then
+                    seal_binary "${INSTALL_DIR}/minio"
+                    ok "MinIO ${gh_tag} installed (GitHub mirror; dl.min.io community downloads are discontinued)."
+                else rm -f "${INSTALL_DIR}/minio"; warn "MinIO download failed; baked binary (if any) will serve."; fi
+            fi
         fi
         ;;
 
