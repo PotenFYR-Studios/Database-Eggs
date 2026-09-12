@@ -2,7 +2,7 @@
     "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
     "meta": {
         "version": "PTDL_v2",
-        "update_url": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json"
+        "update_url": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master/egg-database-multi.json"
     },
     "exported_at": "2026-08-22T04:00:00+00:00",
     "name": "Multi Database",
@@ -15,7 +15,7 @@
         "Universal Multi-Database (All Engines)": "ghcr.io/potenfyr-studios/database-eggs:latest"
     },
     "file_denylist": [],
-    "startup": "if [ -f /entrypoint.sh ]; then exec bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then exec bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then exec bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/entrypoint.sh) | tr -d \"\\r\" | exec bash; fi",
+    "startup": "if [ -f /entrypoint.sh ]; then exec bash /entrypoint.sh; elif [ -f /usr/local/bin/entrypoint.sh ]; then exec bash /usr/local/bin/entrypoint.sh; elif [ -f ./entrypoint.sh ]; then exec bash ./entrypoint.sh; else echo \"[startup] Fetching remote entrypoint bootstrap...\"; (curl -fsSL --retry 3 https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master/entrypoint.sh || wget -qO- https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master/entrypoint.sh) | tr -d \"\\r\" | exec bash; fi",
     "config": {
         "files": "{\"config/my.cnf\":{\"parser\":\"ini\",\"find\":{\"mysqld.port\":\"{{server.build.default.port}}\"}},\"config/redis.conf\":{\"parser\":\"file\",\"find\":{\"port 6379\":\"port {{server.build.default.port}}\"}}}",
         "startup": "{\"done\":[\"ready for connections\",\"Server started\",\"Listening on\",\"database system is ready to accept connections\",\"Ready to accept connections\",\"PocketBase started\",\"SurrealDB started\",\"Meilisearch is listening\",\"API listening on\",\"Accepting connections\"],\"user_interaction\":[],\"strip_ansi\":false}",
@@ -264,7 +264,7 @@
             "name": "Egg Update URL",
             "description": "Check EGG_UPDATE_URL on startup and self-update the launcher when the upstream egg changed (raw GitHub egg JSON or run.sh URL).",
             "env_variable": "EGG_UPDATE_URL",
-            "default_value": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json",
+            "default_value": "https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master/egg-database-multi.json",
             "user_viewable": true,
             "user_editable": true,
             "rules": "nullable|string|max:512",

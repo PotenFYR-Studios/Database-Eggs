@@ -1,0 +1,34 @@
+name: 🔐 Security Concern (non-critical)
+description: Public questions about the security model, NOT for vulnerability reports.
+labels: ["security"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        > [!WARNING]
+        > **Do not use this form to report vulnerabilities.** Public issues can be
+        > exploited before a fix ships. For actual vulnerabilities email
+        > **support@potenfyr.in** with `[security]` in the subject or use
+        > [private vulnerability reporting](https://github.com/PotenFYR-Studios/Database-Eggs/security/advisories/new).
+        > See [SECURITY.md](https://github.com/PotenFYR-Studios/Database-Eggs/blob/master/SECURITY.md).
+        >
+        > Use this form only for *public* questions like "how does credential masking work?"
+  - type: textarea
+    id: question
+    attributes:
+      label: Your security question or hardening suggestion
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Which area?
+      options:
+        - Credential storage (.env, .db-users)
+        - Console masking / zero-leak logging
+        - Authentication hardening (SCRAM, root accounts)
+        - Download integrity / SHA256 verification
+        - Container privileges (UID 988)
+        - Other
+    validations:
+      required: true

@@ -1,0 +1,44 @@
+name: 🚀 Feature Request / New Engine
+description: Suggest a new database engine, a new variable, or a runtime improvement.
+labels: ["enhancement"]
+body:
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What kind of feature?
+      options:
+        - New database engine
+        - New startup variable / knob
+        - Performance improvement
+        - Security improvement
+        - Panel compatibility
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What are you trying to do that you can't today?
+    validations:
+      required: true
+  - type: textarea
+    id: engine-details
+    attributes:
+      label: Engine details (for engine requests)
+      description: |
+        - Upstream project URL and download/release URL scheme
+        - Versioning scheme (semver? calendars? rolling?)
+        - Default port and config format
+        - License and multi-arch availability (amd64/arm64 at minimum)
+  - type: textarea
+    id: proposed
+    attributes:
+      label: Proposed solution
+      description: How should it work from the user's point of view?
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contribution
+      options:
+        - label: I'm willing to help test (or implement) this

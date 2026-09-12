@@ -66,3 +66,9 @@ CLAUDE.md
 CLAUDE.md
 .rtk
 .plan
+
+# ---- Docs site build artifacts (docs/dist is deployed by CI) ----
+docs/dist/
+docs/node_modules/
+# Generated from the repo's egg JSON by docs/scripts/build-catalog.ts
+docs/src/data/catalog.json
