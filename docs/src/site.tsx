@@ -60,6 +60,22 @@ export const data = catalog as unknown as Catalog;
 export const egg = data.eggs[0];
 export const CANON = "https://database-eggs.docs.potenfyr.in";
 
+/** Deploy base ("/" on a custom domain, "/Database-Eggs/" on github.io
+ *  project pages). Set from the docs workflow via VITE_BASE. */
+const envBase: unknown = import.meta.env?.BASE_URL;
+export const BASE: string =
+  typeof envBase === "string" ? envBase
+  : typeof process !== "undefined" ? process.env?.VITE_BASE ?? "/"
+  : "/";
+
+/** Prefix an in-site path with the deploy base. Idempotent, and a no-op
+ *  for anything not site-rooted, so call sites can wrap unconditionally. */
+export function withBase(p: string): string {
+  if (BASE !== "/" && (p === BASE || p.startsWith(BASE))) return p;
+  if (!p.startsWith("/")) return p;
+  return `${BASE}${p.slice(1)}`;
+}
+
 /* == Route table ============================================================ */
 export const ROUTES = [
   { path: "/", label: "Home" },
@@ -76,6 +92,10 @@ export const ROUTES = [
  */
 export function normPath(pathname: string): string {
   let p = pathname;
+  if (BASE !== "/") {
+    if (p === BASE) p = "/";
+    else if (p.startsWith(BASE)) p = p.slice(BASE.length - 1);
+  }
   if (p.endsWith(".html")) p = p.slice(0, -".html".length) || "/";
   if (!p.startsWith("/")) p = `/${p}`;
   return p.endsWith("/") || p === "" ? p : `${p}/`;
@@ -99,7 +119,7 @@ export function Breadcrumbs({ items }: { items: Crumb[] }) {
         <span key={i} className="contents">
           {i > 0 && <span aria-hidden>/</span>}
           {c.href ? (
-            <a href={c.href}>{c.label}</a>
+            <a href={withBase(c.href)}>{c.label}</a>
           ) : (
             <span className="crumb-here" aria-current="page">
               {c.label}
@@ -133,7 +153,7 @@ export function Sidebar() {
           {g.links.map((l) => (
             <a
               key={l.href}
-              href={l.href}
+              href={withBase(l.href)}
               className={clsx("sidebar-link", path === l.href && "active")}
               aria-current={path === l.href ? "page" : undefined}
             >
@@ -212,8 +232,8 @@ export function Navbar() {
   return (
     <>
       <header className="site-header">
-        <a href="/" className="brand" aria-label="Database-Eggs home">
-          <img src="/favicon.png" alt="" />
+        <a href={withBase("/")} className="brand" aria-label="Database-Eggs home">
+          <img src={withBase("/favicon.png")} alt="" />
           <span>
             Database-Eggs<span className="brand-dot">.</span>
           </span>
@@ -222,7 +242,7 @@ export function Navbar() {
           {ROUTES.map((r) => (
             <a
               key={r.path}
-              href={r.path}
+              href={withBase(r.path)}
               className={clsx("nav-link", path === r.path && "active")}
             >
               {r.label}
@@ -274,7 +294,7 @@ export function Navbar() {
           {ROUTES.map((r) => (
             <a
               key={r.path}
-              href={r.path}
+              href={withBase(r.path)}
               onClick={() => setOpen(false)}
               className="block rounded-lg px-2 py-2 text-sm text-[#b9bfd4] hover:bg-white/5"
             >
@@ -396,7 +416,7 @@ export function Footer() {
         <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
           <div className="max-w-[420px]">
             <div className="brand">
-              <img src="/favicon.png" alt="" className="h-8 w-8 rounded-full ring-1 ring-white/10" />
+              <img src={withBase("/favicon.png")} alt="" className="h-8 w-8 rounded-full ring-1 ring-white/10" />
               <span className="font-mono font-bold text-white">
                 Database-Eggs<span className="brand-dot">.</span>
               </span>
@@ -426,7 +446,7 @@ export function Footer() {
             >
               License
             </a>
-            <a href="/" className="sf-accent">
+            <a href={withBase("/")} className="sf-accent">
               Docs
             </a>
           </div>
@@ -552,7 +572,7 @@ export function Pagination({
     <div className="mt-12 flex flex-col justify-between gap-4 sm:flex-row">
       {prev ? (
         <a
-          href={prev.href}
+          href={withBase(prev.href)}
           className="flex-1 rounded-xl border border-line-light bg-white/[0.02] p-4 transition-transform hover:-translate-y-0.5 hover:border-brand-violet/50"
         >
           <div className="eyebrow">← Previous</div>
@@ -563,7 +583,7 @@ export function Pagination({
       )}
       {next ? (
         <a
-          href={next.href}
+          href={withBase(next.href)}
           className="flex-1 rounded-xl border border-line-light bg-white/[0.02] p-4 text-right transition-transform hover:-translate-y-0.5 hover:border-brand-pink/50"
         >
           <div className="eyebrow">Next →</div>

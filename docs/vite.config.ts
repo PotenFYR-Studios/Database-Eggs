@@ -10,7 +10,7 @@ import { fileURLToPath } from "node:url";
 
 export default defineConfig({
   root: resolve(dirname(fileURLToPath(import.meta.url))),
-  base: "/",
+  base: process.env.VITE_BASE ?? "/",
   plugins: [react(), tailwindcss()],
   build: {
     outDir: "dist",

@@ -9,6 +9,7 @@ import {
   Pagination,
   Sidebar,
   VarTable,
+  withBase,
 } from "../site";
 import { Toc, type TocItem } from "../Toc";
 
@@ -77,7 +78,7 @@ function Eggs() {
               </div>
             </dl>
             <div className="mt-4 flex flex-wrap gap-2">
-              <a href="/examples/" className="btn btn-ghost !px-4 !py-2 text-xs">
+              <a href={withBase("/examples/")} className="btn btn-ghost !px-4 !py-2 text-xs">
                 JSON &amp; compose examples
               </a>
               <a

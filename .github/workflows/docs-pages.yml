@@ -40,6 +40,16 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      # Runs before the build so the base path can adapt to the serving
+      # URL; also enables Pages (build_type: workflow) on first run so the
+      # site needs no manual setup in repo settings.
+      - name: Configure Pages
+        id: pages
+        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+        uses: actions/configure-pages@v6
+        with:
+          enablement: true
+
       - name: Install dependencies
         working-directory: docs
         run: bun install --frozen-lockfile
@@ -47,17 +57,18 @@ jobs:
       # "build" regenerates src/data/catalog.json from the real egg JSON, runs
       # the production Vite build into docs/dist, then prerenders every route
       # (full body HTML + per-page meta) via scripts/prerender.ts.
+      #
+      # Hybrid base: custom domain -> root path; otherwise /Database-Eggs/
+      # (github.io project pages serve the site under the repo slug).
       - name: Build site
         working-directory: docs
-        run: bun run build
-
-      # Enables Pages (build_type: workflow) on first run so the site needs
-      # no manual setup in repo settings.
-      - name: Configure Pages
-        if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-        uses: actions/configure-pages@v6
-        with:
-          enablement: true
+        run: |
+          BASE_URL="${{ steps.pages.outputs.base_url }}"
+          case "$BASE_URL" in
+            ""|*github.io*) export VITE_BASE="/Database-Eggs/" ;;
+            *) export VITE_BASE="/" ;;
+          esac
+          bun run build
 
       - name: Upload Pages artifact
         if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
