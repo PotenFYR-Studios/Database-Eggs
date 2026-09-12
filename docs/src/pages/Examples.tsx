@@ -8,6 +8,7 @@ import {
   Navbar,
   Pagination,
   Sidebar,
+  withBase,
 } from "../site";
 
 /** Build the real egg JSON excerpt from the catalog (no hand-written JSON). */
@@ -137,7 +138,7 @@ docker exec my-database cat /home/container/.env   # DB_PASSWORD, DB_ROOT_PASSWO
         />
         <p className="mt-4 text-[0.92em] text-[#9aa0b4]">
           Full step-by-step with variable explanations: the{" "}
-          <a href="/docs/" className="text-[#c4b5fd] hover:text-[#f9a8d4]">
+          <a href={withBase("/docs/")} className="text-[#c4b5fd] hover:text-[#f9a8d4]">
             install guide
           </a>
           .
