@@ -90,44 +90,6 @@ export function Marquee({
   );
 }
 
-/** Magic UI · Border Beam: light beam travelling around a rounded border. */
-export function BorderBeam({
-  size = 120,
-  duration = 7,
-  className,
-  colorFrom = "#38bdf8",
-  colorTo = "#8b5cf6",
-}: {
-  size?: number;
-  duration?: number;
-  className?: string;
-  colorFrom?: string;
-  colorTo?: string;
-}) {
-  return (
-    <div
-      className={clsx(
-        "pointer-events-none absolute inset-0 rounded-[inherit] border border-transparent [mask-clip:padding-box,border-box] [mask-composite:intersect]",
-        className,
-      )}
-      style={{
-        mask: "linear-gradient(#fff 0 0) padding-box, linear-gradient(#fff 0 0)",
-      }}
-    >
-      <motion.div
-        className="absolute aspect-square rounded-full"
-        style={{
-          width: size,
-          background: `linear-gradient(to left, transparent, ${colorFrom}, ${colorTo}, transparent)`,
-          offsetPath: `rect(0 auto auto 0 round ${size / 2}px)`,
-        }}
-        animate={{ offsetDistance: ["0%", "100%"] }}
-        transition={{ repeat: Infinity, ease: "linear", duration }}
-      />
-    </div>
-  );
-}
-
 /** Magic UI · Meteors: streaking comets in the hero (landing only). */
 export function Meteors({ number = 14 }: { number?: number }) {
   const meteors = Array.from({ length: number }, (_, i) => ({

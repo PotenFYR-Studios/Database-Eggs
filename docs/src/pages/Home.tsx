@@ -1,6 +1,6 @@
 import { ArrowRight, BookOpen, Database, Server, Terminal, Boxes } from "lucide-react";
 import { clsx } from "clsx";
-import { BorderBeam, GlowOrb, Marquee, Meteors, NumberTicker } from "../magicui";
+import { GlowOrb, Marquee, Meteors, NumberTicker } from "../magicui";
 import { data, egg, Footer, Navbar, StatTile, withBase } from "../site";
 
 function Home() {
@@ -85,7 +85,6 @@ function Home() {
           </h2>
           <div className="mt-8 grid gap-6 lg:grid-cols-3">
             <div className="doc-card relative lg:col-span-2">
-              <BorderBeam size={90} duration={8} />
               <div className="flex items-start justify-between gap-4">
                 <div className="icon-tile">
                   <Database className="h-5 w-5" />
