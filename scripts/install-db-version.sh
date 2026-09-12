@@ -2033,7 +2033,7 @@ case "${ENGINE}" in
                 # archived, 410 Gone); official binaries remain on GitHub
                 # release assets. 'latest' pins to the last release that
                 # shipped assets there.
-                local gh_tag="${RESOLVED}"
+                gh_tag="${RESOLVED}"
                 { [ -z "${gh_tag}" ] || [ "${gh_tag}" = "latest" ]; } && gh_tag="RELEASE.2025-09-07T16-13-09Z"
                 URL="https://github.com/minio/minio/releases/download/${gh_tag}/minio.linux-${ARCH_TYPE}.${gh_tag}"
                 if fetch "${URL}" "${INSTALL_DIR}/minio"; then
