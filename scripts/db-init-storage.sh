@@ -114,7 +114,7 @@ start_storage_family() {
 
             if ! command -v "${minio_bin}" >/dev/null 2>&1 && [ ! -x "${minio_bin}" ]; then
                 error "MinIO binary '${minio_bin}' not found in container PATH or bin/ directory."
-                fail "MinIO binary is unavailable."
+                fail "MinIO is unavailable: dl.min.io community downloads are discontinued upstream (project archived); provide a baked binary or a reachable mirror."
             fi
 
             log "Starting MinIO S3 on 0.0.0.0:${SERVER_PORT} (Console: ${console_port:+0.0.0.0:}${console_port:-loopback:$((SERVER_PORT + 1))})..."
