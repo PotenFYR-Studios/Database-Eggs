@@ -1,7 +1,7 @@
 import { ArrowRight, BookOpen, Database, Server, Terminal, Boxes } from "lucide-react";
 import { clsx } from "clsx";
 import { BorderBeam, GlowOrb, Marquee, Meteors, NumberTicker } from "../magicui";
-import { data, egg, Footer, Navbar, StatTile } from "../site";
+import { data, egg, Footer, Navbar, StatTile, withBase } from "../site";
 
 function Home() {
   const c = data.counts;
@@ -43,10 +43,10 @@ function Home() {
               Wings-family panel.
             </p>
             <div className="hero-enter-2 mt-8 flex flex-wrap items-center justify-center gap-4">
-              <a href="/docs/" className="btn btn-primary">
+              <a href={withBase("/docs/")} className="btn btn-primary">
                 Install the egg <ArrowRight className="h-4 w-4" />
               </a>
-              <a href="/docs/eggs/" className="btn btn-ghost">
+              <a href={withBase("/docs/eggs/")} className="btn btn-ghost">
                 Browse the catalog
               </a>
             </div>
@@ -131,7 +131,7 @@ function Home() {
                   file, one image: import it anywhere a Wings-family daemon runs.
                 </p>
                 <a
-                  href="/docs/"
+                  href={withBase("/docs/")}
                   className="mt-auto inline-flex items-center gap-1 pt-2 text-sm text-[#c4b5fd] hover:text-[#f9a8d4]"
                 >
                   Install guide <ArrowRight className="h-3.5 w-3.5" />
@@ -199,7 +199,7 @@ function Home() {
                 the running binary, never silently downgraded.
               </p>
               <a
-                href="/docs/eggs/"
+                href={withBase("/docs/eggs/")}
                 className={clsx(
                   "mt-auto inline-flex items-center gap-1 pt-2 text-sm text-[#c4b5fd] hover:text-[#f9a8d4]",
                 )}
@@ -219,7 +219,7 @@ function Home() {
             Download the JSON, import it into your panel, set two variables, start.
           </p>
           <div className="mt-7 flex flex-wrap items-center justify-center gap-4">
-            <a href="/docs/" className="btn btn-primary">
+            <a href={withBase("/docs/")} className="btn btn-primary">
               Get started <ArrowRight className="h-4 w-4" />
             </a>
             <a href={data.repo.url} target="_blank" rel="noopener" className="btn btn-ghost">

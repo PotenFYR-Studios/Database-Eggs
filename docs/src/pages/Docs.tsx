@@ -9,6 +9,7 @@ import {
   Sidebar,
   Tabs,
   VarTable,
+  withBase,
 } from "../site";
 import { Toc } from "../Toc";
 
@@ -145,7 +146,7 @@ DB_VERSION=18              # latest | 18 | 11.4 | 8.0.45 | https://...`}
           <p>
             The full list of all {egg.counts.variables} exported variables (version switching,
             git sync, host tuning, console theming) is in the{" "}
-            <a href="/docs/eggs/">egg catalog</a>.
+            <a href={withBase("/docs/eggs/")}>egg catalog</a>.
           </p>
 
           {/* ---- 4. First boot ---- */}
