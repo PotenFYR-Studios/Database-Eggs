@@ -17,7 +17,7 @@ LABEL author="PotenFYR Studios" maintainer="support@potenfyr.in" \
       org.opencontainers.image.title="PotenFYR Multi-Variant Database Runtime" \
       org.opencontainers.image.description="Dedicated lean & universal database container runtimes with companion injection for Pterodactyl, Pelican, Feather, Wisp, and Docker." \
       org.opencontainers.image.source="https://github.com/PotenFYR-Studios/Database-Eggs" \
-      org.opencontainers.image.licenses="MIT"
+      org.opencontainers.image.licenses="Apache-2.0 WITH Commons-Clause-1.0"
 
 ARG TARGETPLATFORM
 ARG TARGETARCH

@@ -14,29 +14,53 @@ jobs:
   validate:
     name: Validate Egg JSON and Shell Scripts
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
-      - name: Validate JSON syntax
+      - name: Validate JSON syntax and egg structure
         run: |
-          echo "Validating egg-database-multi.json..."
-          jq empty egg-database-multi.json
-          
-          if [ -d eggs ]; then
-            for egg in eggs/*.json; do
-              echo "Validating ${egg}..."
-              jq empty "${egg}"
-            done
-          fi
+          set -euo pipefail
+
+          check_egg() {
+            local egg="$1"
+            echo "Validating ${egg}..."
+            jq empty "${egg}"
+            # Structural contract every exported egg must satisfy.
+            jq -e '
+              (.name          | type == "string" and length > 0) and
+              (.meta.version  | type == "string" and length > 0) and
+              (.docker_images | type == "object" and length > 0) and
+              (.variables     | type == "array" and length > 0) and
+              (all(.variables[];
+                    (.env_variable | type == "string" and length > 0) and
+                    (.rules        | type == "string") and
+                    (.name         | type == "string" and length > 0)))
+            ' "${egg}" > /dev/null || {
+              echo "::error::${egg} failed the egg structural contract"
+              exit 1
+            }
+          }
+
+          check_egg egg-database-multi.json
+
+          shopt -s nullglob
+          for egg in eggs/*.json; do
+            check_egg "${egg}"
+          done
+          shopt -u nullglob
+
           echo "All Egg JSON files are strictly valid."
 
       - name: Lint Shell Scripts
         run: |
+          set -euo pipefail
+          shopt -s nullglob
           for sh_file in *.sh scripts/*.sh tests/*.sh; do
-            if [ -f "${sh_file}" ]; then
-              echo "Checking syntax of ${sh_file}..."
-              bash -n "${sh_file}"
-            fi
+            echo "Checking syntax of ${sh_file}..."
+            bash -n "${sh_file}"
           done
+          shopt -u nullglob
           echo "All shell scripts passed syntax check."

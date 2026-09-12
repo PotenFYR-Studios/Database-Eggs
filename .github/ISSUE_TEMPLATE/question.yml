@@ -1,0 +1,20 @@
+name: ❓ Question
+description: Ask how something works (usage, versioning, panel differences).
+labels: ["question"]
+body:
+  - type: checkboxes
+    id: checked
+    attributes:
+      label: Checklist
+      options:
+        - label: I checked the [docs site](https://database-eggs.docs.potenfyr.in) and the README
+        - label: I searched existing issues and discussions
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: Include your panel type and `DATABASE_TYPE`/`DB_VERSION` if relevant.
+    validations:
+      required: true
