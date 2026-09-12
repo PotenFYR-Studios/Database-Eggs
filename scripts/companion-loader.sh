@@ -126,7 +126,13 @@ load_companions() {
             aws|aws-cli|s3cmd)
                 if ! command -v aws >/dev/null 2>&1 && [ ! -x "${target_bin}/mc" ]; then
                     log "Injecting MinIO Client (mc) S3 companion into ${target_dir}..."
-                    local mc_url="https://dl.min.io/client/mc/release/linux-${arch_type}/mc"
+                    # dl.min.io ended community downloads (project archived, 410
+                    # Gone); official binaries remain on GitHub release assets.
+                    local mc_tag="RELEASE.2025-08-13T08-35-41Z"
+                    local mc_url="https://github.com/minio/mc/releases/download/${mc_tag}/mc.linux-${arch_type}.${mc_tag}"
+                    if [ "${arch_type}" != "amd64" ] && [ "${arch_type}" != "arm64" ]; then
+                        mc_url="https://dl.min.io/client/mc/release/linux-${arch_type}/mc"
+                    fi
                     if curl -fsSL --retry 3 -o "${target_bin}/mc" "${mc_url}" 2>/dev/null; then
                         chmod +x "${target_bin}/mc" 2>/dev/null || true
                         ln -sf "${target_bin}/mc" "${target_bin}/s3" 2>/dev/null || true
