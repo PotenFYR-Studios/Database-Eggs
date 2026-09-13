@@ -72,3 +72,6 @@ docs/dist/
 docs/node_modules/
 # Generated from the repo's egg JSON by docs/scripts/build-catalog.ts
 docs/src/data/catalog.json
+
+# Serena MCP local state
+.serena/
