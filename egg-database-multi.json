@@ -261,6 +261,26 @@
       "field_type": "text"
     },
     {
+      "name": "Git Preserve .env",
+      "description": "Keep every existing .env in its original location across repo syncs: the old credentials are restored after new GitHub files land, so the project never breaks (1 = Enabled, 0 = let repo .env files win).",
+      "env_variable": "GIT_PRESERVE_ENV",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Git Exclude Paths",
+      "description": "Space/comma-separated glob patterns git sync must never install or overwrite (e.g. custom/* secrets). Empty = sync everything not protected by the runtime.",
+      "env_variable": "GIT_EXCLUDE",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string",
+      "field_type": "text"
+    },
+    {
       "name": "Git Auto Update",
       "description": "Poll the Git repository while the server runs and sync new commits into the workspace automatically. A console notice tells you when a restart is needed to load them (1 = Enabled, 0 = Disabled).",
       "env_variable": "GIT_AUTO_UPDATE",

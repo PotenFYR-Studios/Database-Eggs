@@ -48,6 +48,64 @@ EOF
     return 1
 }
 
+# ---------------------------------------------------------------------------
+# GIT_PRESERVE_ENV (default 1): credentials must survive repo updates. Every
+# .env currently in the workspace is snapshotted before the new tree lands
+# and copied back to its original location afterwards, so a repo-shipped .env
+# can never clobber or wipe live credentials and the database project keeps
+# working. Set GIT_PRESERVE_ENV=0 to let the repository's .env files win.
+_pf_sync_preserve_env_enabled() {
+    [ "${GIT_PRESERVE_ENV:-1}" = "1" ]
+}
+
+_pf_sync_snapshot_env() { # _pf_sync_snapshot_env <workspace> <backup-dir>
+    _pf_sync_preserve_env_enabled || return 0
+    rm -rf "$2" 2>/dev/null || true
+    mkdir -p "$2" 2>/dev/null || return 0
+    ( cd "$1" 2>/dev/null || exit 0
+      find . -type f -name .env -not -path './archive/*' -not -path './.git-sync/*' \
+             -not -path './.runtimes/*' -not -path './node_modules/*' 2>/dev/null | sed 's#^\./##'
+    ) 2>/dev/null | while IFS= read -r _rel; do
+        [ -n "${_rel}" ] || continue
+        mkdir -p "$2/$(dirname "${_rel}")" 2>/dev/null || true
+        cp -f "$1/${_rel}" "$2/${_rel}" 2>/dev/null || true
+    done
+}
+
+_pf_sync_restore_env() { # _pf_sync_restore_env <workspace> <backup-dir>
+    _pf_sync_preserve_env_enabled || return 0
+    [ -d "$2" ] || return 0
+    local _restored=0 _rel
+    while IFS= read -r _rel; do
+        [ -n "${_rel}" ] || continue
+        mkdir -p "$1/$(dirname "${_rel}")" 2>/dev/null || true
+        if cp -f "$2/${_rel}" "$1/${_rel}" 2>/dev/null; then
+            _restored=$((_restored + 1))
+        fi
+    done < <( cd "$2" 2>/dev/null && find . -type f 2>/dev/null | sed 's#^\./##' )
+    if [ "${_restored}" -gt 0 ]; then
+        ok "Preserved ${_restored} existing .env file(s) across the update (GIT_PRESERVE_ENV)."
+    fi
+    rm -rf "$2" 2>/dev/null || true
+    return 0
+}
+
+# ---------------------------------------------------------------------------
+# GIT_EXCLUDE: user-configurable, whitespace/comma-separated glob patterns
+# (matched against repo-relative paths) that git sync must never install or
+# overwrite - e.g. GIT_EXCLUDE="config/custom/* secrets". Everything else is
+# synced normally.
+_pf_sync_is_user_excluded() { # _pf_sync_is_user_excluded <relative-path>
+    local _pat
+    local _list="${GIT_EXCLUDE:-}"
+    for _pat in ${_list//,/ }; do
+        case "${1}" in
+            ${_pat}|${_pat}/*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
 # Accepts 'owner/repo', 'https://github.com/owner/repo(.git)', with optional
 # 'git@github.com:owner/repo.git' SSH form rewritten to https. Prints the
 # normalized https URL and host kind ('github'|'generic') separated by a space.
@@ -334,6 +392,7 @@ sync_git_repo() {
     fi
 
     # --- Install staged tree into the workspace ------------------------------
+    _pf_sync_snapshot_env "${SERVER_DIR}" "${state_dir}/env-backup"
     local new_manifest="${state_dir}/.manifest.new"
     : > "${new_manifest}" 2>/dev/null || true
     local rel
@@ -346,11 +405,29 @@ sync_git_repo() {
             warn "Git sync: skipping protected path '${rel}' (managed by the runtime)."
             continue
         fi
+        if _pf_sync_is_user_excluded "${rel}"; then
+            warn "Git sync: skipping '${rel}' (matched GIT_EXCLUDE)."
+            continue
+        fi
         rm -rf "${SERVER_DIR:?}/${rel}" 2>/dev/null || true
         if cp -a "${stage}/out/${rel}" "${SERVER_DIR}/${rel}" 2>/dev/null; then
             printf '%s\n' "${rel}" >> "${new_manifest}"
         fi
+        # GIT_EXCLUDE sub-path pruning: this engine installs top-level dirs
+        # wholesale, so a copied dir may contain paths the user excluded -
+        # remove them right after the copy lands.
+        if [ -n "${GIT_EXCLUDE:-}" ]; then
+            (
+                cd "${SERVER_DIR}/${rel}" 2>/dev/null || exit 0
+                find . -mindepth 1 2>/dev/null | sed 's#^\./##'
+            ) 2>/dev/null | while IFS= read -r _sub; do
+                if _pf_sync_is_user_excluded "${rel}/${_sub}"; then
+                    rm -rf "${SERVER_DIR:?}/${rel}/${_sub}" 2>/dev/null || true
+                fi
+            done
+        fi
     done
+    _pf_sync_restore_env "${SERVER_DIR}" "${state_dir}/env-backup"
 
     # Roll-forward safety: manifest must exist and be non-empty for a code repo.
     if [ -s "${new_manifest}" ]; then

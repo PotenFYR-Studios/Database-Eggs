@@ -30,6 +30,20 @@ ENV DEBIAN_FRONTEND=noninteractive \
     RUNTIME_VARIANT=${RUNTIME_VARIANT} \
     PATH="/home/container/bin:/home/container/.runtimes/bin:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/usr/local/bin:/usr/bin:/bin:${PATH}"
 
+# Slim pull size at the dpkg layer: never unpack man pages, HTML docs,
+# lintian metadata or non-English locales (copyright files, English and the
+# locale alias stay). Applied before every install below; no runtime impact.
+RUN printf '%s\n' \
+    'path-exclude=/usr/share/doc/*' \
+    'path-include=/usr/share/doc/*/copyright' \
+    'path-exclude=/usr/share/man/*' \
+    'path-exclude=/usr/share/info/*' \
+    'path-exclude=/usr/share/lintian/*' \
+    'path-exclude=/usr/share/locale/*' \
+    'path-include=/usr/share/locale/en*' \
+    'path-include=/usr/share/locale/locale.alias' \
+    > /etc/dpkg/dpkg.cfg.d/01-potenfyr-slim
+
 # Install common system dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates \
@@ -129,9 +143,11 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
                 && make -C /tmp/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli >/dev/null 2>&1 \
                 && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
                 && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
-                && rm -rf /tmp/redis-stable* || true; \
+                && rm -rf /tmp/redis-stable* \
+                && rm -rf /var/lib/apt/lists/* || true; \
         fi; \
     fi; \
+    rm -rf /*.deb /root/*.deb /root/.surrealdb /root/.cache /tmp/* /var/tmp/* 2>/dev/null || true; \
     chmod +x /usr/local/bin/* 2>/dev/null || true
 
 # Create container users and configure permissions for dynamic UID mapping (OpenShift/Pterodactyl/Docker)
@@ -151,7 +167,8 @@ COPY entrypoint.sh /entrypoint.sh
 COPY run.sh /usr/local/bin/run.sh
 COPY scripts/ /usr/local/bin/
 
-RUN chmod +x /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/*.sh 2>/dev/null || true
+RUN sed -i 's/\r$//' /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/*.sh 2>/dev/null || true \
+    && chmod +x /entrypoint.sh /usr/local/bin/run.sh /usr/local/bin/*.sh 2>/dev/null || true
 
 USER container
 ENV USER=container HOME=/home/container PATH="/home/container/bin:/home/container/.runtimes/bin:${PATH}"
