@@ -397,6 +397,12 @@ prepare_data_instance
 if command -v sync_git_repo >/dev/null 2>&1; then
     sync_git_repo
 fi
+# Git Auto-Update: while the server runs, poll for new commits, sync them into
+# the workspace and tell the operator to restart to load them (the running
+# database daemon is never killed automatically). GIT_AUTO_UPDATE=0 disables.
+if command -v start_git_update_watcher >/dev/null 2>&1; then
+    start_git_update_watcher
+fi
 
 # ---------------------------------------------------------------------------
 # Strict Version Verification (no silent downgrades, ever)
@@ -695,6 +701,12 @@ _do_graceful_shutdown() {
     printf "\n"
     log "Shutdown event (${sig}) received. Gracefully stopping ${PROJECT_TYPE^^}..."
 
+    # Terminate the Git Auto-Update watcher immediately
+    if [ -n "${GIT_AUTO_UPDATE_PID:-}" ] && kill -0 "${GIT_AUTO_UPDATE_PID}" 2>/dev/null; then
+        kill -9 "${GIT_AUTO_UPDATE_PID}" 2>/dev/null || true
+        GIT_AUTO_UPDATE_PID=""
+    fi
+
     # Terminate background stdin listener immediately
     if [ -n "${STDIN_READER_PID:-}" ] && kill -0 "${STDIN_READER_PID}" 2>/dev/null; then
         kill -9 "${STDIN_READER_PID}" 2>/dev/null || true
@@ -786,7 +798,11 @@ supervise_daemon() {
                 # Dup console stdin to fd 3 in the main shell before backgrounding
                 # - spawn-time redirections on background jobs do not survive on
                 # some daemon/container runtimes (observed EOF-on-read otherwise).
-                exec 3<&0 2>/dev/null || true
+                # NOTE: exec redirections are PERMANENT for the shell - a
+                # `2>/dev/null` here silently re-pointed the launcher's (and
+                # the daemon's) stderr to /dev/null for the whole run. The
+                # subshell probe above already guarantees this dup succeeds.
+                exec 3<&0
                 (
                     local line clean_cmd
                     while IFS= read -r -u 3 line || [ -n "${line}" ]; do
@@ -812,7 +828,9 @@ supervise_daemon() {
                 STDIN_READER_PID=$!
                 # The watcher subshell holds its own dup; close ours so the dup is
                 # not inherited by every child the launcher spawns afterwards.
-                exec 3>&- 2>/dev/null || true
+                # (Plain close - a `2>/dev/null` on exec would permanently
+                # re-point the launcher's stderr to /dev/null.)
+                exec 3>&-
             fi
         fi
     fi

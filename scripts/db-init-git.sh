@@ -51,11 +51,17 @@ EOF
 # Accepts 'owner/repo', 'https://github.com/owner/repo(.git)', with optional
 # 'git@github.com:owner/repo.git' SSH form rewritten to https. Prints the
 # normalized https URL and host kind ('github'|'generic') separated by a space.
+# file:// and loopback http(s) URLs pass through untouched (kind=generic) so
+# self-hosted GitLab/Gitea instances and hermetic tests work.
 _pf_sync_normalize_url() {
     local raw="$1" url kind="generic" host
     raw="${raw%%#*}"; raw="${raw%%\?*}"
     raw="${raw%.git}"
     case "${raw}" in
+        file://*)
+            printf '%s generic\n' "${raw}"; return 0 ;;
+        http://localhost[:/]*|http://127.0.0.1[:/]*|https://localhost[:/]*|https://127.0.0.1[:/]*)
+            printf '%s generic\n' "${raw}"; return 0 ;;
         http://*)  raw="${raw#http://}" ;;
         https://*) raw="${raw#https://}" ;;
         ssh://*)   raw="${raw#ssh://}" ;;
@@ -79,22 +85,52 @@ _pf_sync_auth_header() { # prints curl-style auth header args when a token is se
     fi
 }
 
+# Isolated global git config for every git call we make: marks arbitrary
+# staging dirs safe (git >= 2.35.2 refuses repos owned by a different uid,
+# which silently blocked updates on root-installed/panel-booted servers) and
+# pins a sane default branch for inits. MERGES the user's real global config.
+_pf_sync_git_env() {
+    if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
+        local _cfg
+        _cfg="$(mktemp 2>/dev/null || echo "/tmp/potenfyr-gitconfig.$$")"
+        {
+            [ -f "${HOME}/.gitconfig" ] && cat "${HOME}/.gitconfig" 2>/dev/null
+            printf '[safe]\n\tdirectory = *\n'
+            printf '[init]\n\tdefaultBranch = main\n'
+        } > "${_cfg}" 2>/dev/null || true
+        export GIT_CONFIG_GLOBAL="${_cfg}"
+    fi
+}
+
+# git auth args from GIT_TOKEN. When $1 is "anon" an EMPTY array is printed
+# usage path - callers retry anonymously so a revoked/expired token cannot
+# take PUBLIC repositories down with it (a 401 challenge recovers, a 404
+# "not found" for token-less repos does not).
+_pf_sync_git_auth() { # prints "-c key=value" args; pass "anon" to skip auth
+    if [ "${1:-}" != "anon" ] && [ -n "${GIT_TOKEN:-}" ]; then
+        printf '%s\n' "-c" "http.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "${GIT_TOKEN}" | base64 2>/dev/null | tr -d '\n')"
+    fi
+}
+
 # Latest remote commit sha for the tracked branch. Prints the sha on stdout.
 _pf_sync_remote_head() { # _pf_sync_remote_head <url> <kind> <branch>
     local url="$1" kind="$2" branch="$3" sha=""
     if command -v git >/dev/null 2>&1; then
-        local reflist
-        local -a git_auth=()
-        if [ -n "${GIT_TOKEN:-}" ]; then
-            git_auth=(-c "http.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "${GIT_TOKEN}" | base64 2>/dev/null | tr -d '\n')")
-        fi
+        local reflist auth_args
+        _pf_sync_git_env
+        auth_args=($(_pf_sync_git_auth))
         local ref="HEAD"
         [ -n "${branch}" ] && ref="refs/heads/${branch}"
-        reflist=$(git "${git_auth[@]}" ls-remote "${url}" "${ref}" 2>/dev/null)
+        reflist=$(git "${auth_args[@]}" ls-remote "${url}" "${ref}" 2>/dev/null)
+        if [ -z "${reflist}" ] && [ -n "${GIT_TOKEN:-}" ]; then
+            # Authenticated ls-remote failed - retry anonymously so a
+            # revoked/expired token cannot break PUBLIC repositories.
+            reflist=$(git $(_pf_sync_git_auth anon) ls-remote "${url}" "${ref}" 2>/dev/null)
+        fi
         sha=$(printf '%s' "${reflist}" | awk 'NR==1{print $1}')
         if [ -z "${sha}" ] && [ -z "${branch}" ]; then
             # Some servers do not resolve symref HEAD; fall back to refs/heads/*
-            sha=$(git "${git_auth[@]}" ls-remote "${url}" 2>/dev/null | awk '/refs\/heads\//{print $1; exit}')
+            sha=$(git $(_pf_sync_git_auth) ls-remote "${url}" 2>/dev/null | awk '/refs\/heads\//{print $1; exit}')
         fi
         [ -n "${sha}" ] && { printf '%s' "${sha}"; return 0; }
     fi
@@ -200,14 +236,23 @@ sync_git_repo() {
         else
             warn "Could not reach the repository and no synced code exists yet - continuing without repo content."
         fi
-        return 0
+        return 1
     fi
 
-    # Up to date: same repo, same commit, code actually present.
+    # Up to date: same repo, same commit, code actually still present.
+    # The manifest is re-verified against the workspace: a panel file-manager
+    # deletion or a failed earlier extract must not be mistaken for "current".
     if [ "${has_manifest}" = "1" ] && [ "${last_repo}" = "${url}" ] \
        && [ -n "${remote_head}" ] && [ "${last_commit}" = "${remote_head}" ]; then
-        ok "Repository code is up to date (commit ${remote_head:0:9})."
-        return 0
+        local mf present=0
+        while IFS= read -r mf; do
+            [ -n "${mf}" ] && [ -e "${SERVER_DIR}/${mf}" ] && { present=1; break; }
+        done < "${m_manifest}"
+        if [ "${present}" = "1" ]; then
+            ok "Repository code is up to date (commit ${remote_head:0:9})."
+            return 0
+        fi
+        warn "Synced files are missing from the workspace although the commit matches - re-downloading."
     fi
 
     # --- Update path: archive current synced code before replacing it --------
@@ -252,13 +297,19 @@ sync_git_repo() {
     stage=$(mktemp -d 2>/dev/null) || { warn "Git sync: mktemp failed - keeping current code."; return 0; }
     local dl_ok=0
     if command -v git >/dev/null 2>&1; then
-        local -a git_auth=()
-        if [ -n "${GIT_TOKEN:-}" ]; then
-            git_auth=(-c "http.extraheader=Authorization: Basic $(printf 'x-access-token:%s' "${GIT_TOKEN}" | base64 2>/dev/null | tr -d '\n')")
-        fi
+        _pf_sync_git_env
         local -a clone_args=(--depth 1 --single-branch)
         [ -n "${branch}" ] && clone_args+=(--branch "${branch}")
-        if git "${git_auth[@]}" clone "${clone_args[@]}" "${url}" "${stage}/repo" >/dev/null 2>&1; then
+        if git $(_pf_sync_git_auth) clone "${clone_args[@]}" "${url}" "${stage}/repo" >/dev/null 2>&1; then
+            :
+        elif [ -n "${GIT_TOKEN:-}" ] \
+                && git $(_pf_sync_git_auth anon) clone "${clone_args[@]}" "${url}" "${stage}/repo" >/dev/null 2>&1; then
+            # Authenticated clone failed - anonymous clone succeeded: the
+            # repository is public and the token is dead/insufficient. The
+            # public content still updates (log it so admins notice).
+            warn "Authenticated download failed - public repository synced without the token (check GIT_TOKEN)."
+        fi
+        if [ -d "${stage}/repo" ]; then
             rm -rf "${stage}/repo/.git" 2>/dev/null || true
             # Moving the tree root would hit protected dirs; copy contents instead.
             mkdir -p "${stage}/out"
@@ -278,7 +329,7 @@ sync_git_repo() {
             else
                 warn "Download failed - continuing without repo content."
             fi
-            return 0
+            return 1
         fi
     fi
 
@@ -311,7 +362,48 @@ sync_git_repo() {
     else
         rm -f "${new_manifest}"
         warn "Nothing was extracted from the repository (empty tree?) - workspace left unchanged."
+        return 1
     fi
     rm -rf "${stage}" 2>/dev/null || true
     return 0
+}
+
+# ---------------------------------------------------------------------------
+# Git Auto-Update watcher: keep repo-managed files current while the server
+# runs. Database daemons load code/config at start, so new commits are synced
+# into the workspace immediately and a one-time console notice tells the
+# operator a restart is needed to load them - the running daemon is never
+# killed automatically (data safety first). Disable with GIT_AUTO_UPDATE=0;
+# cadence via GIT_POLL_SECONDS (30-86400, default 300).
+# ---------------------------------------------------------------------------
+run_git_update_watcher() {
+    local poll="${GIT_POLL_SECONDS:-300}"
+    case "${poll}" in ''|*[!0-9]*) poll=300 ;; esac
+    [ "${poll}" -lt 30 ] && poll=30
+    [ "${poll}" -gt 86400 ] && poll=86400
+    local fails=0
+    while :; do
+        sleep "${poll}"
+        if sync_git_repo; then
+            fails=0
+        else
+            fails=$((fails + 1))
+            [ "${fails}" = "1" ] && warn "Git Auto-Update: poll failed - will keep retrying quietly (see .logs/launcher-errors.log)."
+        fi
+    done
+}
+
+start_git_update_watcher() {
+    [ "${GIT_AUTO_UPDATE:-1}" = "1" ] || return 0
+    [ -n "${GIT_REPO_URL:-}" ] || return 0
+    command -v git >/dev/null 2>&1 || return 0
+    (
+        run_git_update_watcher
+    ) &
+    GIT_AUTO_UPDATE_PID=$!
+    local poll="${GIT_POLL_SECONDS:-300}"
+    case "${poll}" in ''|*[!0-9]*) poll=300 ;; esac
+    [ "${poll}" -lt 30 ] && poll=30
+    [ "${poll}" -gt 86400 ] && poll=86400
+    ok "Git Auto-Update watcher active (polling every ${poll}s; new commits are synced - restart to load them)."
 }
