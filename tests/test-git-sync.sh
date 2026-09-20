@@ -33,6 +33,7 @@ _egg_error_log() { :; }
 source scripts/db-init-git.sh
 
 commit() { # commit FILE CONTENT MSG
+    mkdir -p "${WT}/$(dirname "$1")" 2>/dev/null || true
     printf '%s\n' "$2" > "${WT}/$1"
     ${G} -C "${WT}" add -A >/dev/null
     ${G} -C "${WT}" commit -qm "$3" >/dev/null
@@ -109,6 +110,33 @@ echo "--- T10: bad owner/repo shorthand keeps code, is non-fatal ---"
 GIT_REPO_URL="definitely-not-a-real-user-xyz-987654/nope"
 sync_git_repo >/dev/null 2>&1 && t_fail "bad shorthand reported success" || t_pass "bad shorthand signalled"
 [ -f "${SERVER_DIR}/app-config.yml" ] && t_pass "code kept after bad shorthand" || t_fail "code lost"
+
+echo "--- T10: GIT_PRESERVE_ENV keeps live .env credentials across updates ---"
+GIT_REPO_URL="file://${REPO}"
+mkdir -p "${SERVER_DIR}/apps/web"
+printf 'DB_PASSWORD=live-secret\n' > "${SERVER_DIR}/.env"
+printf 'SERVICE_KEY=live-service-secret\n' > "${SERVER_DIR}/apps/web/.env"
+commit ".env" "DB_PASSWORD=repo-override" "c9 repo env"
+commit "apps/web/.env" "SERVICE_KEY=repo-service-override" "c9 service env"
+sync_git_repo || t_fail ".env update sync failed"
+grep -q "live-secret" "${SERVER_DIR}/.env" && t_pass "root .env preserved (old credentials win)" || t_fail "root .env clobbered"
+grep -q "live-service-secret" "${SERVER_DIR}/apps/web/.env" && t_pass "sub-path .env restored in its original location" || t_fail "sub-path .env clobbered"
+
+echo "--- T11: GIT_PRESERVE_ENV=0 lets the repository's .env win ---"
+GIT_PRESERVE_ENV=0
+commit "apps/web/.env" "SERVICE_KEY=repo-service-new" "c10 repo env update"
+sync_git_repo || t_fail "opt-out sync failed"
+grep -q "repo-service-new" "${SERVER_DIR}/apps/web/.env" && t_pass "repo .env wins when opted out" || t_fail "repo .env not applied"
+unset GIT_PRESERVE_ENV
+
+echo "--- T12: GIT_EXCLUDE keeps user paths out of the sync ---"
+GIT_EXCLUDE="apps/keep"
+commit "apps/keep/user.txt" "should-not-land" "c11 excluded"
+commit "apps/web/app.py" "v2-content" "c11 tracked update"
+sync_git_repo || t_fail "exclusion sync failed"
+grep -q "should-not-land" "${SERVER_DIR}/apps/keep/user.txt" && t_fail "GIT_EXCLUDE ignored" || t_pass "excluded path never installed"
+grep -q "v2-content" "${SERVER_DIR}/apps/web/app.py" && t_pass "non-excluded paths still sync" || t_fail "exclusion broke normal sync"
+unset GIT_EXCLUDE
 
 rm -rf "${SANDBOX}"
 echo
