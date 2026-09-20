@@ -157,9 +157,24 @@ Built by **[PotenFYR Studios](https://github.com/PotenFYR-Studios)** · [potenfy
 
 Every public PotenFYR Studios repository on one live chart, served by [star-history.com](https://star-history.com).
 
-## Contributing
+## 📫 Connect With Us
 
-Contributions make the open-source community such an amazing place to learn, inspire and create. Any contributions you make are **greatly appreciated** - see [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issues](https://github.com/PotenFYR-Studios/Database-Eggs/labels/good%20first%20issue). Security concerns: please use [SECURITY.md](SECURITY.md) (private vulnerability reporting), not public issues.
+<div align="center">
+
+[![GitHub](https://img.shields.io/badge/GitHub-PotenFYR--Studios-181717?style=for-the-badge&logo=github&labelColor=1c1e26)](https://github.com/PotenFYR-Studios)
+[![Website](https://img.shields.io/badge/Website-potenfyr.in-8b5cf6?style=for-the-badge&logo=googlechrome&labelColor=1c1e26)](https://potenfyr.in)
+[![Community](https://img.shields.io/badge/Community-Discord-5865F2?style=for-the-badge&logo=discord&labelColor=1c1e26)](https://discord.com/invite/zUaN2FPBec)
+[![Modrinth](https://img.shields.io/badge/Modrinth-Organization-1bd96a?style=for-the-badge&logo=modrinth&labelColor=1c1e26)](https://modrinth.com/organization/potenfyr)
+
+</div>
+
+## 🎯 Vision
+
+✨ **Universal** (one egg, 50+ engines) · ⚡ **Performant** (hardware-aware auto-tuning) · 🔒 **Secure** (zero-leak credentials) · 🤝 **Panel-Agnostic** (Pterodactyl · Pelican · Feather · Wisp · Docker)
+
+## 👥 Contributors
+
+Contributions are **greatly appreciated** - see [CONTRIBUTING.md](CONTRIBUTING.md) and the [good first issues](https://github.com/PotenFYR-Studios/Database-Eggs/labels/good%20first%20issue). Security concerns: please use [SECURITY.md](SECURITY.md) (private vulnerability reporting), not public issues.
 
 <a href="https://github.com/PotenFYR-Studios/Database-Eggs/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=PotenFYR-Studios/Database-Eggs" alt="Database-Eggs contributors" />
