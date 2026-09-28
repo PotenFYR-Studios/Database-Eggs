@@ -64,3 +64,8 @@ jobs:
           done
           shopt -u nullglob
           echo "All shell scripts passed syntax check."
+
+      - name: Unit-test Redis defrag capability probe
+        run: |
+          chmod +x tests/test-redis-defrag.sh
+          ./tests/test-redis-defrag.sh

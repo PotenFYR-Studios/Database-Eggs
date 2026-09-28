@@ -123,6 +123,54 @@ pf_redis_server_bin() {
     esac
 }
 
+# Runtime capability probe: can this exact binary start with activedefrag
+# enabled? Builds shipping defrag-capable jemalloc stay up; libc-malloc
+# builds (distro packages and our MALLOC=libc source builds) die with a
+# FATAL CONFIG FILE ERROR before binding any port. TCP (--port 0) and
+# persistence (--save "", --appendonly no) are disabled, so the probe is
+# side-effect free and port-conflict free.
+pf_redis_supports_defrag() { # pf_redis_supports_defrag <server-bin>
+    local bin="$1"
+    [ -x "${bin}" ] || return 1
+    local probe_dir="${SERVER_DIR:-/tmp}/.defrag-probe.$$"
+    mkdir -p "${probe_dir}" 2>/dev/null || probe_dir="$(mktemp -d 2>/dev/null || printf '/tmp')"
+    "${bin}" --activedefrag yes --port 0 --save "" --appendonly no \
+        --daemonize no --dir "${probe_dir}" >/dev/null 2>&1 &
+    local probe_pid=$!
+    # A config-parse fatal exits within moments; a healthy daemon is still
+    # alive after the grace window. Poll in short slices for a fast verdict.
+    local waited=0 rc=1
+    while [ "${waited}" -lt 20 ]; do
+        kill -0 "${probe_pid}" 2>/dev/null || break
+        sleep 0.1
+        waited=$((waited + 1))
+    done
+    if kill -0 "${probe_pid}" 2>/dev/null; then
+        rc=0 # still running: the directive parsed cleanly
+    fi
+    kill "${probe_pid}" 2>/dev/null || true
+    wait "${probe_pid}" 2>/dev/null || true
+    rm -rf "${probe_dir}" 2>/dev/null || true
+    return "${rc}"
+}
+
+# Resolve the activedefrag directive block for this boot: tuning must want
+# it AND the binary that will run must support it (probed live). An explicit
+# REDIS_ACTIVE_DEFRAG=yes that cannot be honored is reported once; the
+# auto-tuned default degrades silently, since skipping is always safe.
+pf_redis_defrag_lines() { # pf_redis_defrag_lines <server-bin> -> stdout
+    local defrag_bin="$1"
+    [ "${TUNED_REDIS_ACTIVE_DEFRAG:-no}" = "yes" ] || return 1
+    [ -x "${defrag_bin}" ] || return 1
+    if ! pf_redis_supports_defrag "${defrag_bin}"; then
+        if [ "${REDIS_ACTIVE_DEFRAG:-auto}" = "yes" ]; then
+            warn "REDIS_ACTIVE_DEFRAG=yes was requested, but the ${PROJECT_TYPE} binary lacks defrag-capable jemalloc; the directive would be FATAL and was skipped."
+        fi
+        return 1
+    fi
+    printf 'activedefrag yes\nactive-defrag-ignore-bytes 100mb\nactive-defrag-threshold-lower 10\nactive-defrag-threshold-upper 100'
+}
+
 init_redis_family() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
@@ -141,22 +189,19 @@ init_redis_family() {
         export TUNED_REDIS_ACTIVE_DEFRAG="no"
     fi
 
-    # activedefrag requires jemalloc-with-defrag builds. Our provisioned
-    # source builds support it; distro packages (Ubuntu redis 6.x) do NOT and
-    # treat the directive as FATAL. Emit it only when we own the binary.
+    # activedefrag requires a server binary compiled with defrag-capable
+    # jemalloc. Distro packages AND our own MALLOC=libc source builds do not
+    # support it and treat the directive as FATAL - so a provisioned binary
+    # proves nothing. Probe the exact binary that will run before emitting
+    # the directives.
     local defrag_bin=""
     case "${PROJECT_TYPE}" in
         valkey)      defrag_bin="${SERVER_DIR}/bin/valkey-server" ;;
         keydb)       defrag_bin="${SERVER_DIR}/bin/keydb-server" ;;
         *)           defrag_bin="${SERVER_DIR}/bin/redis-server" ;;
     esac
-    local defrag_line=""
-    if [ -x "${defrag_bin}" ] && [ "${TUNED_REDIS_ACTIVE_DEFRAG:-no}" = "yes" ]; then
-        defrag_line="activedefrag yes
-active-defrag-ignore-bytes 100mb
-active-defrag-threshold-lower 10
-active-defrag-threshold-upper 100"
-    fi
+    local defrag_line
+    defrag_line=$(pf_redis_defrag_lines "${defrag_bin}")
     # SECURITY_HARDENING=1 (default) disables DEBUG-style commands;
     # =0 keeps them available for development sessions.
     local harden_line=""
@@ -226,10 +271,13 @@ EOF
         pf_redis_conf_set "${redis_conf}" "io-threads" "${TUNED_REDIS_IO_THREADS}"
         pf_redis_conf_set "${redis_conf}" "tcp-backlog" "${TUNED_REDIS_TCP_BACKLOG:-511}"
         # Keep defrag directives in sync with the binary that will run:
-        # strip always, re-add only when our jemalloc build is in use.
+        # strip always, re-add only when that binary actually supports them
+        # (probed live - MALLOC=libc builds would die a FATAL death).
         sed -i "/^activedefrag/d; /^active-defrag-/d" "${redis_conf}" 2>/dev/null || true
-        if [ -x "${defrag_bin}" ] && [ "${TUNED_REDIS_ACTIVE_DEFRAG:-no}" = "yes" ]; then
-            printf '\nactivedefrag yes\nactive-defrag-ignore-bytes 100mb\nactive-defrag-threshold-lower 10\nactive-defrag-threshold-upper 100\n' >> "${redis_conf}"
+        local defrag_sync
+        defrag_sync=$(pf_redis_defrag_lines "${defrag_bin}") || true
+        if [ -n "${defrag_sync}" ]; then
+            printf '\n%s\n' "${defrag_sync}" >> "${redis_conf}"
         fi
         if [ -n "${DB_PASSWORD:-}" ]; then
             pf_redis_conf_set "${redis_conf}" "requirepass" "$(pf_redis_conf_quote "${DB_PASSWORD}")"
