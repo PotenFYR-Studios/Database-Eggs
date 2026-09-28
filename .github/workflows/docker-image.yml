@@ -15,6 +15,12 @@ env:
 permissions:
   contents: read
 
+# Queue runs instead of overlapping them: the registry-hygiene job of one
+# run deletes untagged per-arch digests and would otherwise race the next
+# run's freshly pushed (not yet merged) manifests.
+concurrency:
+  group: ${{ github.workflow }}
+
 jobs:
   # Per-architecture native builds. amd64 and arm64 run on native runners
   # (no QEMU - arm64 used to emulate for every push); the exotic arches
