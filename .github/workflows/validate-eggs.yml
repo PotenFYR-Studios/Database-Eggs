@@ -69,3 +69,8 @@ jobs:
         run: |
           chmod +x tests/test-redis-defrag.sh
           ./tests/test-redis-defrag.sh
+
+      - name: Hermetic git-sync engine tests (no network)
+        run: |
+          chmod +x tests/test-git-sync.sh
+          ./tests/test-git-sync.sh
