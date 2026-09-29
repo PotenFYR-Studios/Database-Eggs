@@ -138,6 +138,22 @@ grep -q "should-not-land" "${SERVER_DIR}/apps/keep/user.txt" && t_fail "GIT_EXCL
 grep -q "v2-content" "${SERVER_DIR}/apps/web/app.py" && t_pass "non-excluded paths still sync" || t_fail "exclusion broke normal sync"
 unset GIT_EXCLUDE
 
+echo "--- T13: GIT_SYNC_QUIET quiet poll is silent when unchanged ---"
+GIT_REPO_URL="file://${REPO}"
+out=$(GIT_SYNC_QUIET=1 sync_git_repo 2>&1)
+[ -z "${out}" ] && t_pass "unchanged poll printed nothing" || t_fail "quiet poll was noisy: ${out}"
+
+echo "--- T14: quiet poll announces the new commit with details ---"
+commit app-config.yml "key: value4" "quiet update commit"
+out=$(GIT_SYNC_QUIET=1 sync_git_repo 2>&1)
+printf '%s' "${out}" | grep -qi "new commits detected" && t_pass "poll announced the new commit" || t_fail "no new-commit notice: ${out}"
+printf '%s' "${out}" | grep -q "quiet update commit" && t_pass "poll announced the commit subject" || t_fail "commit subject missing: ${out}"
+grep -q "value4" "${SERVER_DIR}/app-config.yml" && t_pass "update applied" || t_fail "update not applied"
+
+echo "--- T15: GIT_AUTO_UPDATE=0 is a silent no-op (poller optional, off) ---"
+out=$(GIT_AUTO_UPDATE=0 GIT_REPO_URL="file://${REPO}" start_git_update_watcher 2>&1)
+[ -z "${out}" ] && t_pass "auto-update off started nothing and stayed silent" || t_fail "auto-update off was noisy: ${out}"
+
 rm -rf "${SANDBOX}"
 echo
 echo "Results: $PASS passed, $FAIL failed"

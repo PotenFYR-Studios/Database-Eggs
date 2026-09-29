@@ -170,6 +170,29 @@ _pf_sync_git_auth() { # prints "-c key=value" args; pass "anon" to skip auth
     fi
 }
 
+# GitHub head lookup over HTTPS for images WITHOUT a git binary (the slim
+# images ship git-less on purpose). The commits Atom feed is preferred for
+# public repositories because it is NOT rate limited: the anonymous commits
+# API allows only 60 req/h per IP, which several servers sharing one panel
+# node can exhaust - after that the poller silently stops seeing commits.
+_pf_sync_github_api_head() { # _pf_sync_github_api_head <url> <branch>
+    local repo_path="${1#https://github.com/}" api commit_body sha
+    api="https://api.github.com/repos/${repo_path}/commits"
+    [ -n "${2:-}" ] && api="${api}/${2}" || api="${api}/HEAD"
+    commit_body=$(_pf_fetch "${api}") || return 1
+    sha=$(printf '%s' "${commit_body}" | _json_field '"sha"')
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
+
+_pf_sync_github_atom_head() { # _pf_sync_github_atom_head <url> <branch>
+    local repo_path="${1#https://github.com/}" ref="${2:-HEAD}" feed sha
+    feed=$(_pf_fetch "https://github.com/${repo_path}/commits/${ref}.atom") || return 1
+    sha=$(printf '%s' "${feed}" | grep -oE 'Grit::Commit/[0-9a-f]{40}' | head -n1 | cut -d/ -f2)
+    [ -n "${sha}" ] || return 1
+    printf '%s' "${sha}"
+}
+
 # Latest remote commit sha for the tracked branch. Prints the sha on stdout.
 _pf_sync_remote_head() { # _pf_sync_remote_head <url> <kind> <branch>
     local url="$1" kind="$2" branch="$3" sha=""
@@ -194,14 +217,17 @@ _pf_sync_remote_head() { # _pf_sync_remote_head <url> <kind> <branch>
     fi
     case "${kind}" in
         github)
-            local repo_path="${url#https://github.com/}" api commit_body
-            api="https://api.github.com/repos/${repo_path}"
-            [ -n "${branch}" ] && api="${api}/commits/${branch}" || api="${api}/commits/HEAD"
-            commit_body=$(_pf_fetch "${api}") || return 1
-            sha=$(printf '%s' "${commit_body}" | _json_field '"sha"')
-            [ -n "${sha}" ] || return 1
-            printf '%s' "${sha}"
-            return 0
+            # No usable git binary: HTTPS fallbacks. A configured token means
+            # the repository may be private (the Atom feed cannot read those),
+            # so the authenticated API goes first in that case.
+            if [ -n "${GIT_TOKEN:-}" ]; then
+                _pf_sync_github_api_head "${url}" "${branch}" \
+                    || _pf_sync_github_atom_head "${url}" "${branch}"
+            else
+                _pf_sync_github_atom_head "${url}" "${branch}" \
+                    || _pf_sync_github_api_head "${url}" "${branch}"
+            fi
+            return $?
             ;;
     esac
     return 1
@@ -234,6 +260,51 @@ _pf_fetch() { # _pf_fetch <url> [outfile] - authenticated fetch via curl or wget
 # Extract a JSON string field without jq (first match).
 _json_field() {
     grep -oE "${1}\"[[:space:]]*:[[:space:]]*\"[^\"]*\"" | head -n1 | sed -E "s/.*\"[^\"]*\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/"
+}
+
+# Best-effort one-line description of the newest commit for the console
+# notification. Prints e.g.:
+#   9e2568b "ci: serialize image workflow runs" - DawnOfDedSec, 2026-09-28
+# Uses the authenticated API when GIT_TOKEN is set (private repos), else the
+# rate-limit-free commits Atom feed. Prints nothing when the repository cannot
+# be described - the caller then shows the plain sha.
+_pf_sync_commit_info() { # _pf_sync_commit_info <url> <kind> <branch>
+    local url="$1" kind="$2" branch="$3" repo_path body entry sha msg author date
+    [ "${kind}" = "github" ] || return 0
+    repo_path="${url#https://github.com/}"
+
+    if [ -n "${GIT_TOKEN:-}" ]; then
+        body=$(_pf_fetch "https://api.github.com/repos/${repo_path}/commits/${branch:-HEAD}" 2>/dev/null) || body=""
+        if [ -n "${body}" ]; then
+            sha=$(printf '%s' "${body}" | _json_field '"sha"')
+            msg=$(printf '%s' "${body}" | grep -oE '"message"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/^"message"[[:space:]]*:[[:space:]]*"//; s/"$//')
+            author=$(printf '%s' "${body}" | grep -oE '"name"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/^"name"[[:space:]]*:[[:space:]]*"//; s/"$//')
+            date=$(printf '%s' "${body}" | grep -oE '"date"[[:space:]]*:[[:space:]]*"[^"]*"' | head -n1 | sed -E 's/^"date"[[:space:]]*:[[:space:]]*"//; s/"$//' | cut -dT -f1)
+            if [ -n "${sha}" ]; then
+                printf '%s "%s" - %s, %s' "${sha:0:9}" "${msg}" "${author}" "${date}"
+                return 0
+            fi
+        fi
+    fi
+
+    body=$(_pf_fetch "https://github.com/${repo_path}/commits/${branch:-HEAD}.atom" 2>/dev/null) || return 0
+    entry=$(printf '%s' "${body}" | awk '/<entry>/{f=1} f{print} /<\/entry>/{exit}')
+    [ -n "${entry}" ] || return 0
+    sha=$(printf '%s' "${entry}" | grep -oE 'commit/[0-9a-f]{40}' | head -n1 | cut -d/ -f2)
+    msg=$(printf '%s' "${entry}" | tr '\n' ' ' | sed -nE 's#.*<title>[[:space:]]*(.*[^[:space:]])[[:space:]]*</title>.*#\1#p' | head -n1)
+    author=$(printf '%s' "${entry}" | sed -nE 's#.*<name>(.*)</name>.*#\1#p' | head -n1)
+    date=$(printf '%s' "${entry}" | sed -nE 's#.*<updated>(.*)</updated>.*#\1#p' | head -n1 | cut -dT -f1)
+    [ -n "${sha}" ] || return 0
+    printf '%s "%s" - %s, %s' "${sha:0:9}" "${msg}" "${author}" "${date}"
+}
+
+# ---------------------------------------------------------------------------
+# GIT_SYNC_QUIET (set by the Auto-Update watcher): poll cycles stay silent
+# while the repository is unchanged, so the console only shows real events
+# (new commit applied / sync failed). Boot-time syncs keep full output.
+# ---------------------------------------------------------------------------
+_pf_sync_quiet() {
+    [ "${GIT_SYNC_QUIET:-0}" = "1" ]
 }
 
 # Fetch repo tree as tarball into <dest-dir> (files land directly in dest-dir).
@@ -284,15 +355,15 @@ sync_git_repo() {
     local has_manifest=0
     [ -s "${m_manifest}" ] && has_manifest=1
 
-    phase "Git Repository Sync"
-    log "Checking ${url}$([ -n "${branch}" ] && printf ' (branch: %s)' "${branch}")..."
+    _pf_sync_quiet || phase "Git Repository Sync"
+    _pf_sync_quiet || log "Checking ${url}$([ -n "${branch}" ] && printf ' (branch: %s)' "${branch}")..."
 
     local remote_head
     if ! remote_head=$(_pf_sync_remote_head "${url}" "${kind}" "${branch}"); then
         if [ "${has_manifest}" = "1" ]; then
-            warn "Could not reach the repository - keeping previously synced code (commit ${last_commit:-unknown})."
+            _pf_sync_quiet || warn "Could not reach the repository - keeping previously synced code (commit ${last_commit:-unknown})."
         else
-            warn "Could not reach the repository and no synced code exists yet - continuing without repo content."
+            _pf_sync_quiet || warn "Could not reach the repository and no synced code exists yet - continuing without repo content."
         fi
         return 1
     fi
@@ -307,14 +378,14 @@ sync_git_repo() {
             [ -n "${mf}" ] && [ -e "${SERVER_DIR}/${mf}" ] && { present=1; break; }
         done < "${m_manifest}"
         if [ "${present}" = "1" ]; then
-            ok "Repository code is up to date (commit ${remote_head:0:9})."
+            _pf_sync_quiet || ok "Repository code is up to date (commit ${remote_head:0:9})."
             return 0
         fi
         warn "Synced files are missing from the workspace although the commit matches - re-downloading."
     fi
 
     # --- Update path: archive current synced code before replacing it --------
-    local f
+    local f commit_note=""
     if [ "${has_manifest}" = "1" ] && [ -n "${last_commit}" ]; then
         if [ "${last_repo}" != "${url}" ]; then
             warn "Repository changed (${last_repo:-none} -> ${url}) - replacing synced code."
@@ -368,6 +439,9 @@ sync_git_repo() {
             warn "Authenticated download failed - public repository synced without the token (check GIT_TOKEN)."
         fi
         if [ -d "${stage}/repo" ]; then
+            # One-line commit description for the console notification, read
+            # before the staging clone's .git directory is dropped.
+            commit_note=$(git -C "${stage}/repo" log -1 --pretty=format:'%h "%s" - %an, %ad' --date=short 2>/dev/null || true)
             rm -rf "${stage}/repo/.git" 2>/dev/null || true
             # Moving the tree root would hit protected dirs; copy contents instead.
             mkdir -p "${stage}/out"
@@ -390,6 +464,11 @@ sync_git_repo() {
             return 1
         fi
     fi
+
+    # Console description of the revision being installed. The git clone path
+    # already captured it; the tarball/HTTP path asks GitHub (best-effort,
+    # never fatal - the sha alone is still shown on the install line).
+    [ -n "${commit_note}" ] || commit_note=$(_pf_sync_commit_info "${url}" "${kind}" "${branch}")
 
     # --- Install staged tree into the workspace ------------------------------
     _pf_sync_snapshot_env "${SERVER_DIR}" "${state_dir}/env-backup"
@@ -436,6 +515,7 @@ sync_git_repo() {
         printf '%s\n' "${branch}" > "${m_branch}"
         printf '%s\n' "${remote_head}" > "${m_commit}"
         ok "Repository code installed at commit ${remote_head:0:9} (branch: ${branch:-default})."
+        [ -n "${commit_note}" ] && info "  Commit: ${commit_note}"
     else
         rm -f "${new_manifest}"
         warn "Nothing was extracted from the repository (empty tree?) - workspace left unchanged."
@@ -452,12 +532,29 @@ sync_git_repo() {
 # operator a restart is needed to load them - the running daemon is never
 # killed automatically (data safety first). Disable with GIT_AUTO_UPDATE=0;
 # cadence via GIT_POLL_SECONDS (30-86400, default 300).
+#
+# Poll cycles are QUIET while nothing changed; every synced commit is
+# announced with its sha, subject and author. On github.com repositories the
+# watcher also runs without a git binary (Atom/API head + tarball download).
 # ---------------------------------------------------------------------------
+# The watcher can poll without the git binary for github.com repositories
+# (Atom/API head lookup + tarball download). Generic hosts still need git.
+_pf_sync_poll_supported() {
+    command -v git >/dev/null 2>&1 && return 0
+    local url kind
+    { read -r url kind <<< "$(_pf_sync_normalize_url "${GIT_REPO_URL:-}")"; } || return 1
+    [ "${kind}" = "github" ] || return 1
+    command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1
+}
+
 run_git_update_watcher() {
     local poll="${GIT_POLL_SECONDS:-300}"
     case "${poll}" in ''|*[!0-9]*) poll=300 ;; esac
     [ "${poll}" -lt 30 ] && poll=30
     [ "${poll}" -gt 86400 ] && poll=86400
+    # Quiet poll cycles: the console only shows new commits / real failures.
+    GIT_SYNC_QUIET=1
+    export GIT_SYNC_QUIET
     local fails=0
     while :; do
         sleep "${poll}"
@@ -473,7 +570,10 @@ run_git_update_watcher() {
 start_git_update_watcher() {
     [ "${GIT_AUTO_UPDATE:-1}" = "1" ] || return 0
     [ -n "${GIT_REPO_URL:-}" ] || return 0
-    command -v git >/dev/null 2>&1 || return 0
+    if ! _pf_sync_poll_supported; then
+        warn "Git Auto-Update off: git is not installed and '${GIT_REPO_URL}' is not a github.com repo (generic hosts need git)."
+        return 0
+    fi
     (
         run_git_update_watcher
     ) &
@@ -482,5 +582,5 @@ start_git_update_watcher() {
     case "${poll}" in ''|*[!0-9]*) poll=300 ;; esac
     [ "${poll}" -lt 30 ] && poll=30
     [ "${poll}" -gt 86400 ] && poll=86400
-    ok "Git Auto-Update watcher active (polling every ${poll}s; new commits are synced - restart to load them)."
+    ok "Git Auto-Update watcher active (polling every ${poll}s; new commits are announced - restart to load them)."
 }

@@ -114,6 +114,8 @@ The egg exports **28 variables**, the ones you will actually touch:
 | `GIT_REPO_URL` / `GIT_BRANCH` | *(empty)* | Sync a GitHub repo into the workspace on startup |
 | `GIT_PRESERVE_ENV` | `1` | Keep every existing `.env` in its original location across repo updates - old credentials are restored after new files land, so the project never breaks (`0` = let repo `.env` files win) |
 | `GIT_EXCLUDE` | *(empty)* | Space/comma-separated glob patterns the sync must never install or overwrite (e.g. `config/custom/* secrets`) |
+| `GIT_AUTO_UPDATE` | `1` | Poll for new commits while the server runs; the console announces every synced commit (sha + subject + author) (`0` = boot-time sync only) |
+| `GIT_POLL_SECONDS` | `300` | Poll interval in seconds for `GIT_AUTO_UPDATE` (30-86400) |
 | `EXTRA_RUNTIMES` | *(empty)* | Inject companions on demand (`python`, `nodejs`, `bun`, `psql`, …) |
 
 All 28 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
