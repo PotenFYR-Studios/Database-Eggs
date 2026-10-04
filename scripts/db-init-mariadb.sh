@@ -769,14 +769,14 @@ start_mariadb_mysql() {
         fi
     fi
 
+    # Restore the optional dump first so account reconciliation re-applies
+    # grants after any DROP DATABASE inside the dump (RESTORE_DUMP=1).
+    pf_mariadb_restore_dump "${client_bin}"
+
     # Multi-user account reconciliation (idempotent, retries while daemon warms up)
     if command -v pf_users_reconcile_mysql >/dev/null 2>&1; then
         pf_users_reconcile_mysql "${client_bin}"
     fi
-
-    # Optional one-shot dump restore (RESTORE_DUMP=1). Runs after account
-    # reconciliation so imported data lands on a fully provisioned instance.
-    pf_mariadb_restore_dump "${client_bin}"
 
     supervise_daemon "${daemon_pid}" "stop_mariadb_mysql"
 }
