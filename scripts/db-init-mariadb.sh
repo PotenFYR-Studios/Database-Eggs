@@ -134,12 +134,14 @@ collation-server=utf8mb4_unicode_ci
 
 # Performance Auto-Tuning
 innodb_buffer_pool_size=${TUNED_INNODB_BUFFER_POOL}
-innodb_buffer_pool_instances=${TUNED_INNODB_POOL_INSTANCES}
+# innodb_buffer_pool_instances deliberately not set: removed in MariaDB 13
+# (warns even with the loose- prefix) and its old default behavior is what
+# every supported version already picks for pools of this size.
 innodb_log_file_size=${TUNED_INNODB_LOG_FILE_SIZE}
 innodb_log_buffer_size=16M
+# innodb_file_per_table intentionally not set: deprecated in MariaDB 13 and
+# ON by default on every supported version.
 innodb_flush_log_at_trx_commit=2
-innodb_file_per_table=1
-innodb_flush_neighbors=0
 innodb_io_capacity=2000
 innodb_io_capacity_max=4000
 join_buffer_size=1M
@@ -170,10 +172,33 @@ default-character-set=utf8mb4
 EOF
         ok "Created ${my_cnf}"
     else
+        # Persistent my.cnf may contain stale datadir/socket/pid/basedir values
+        # from an older egg version or a moved DATA_DIR. Repair them all to the
+        # effective paths before starting the daemon.
+        mkdir -p "${data_dir}" "${socket_dir}" "${SERVER_DIR}/logs" 2>/dev/null || true
         sed -i "s/^port=.*/port=${SERVER_PORT}/g" "${my_cnf}" 2>/dev/null || true
         sed -i "s|^bind-address=.*|bind-address=${BIND_ADDRESS:-0.0.0.0}|g" "${my_cnf}" 2>/dev/null || true
-        if [ -n "${engine_basedir}" ] && ! grep -q '^basedir=' "${my_cnf}" 2>/dev/null; then
-            printf 'basedir=%s\n' "${engine_basedir}" >> "${my_cnf}"
+        if grep -q '^datadir=' "${my_cnf}" 2>/dev/null; then
+            sed -i "s|^datadir=.*|datadir=${data_dir}|g" "${my_cnf}" 2>/dev/null || true
+        else
+            sed -i "/^\[mysqld\]/a datadir=${data_dir}" "${my_cnf}" 2>/dev/null || true
+        fi
+        if grep -q '^socket=' "${my_cnf}" 2>/dev/null; then
+            sed -i "s|^socket=.*|socket=${socket_path}|g" "${my_cnf}" 2>/dev/null || true
+        else
+            sed -i "/^\[mysqld\]/a socket=${socket_path}" "${my_cnf}" 2>/dev/null || true
+        fi
+        if grep -q '^pid-file=' "${my_cnf}" 2>/dev/null; then
+            sed -i "s|^pid-file=.*|pid-file=${pid_path}|g" "${my_cnf}" 2>/dev/null || true
+        else
+            sed -i "/^\[mysqld\]/a pid-file=${pid_path}" "${my_cnf}" 2>/dev/null || true
+        fi
+        if [ -n "${engine_basedir}" ]; then
+            if grep -q '^basedir=' "${my_cnf}" 2>/dev/null; then
+                sed -i "s|^basedir=.*|basedir=${engine_basedir}|g" "${my_cnf}" 2>/dev/null || true
+            else
+                sed -i "/^\[mysqld\]/a basedir=${engine_basedir}" "${my_cnf}" 2>/dev/null || true
+            fi
         fi
     fi
 
@@ -271,7 +296,11 @@ DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
+# With skip-name-resolve, TCP clients from 127.0.0.1 need an explicit IP account.
+CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
+ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
 FLUSH PRIVILEGES;
 EOSQL
@@ -324,6 +353,125 @@ stop_mariadb_mysql() {
     fi
 }
 
+pf_mariadb_root_auth_ok() { # pf_mariadb_root_auth_ok <client-bin> <password>
+    local client="${1:-mysql}" pw="${2:-}"
+    [ -n "${pw}" ] || return 1
+    "${client}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${pw}" -N -e "SELECT 1" >/dev/null 2>&1
+}
+
+pf_mariadb_recover_root_auth() {
+    # Existing installations may hold a stale/wrong root password (rotated
+    # DB_ROOT_PASSWORD, legacy installs). Repair root credentials via a
+    # skip-grant-tables bootstrap session WITHOUT deleting or reinitializing
+    # the datadir, then restart the daemon normally. On success the new
+    # daemon PID is published via PF_MARIADB_RECOVERED_PID for the supervisor.
+    local old_pid="$1" daemon_bin="$2" my_cnf="$3" client="$4"
+    local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
+    local socket_dir="/tmp/.db-sockets"
+    local recovery_socket="${socket_dir}/mysql-recovery.sock"
+    local recovery_pidfile="${socket_dir}/mysql-recovery.pid"
+    local recovery_log="${SERVER_DIR}/logs/mariadb-recovery.log"
+    local recovery_pid="" rootpw="${DB_ROOT_PASSWORD:-}"
+
+    # Only safe when the quote helper is available (db-init-users.sh loads it).
+    command -v _pf_sql_quote >/dev/null 2>&1 || return 1
+    [ -n "${rootpw}" ] || return 1
+    [ -x "${daemon_bin}" ] || return 1
+    mkdir -p "${socket_dir}" "${SERVER_DIR}/logs" "${data_dir}" 2>/dev/null || true
+    rm -f "${recovery_socket}" "${recovery_pidfile}" 2>/dev/null || true
+
+    warn "MariaDB root authentication failed. Starting automatic local recovery (data will NOT be deleted)."
+    if [ -n "${old_pid}" ] && kill -0 "${old_pid}" 2>/dev/null; then
+        kill -TERM "${old_pid}" 2>/dev/null || true
+        local waited=0
+        while kill -0 "${old_pid}" 2>/dev/null && [ "${waited}" -lt 15 ]; do
+            sleep 1; waited=$((waited + 1))
+        done
+        if kill -0 "${old_pid}" 2>/dev/null; then kill -KILL "${old_pid}" 2>/dev/null || true; sleep 1; fi
+        wait "${old_pid}" 2>/dev/null || true
+    fi
+    rm -f "${socket_dir}/mysql.sock" "${socket_dir}/mysql.pid" 2>/dev/null || true
+    own_db_runtime_dirs "${data_dir}" "${socket_dir}"
+
+    run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --skip-grant-tables \
+        --socket="${recovery_socket}" --pid-file="${recovery_pidfile}" > "${recovery_log}" 2>&1 &
+    recovery_pid=$!
+
+    local retries=30
+    while [ ! -S "${recovery_socket}" ] && [ "${retries}" -gt 0 ]; do
+        if ! kill -0 "${recovery_pid}" 2>/dev/null; then
+            warn "MariaDB recovery daemon exited early."; tail -n 40 "${recovery_log}" 2>/dev/null || true; return 1
+        fi
+        sleep 1; retries=$((retries - 1))
+    done
+    if [ ! -S "${recovery_socket}" ]; then
+        warn "MariaDB recovery socket did not become ready."
+        kill -KILL "${recovery_pid}" 2>/dev/null || true; wait "${recovery_pid}" 2>/dev/null || true
+        return 1
+    fi
+
+    local qpw qdb quser quserpw
+    qpw=$(_pf_sql_quote "${rootpw}")
+    qdb="${DB_NAME:-database}"; qdb="${qdb//\`/\`\`}"
+    quser="${DB_USER:-}"; quserpw=$(_pf_sql_quote "${DB_PASSWORD:-}")
+
+    if "${client}" --protocol=socket --socket="${recovery_socket}" -u root -N 2>/dev/null <<__RECOVERY_SQL
+FLUSH PRIVILEGES;
+ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '${qpw}';
+CREATE USER IF NOT EXISTS 'root'@'localhost' IDENTIFIED BY '${qpw}';
+ALTER USER IF EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${qpw}';
+CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${qpw}';
+ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '${qpw}';
+CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${qpw}';
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
+GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+__RECOVERY_SQL
+    then
+        if [ -n "${quser}" ] && [ "${quser}" != "root" ] && [ -n "${DB_PASSWORD:-}" ]; then
+            "${client}" --protocol=socket --socket="${recovery_socket}" -u root -N 2>/dev/null <<__USER_SQL || true
+CREATE USER IF NOT EXISTS '${quser}'@'%' IDENTIFIED BY '${quserpw}';
+CREATE USER IF NOT EXISTS '${quser}'@'localhost' IDENTIFIED BY '${quserpw}';
+CREATE DATABASE IF NOT EXISTS \`${qdb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+GRANT ALL PRIVILEGES ON \`${qdb}\`.* TO '${quser}'@'%';
+GRANT ALL PRIVILEGES ON \`${qdb}\`.* TO '${quser}'@'localhost';
+FLUSH PRIVILEGES;
+__USER_SQL
+        fi
+        ok "MariaDB root authentication repaired; remote root and database-user access enabled."
+    else
+        warn "MariaDB recovery SQL failed. Existing data was left untouched."
+        tail -n 40 "${recovery_log}" 2>/dev/null || true
+        kill -TERM "${recovery_pid}" 2>/dev/null || true; wait "${recovery_pid}" 2>/dev/null || true
+        rm -f "${recovery_socket}" "${recovery_pidfile}"
+        return 1
+    fi
+
+    kill -TERM "${recovery_pid}" 2>/dev/null || true
+    waited=0
+    while kill -0 "${recovery_pid}" 2>/dev/null && [ "${waited}" -lt 10 ]; do
+        sleep 1; waited=$((waited + 1))
+    done
+    kill -KILL "${recovery_pid}" 2>/dev/null || true; wait "${recovery_pid}" 2>/dev/null || true
+    rm -f "${recovery_socket}" "${recovery_pidfile}" 2>/dev/null || true
+
+    own_db_runtime_dirs "${data_dir}" "${socket_dir}"
+    rm -f "${socket_dir}/mysql.sock" "${socket_dir}/mysql.pid" 2>/dev/null || true
+    log "Starting MariaDB normally after authentication recovery..."
+    run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
+    PF_MARIADB_RECOVERED_PID=$!; export PF_MARIADB_RECOVERED_PID
+
+    retries=30
+    while [ ! -S "${socket_dir}/mysql.sock" ] && [ "${retries}" -gt 0 ]; do
+        if ! kill -0 "${PF_MARIADB_RECOVERED_PID}" 2>/dev/null; then
+            warn "MariaDB failed to restart after authentication recovery."; return 1
+        fi
+        sleep 1; retries=$((retries - 1))
+    done
+    [ -S "${socket_dir}/mysql.sock" ] || { warn "MariaDB socket did not return after authentication recovery."; return 1; }
+    return 0
+}
+
 start_mariadb_mysql() {
     activate_engine_libs
     local conf_dir="${SERVER_DIR}/config"
@@ -333,10 +481,32 @@ start_mariadb_mysql() {
     local socket_path="${socket_dir}/mysql.sock"
     local pid_path="${socket_dir}/mysql.pid"
 
+    # Always create the effective data directory before MariaDB starts. Older
+    # boots may have left my.cnf pointing at opt/mariadb/data while the panel
+    # environment points DATA_DIR somewhere else (or vice versa). MariaDB
+    # otherwise fails with "Can't change dir ... No such file or directory"
+    # before it can report a useful initialization error.
+    mkdir -p "${data_dir}" "${socket_dir}" "${SERVER_DIR}/logs" 2>/dev/null || true
+    if grep -q '^datadir=' "${my_cnf}" 2>/dev/null; then
+        local configured_data_dir
+        configured_data_dir=$(sed -n 's/^datadir=//p' "${my_cnf}" | head -n1)
+        if [ -n "${configured_data_dir}" ]; then
+            data_dir="${configured_data_dir}"
+            mkdir -p "${data_dir}" 2>/dev/null || true
+        fi
+    fi
+
     # Self-healing check: if configuration or data is missing, run init
     if [ ! -f "${my_cnf}" ] || [ ! -d "${data_dir}/mysql" ]; then
-        warn "Configuration or data files missing. Initializing MariaDB storage..."
+        warn "Configuration or data files missing. Initializing MariaDB storage in ${data_dir}..."
         init_mariadb_mysql
+        # Re-read the effective datadir after init in case init repaired my.cnf.
+        if grep -q '^datadir=' "${my_cnf}" 2>/dev/null; then
+            local repaired_data_dir
+            repaired_data_dir=$(sed -n 's/^datadir=//p' "${my_cnf}" | head -n1)
+            [ -n "${repaired_data_dir}" ] && data_dir="${repaired_data_dir}"
+        fi
+        mkdir -p "${data_dir}" 2>/dev/null || true
     fi
 
     local daemon_bin
@@ -360,9 +530,27 @@ start_mariadb_mysql() {
     run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
     local daemon_pid=$!
 
+    # Existing installations may carry a stale/wrong root password. Probe once
+    # the socket is up; if auth fails, repair credentials without touching the
+    # data and continue supervising the replacement daemon.
+    local client_bin
+    client_bin=$(find_mariadb_bin "mariadb" "mysql" 2>/dev/null || echo mysql)
+    PF_MARIADB_RECOVERED_PID=""
+    local auth_wait=30
+    while [ ! -S "${socket_path}" ] && [ "${auth_wait}" -gt 0 ] && kill -0 "${daemon_pid}" 2>/dev/null; do
+        sleep 1; auth_wait=$((auth_wait - 1))
+    done
+    if [ -S "${socket_path}" ] && ! pf_mariadb_root_auth_ok "${client_bin}" "${DB_ROOT_PASSWORD:-}"; then
+        if pf_mariadb_recover_root_auth "${daemon_pid}" "${daemon_bin}" "${my_cnf}" "${client_bin}"; then
+            daemon_pid="${PF_MARIADB_RECOVERED_PID:-${daemon_pid}}"
+        else
+            warn "Automatic MariaDB authentication recovery failed; continuing with the current daemon state."
+        fi
+    fi
+
     # Multi-user account reconciliation (idempotent, retries while daemon warms up)
     if command -v pf_users_reconcile_mysql >/dev/null 2>&1; then
-        pf_users_reconcile_mysql "$(find_mariadb_bin "mariadb" "mysql" 2>/dev/null || echo mysql)"
+        pf_users_reconcile_mysql "${client_bin}"
     fi
 
     supervise_daemon "${daemon_pid}" "stop_mariadb_mysql"

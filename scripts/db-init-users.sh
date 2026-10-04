@@ -337,6 +337,25 @@ pf_users_reconcile_mysql() { # pf_users_reconcile_mysql <client-bin>
         fi
     fi
 
+    # Legacy/single-user mode: ensure the application account accepts remote
+    # clients. Older egg versions could leave only the localhost account behind.
+    if [ "${PF_USERS_MODE:-legacy}" != "multi" ] && [ -n "${DB_USER:-}" ] && [ "${DB_USER}" != "root" ] && [ -n "${DB_PASSWORD:-}" ]; then
+        local legacy_qpw
+        legacy_qpw=$(_pf_sql_quote "${DB_PASSWORD}")
+        if "${client}" "${MYSQL_AUTH[@]}" 2>/dev/null <<__LEGACY_SQL
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${legacy_qpw}';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${legacy_qpw}';
+GRANT ALL PRIVILEGES ON \`${DB_NAME:-database}\`.* TO '${DB_USER}'@'%';
+GRANT ALL PRIVILEGES ON \`${DB_NAME:-database}\`.* TO '${DB_USER}'@'localhost';
+FLUSH PRIVILEGES;
+__LEGACY_SQL
+        then
+            log "Remote access enabled for ${DB_USER}@%."
+        else
+            warn "Could not ensure remote database access for ${DB_USER}."
+        fi
+    fi
+
     local u pw udb qpw
     if [ "${PF_USERS_MODE:-legacy}" = "multi" ]; then
         local IFS=','
