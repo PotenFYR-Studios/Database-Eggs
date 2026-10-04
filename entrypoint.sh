@@ -201,7 +201,7 @@ if [ -f "/etc/potenfyr-version" ]; then
 fi
 
 # Create clean user directory tree
-mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/bin"
+mkdir -p "${SERVER_DIR}/data" "${SERVER_DIR}/config" "${SERVER_DIR}/logs" "${SERVER_DIR}/bin" "${SERVER_DIR}/dump"
 
 # Backward-Compatibility & Cleanup:
 # Remove obsolete root scripts copied by previous egg versions so old servers run cleanly on latest image scripts.
@@ -333,7 +333,7 @@ for _key in DATABASE_TYPE DB_TYPE DB_VERSION DB_NAME DB_USER DB_PASSWORD DB_ROOT
             AUTO_GENERATE_CREDENTIALS EXTRA_ARGS DATA_DIR ARCHIVE_ON_SWITCH \
             GIT_REPO_URL GIT_BRANCH GIT_TOKEN GIT_ARCHIVE_ON_UPDATE GIT_AUTO_UPDATE GIT_POLL_SECONDS \
             DB_USERNAMES DB_PASSWORDS \
-            PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND \
+            PERFORMANCE_TUNING SECURITY_HARDENING CUSTOM_DOWNLOAD_URL CUSTOM_BINARY_NAME CUSTOM_COMMAND RESTORE_DUMP \
             EGG_UPDATE_URL AUTO_UPDATE_EGG PANEL_STOP_WATCHER CLI_THEME CLI_BANNER_GRADIENT; do
     apply_persisted "${_key}"
 done

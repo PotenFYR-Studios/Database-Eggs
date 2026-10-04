@@ -111,6 +111,16 @@
       "field_type": "text"
     },
     {
+      "name": "Restore Database Dump",
+      "description": "1 = After MariaDB/MySQL starts, automatically restore the first SQL dump found in /home/container/dump. Supports .sql, .sql.gz, .sql.xz and .sql.zst. The same dump is restored only once per file checksum; replace the file or remove dump/.restored.sha256 to retry.",
+      "env_variable": "RESTORE_DUMP",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
       "name": "Save Credentials to .env",
       "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
       "env_variable": "SAVE_TO_ENV",

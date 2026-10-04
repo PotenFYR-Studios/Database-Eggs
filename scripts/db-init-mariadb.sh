@@ -500,6 +500,136 @@ __USER_SQL
     return 0
 }
 
+pf_mariadb_restore_dump() {
+    # Optional one-shot SQL dump restore from ${SERVER_DIR}/dump.
+    # RESTORE_DUMP=1 enables it. System schemas from older MariaDB/MySQL
+    # dumps are skipped by default because their internal table definitions
+    # are version-specific and must be managed by the running server.
+    # This function never fails the boot: every exit path returns 0.
+    [ "${RESTORE_DUMP:-0}" = "1" ] || return 0
+    local dump_dir="${SERVER_DIR}/dump"
+    [ -d "${dump_dir}" ] || { mkdir -p "${dump_dir}" 2>/dev/null || true; return 0; }
+
+    local dump_file=""
+    local f
+    for f in "${dump_dir}"/*.sql "${dump_dir}"/*.sql.gz "${dump_dir}"/*.sql.xz "${dump_dir}"/*.sql.zst; do
+        [ -f "${f}" ] || continue
+        dump_file="${f}"
+        break
+    done
+    if [ -z "${dump_file}" ]; then
+        log "Dump restore enabled, but no .sql/.sql.gz/.sql.xz/.sql.zst file was found in ${dump_dir}."
+        return 0
+    fi
+
+    local marker="${dump_dir}/.restored.sha256"
+    local hash
+    hash=$(sha256sum "${dump_file}" 2>/dev/null | awk '{print $1}')
+    [ -n "${hash}" ] || { warn "Cannot calculate dump checksum: ${dump_file}"; return 0; }
+
+    if [ -f "${marker}" ] && grep -qx "${hash}" "${marker}" 2>/dev/null; then
+        log "Dump already restored: $(basename "${dump_file}")"
+        return 0
+    fi
+
+    local client="${1:-mysql}" rootpw="${DB_ROOT_PASSWORD:-}" port="${SERVER_PORT:-3306}"
+    [ -n "${rootpw}" ] || { warn "Dump restore skipped: DB_ROOT_PASSWORD is empty."; return 0; }
+
+    # Logical dumps from older MariaDB releases can contain the old mysql.*
+    # system database. Importing it into a newer MariaDB release produces
+    # errors such as an incompatible mysql.column_stats definition.
+    # The running server owns these system tables, so skip them by default.
+    local skip_system=1
+    local -a mysql_cmd=(--protocol=tcp -h 127.0.0.1 -P "${port}" -u root -p"${rootpw}")
+    local restore_log="${SERVER_DIR}/logs/dump-restore.log"
+    log "Restoring database dump: $(basename "${dump_file}")..."
+    log "Skipping MariaDB system schemas (mysql, performance_schema, information_schema)."
+
+    local awk_filter='
+        BEGIN { db = "" }
+        /^[[:space:]]*USE[[:space:]]+/ {
+            line = $0
+            sub(/^[[:space:]]*USE[[:space:]]+/, "", line)
+            gsub(/[`;]/, "", line)
+            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
+            db = tolower(line)
+        }
+        {
+            if (skip_system && (db == "mysql" || db == "performance_schema" || db == "information_schema")) next
+            print
+        }'
+
+    # Every pipeline stage is collected: a failure in decompression, the awk
+    # filter, or the client (including a 3600s timeout) must never be treated
+    # as a successful restore. The client stage is wrapped in `timeout` because
+    # it is the long pole that could otherwise hang startup forever.
+    local -a rcs=()
+    : > "${restore_log}" 2>/dev/null || true
+
+    case "${dump_file}" in
+        *.sql)
+            awk -v skip_system="${skip_system}" "${awk_filter}" "${dump_file}" \
+                | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+            rcs=("${PIPESTATUS[@]}")
+            ;;
+        *.sql.gz)
+            if command -v gzip >/dev/null 2>&1; then
+                gzip -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                rcs=("${PIPESTATUS[@]}")
+            else
+                warn "gzip is unavailable; cannot restore $(basename "${dump_file}")."
+                return 0
+            fi
+            ;;
+        *.sql.xz)
+            if command -v xz >/dev/null 2>&1; then
+                xz -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                rcs=("${PIPESTATUS[@]}")
+            else
+                warn "xz is unavailable; cannot restore $(basename "${dump_file}")."
+                return 0
+            fi
+            ;;
+        *.sql.zst)
+            if command -v zstd >/dev/null 2>&1; then
+                zstd -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                rcs=("${PIPESTATUS[@]}")
+            else
+                warn "zstd is unavailable; cannot restore $(basename "${dump_file}")."
+                return 0
+            fi
+            ;;
+    esac
+
+    # Strict success: requires every stage of the pipeline to have exited 0.
+    local restore_ok=1
+    if [ "${#rcs[@]}" -eq 0 ]; then
+        restore_ok=0
+    else
+        local rc
+        for rc in "${rcs[@]}"; do
+            [ "${rc}" -eq 0 ] || restore_ok=0
+        done
+    fi
+
+    if [ "${restore_ok}" -eq 1 ]; then
+        printf '%s\n' "${hash}" > "${marker}" 2>/dev/null || true
+        chmod 600 "${marker}" 2>/dev/null || true
+        ok "Database dump restored successfully: $(basename "${dump_file}")"
+    else
+        local last_err=""
+        [ -f "${restore_log}" ] && last_err=$(grep -v '^[[:space:]]*$' "${restore_log}" 2>/dev/null | tail -n1)
+        warn "Database dump restore failed: $(basename "${dump_file}")${last_err:+ (${last_err})}. The database remains running; fix the dump and restart to retry."
+    fi
+    return 0
+}
+
 start_mariadb_mysql() {
     activate_engine_libs
     local conf_dir="${SERVER_DIR}/config"
@@ -643,6 +773,10 @@ start_mariadb_mysql() {
     if command -v pf_users_reconcile_mysql >/dev/null 2>&1; then
         pf_users_reconcile_mysql "${client_bin}"
     fi
+
+    # Optional one-shot dump restore (RESTORE_DUMP=1). Runs after account
+    # reconciliation so imported data lands on a fully provisioned instance.
+    pf_mariadb_restore_dump "${client_bin}"
 
     supervise_daemon "${daemon_pid}" "stop_mariadb_mysql"
 }
