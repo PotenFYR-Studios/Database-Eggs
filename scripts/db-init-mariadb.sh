@@ -295,13 +295,17 @@ DELETE FROM mysql.user WHERE User='';
 DROP DATABASE IF EXISTS test;
 DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
 ALTER USER 'root'@'localhost' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 # With skip-name-resolve, TCP clients from 127.0.0.1 need an explicit IP account.
+# root is deliberately LOCAL-ONLY (localhost + 127.0.0.1); remote access is
+# provided by the DB_USER application account, never by root@%.
 CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
 ALTER USER 'root'@'127.0.0.1' IDENTIFIED BY '${DB_ROOT_PASSWORD}';
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
+# Stale proxies_priv rows (seeded by an earlier bootstrap under a different
+# container hostname) trigger an "ignored in --skip-name-resolve mode"
+# warning on every start - remove them at the source.
+DELETE FROM mysql.proxies_priv WHERE Host <> 'localhost' AND Host <> '127.0.0.1';
 FLUSH PRIVILEGES;
 EOSQL
 
@@ -393,8 +397,19 @@ pf_mariadb_recover_root_auth() {
     rm -f "${socket_dir}/mysql.sock" "${socket_dir}/mysql.pid" 2>/dev/null || true
     own_db_runtime_dirs "${data_dir}" "${socket_dir}"
 
-    run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --skip-grant-tables \
-        --socket="${recovery_socket}" --pid-file="${recovery_pidfile}" > "${recovery_log}" 2>&1 &
+    # Recovery must use an isolated configuration: the persistent my.cnf points
+    # at the normal mysql.sock, and reusing it can start recovery on the normal
+    # socket or leave two daemons fighting over the datadir. --no-defaults
+    # ignores my.cnf entirely; every path is passed explicitly.
+    local recovery_basedir=""
+    [ -x "${MARIADB_OPT_BASE}/bin/mariadbd" ] && recovery_basedir="${MARIADB_OPT_BASE}"
+    [ -z "${recovery_basedir}" ] && [ -x "${MYSQL_OPT_BASE}/bin/mysqld" ] && recovery_basedir="${MYSQL_OPT_BASE}"
+    local -a recovery_args=(--no-defaults --datadir="${data_dir}" --skip-networking --skip-grant-tables
+        --socket="${recovery_socket}" --pid-file="${recovery_pidfile}" --log-error="${recovery_log}"
+        --port=0 --skip-name-resolve)
+    [ -n "${recovery_basedir}" ] && recovery_args+=(--basedir="${recovery_basedir}")
+
+    run_db_as_runtime_user "${daemon_bin}" "${recovery_args[@]}" > /dev/null 2>&1 &
     recovery_pid=$!
 
     local retries=30
@@ -406,7 +421,10 @@ pf_mariadb_recover_root_auth() {
     done
     if [ ! -S "${recovery_socket}" ]; then
         warn "MariaDB recovery socket did not become ready."
+        local early_pid; early_pid=$(cat "${recovery_pidfile}" 2>/dev/null || true)
+        [ -n "${early_pid}" ] && kill -KILL "${early_pid}" 2>/dev/null || true
         kill -KILL "${recovery_pid}" 2>/dev/null || true; wait "${recovery_pid}" 2>/dev/null || true
+        rm -f "${recovery_socket}" "${recovery_pidfile}" 2>/dev/null || true
         return 1
     fi
 
@@ -421,15 +439,16 @@ ALTER USER IF EXISTS 'root'@'localhost' IDENTIFIED BY '${qpw}';
 CREATE USER IF NOT EXISTS 'root'@'localhost' IDENTIFIED BY '${qpw}';
 ALTER USER IF EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${qpw}';
 CREATE USER IF NOT EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${qpw}';
-ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '${qpw}';
-CREATE USER IF NOT EXISTS 'root'@'%' IDENTIFIED BY '${qpw}';
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'localhost' WITH GRANT OPTION;
 GRANT ALL PRIVILEGES ON *.* TO 'root'@'127.0.0.1' WITH GRANT OPTION;
-GRANT ALL PRIVILEGES ON *.* TO 'root'@'%' WITH GRANT OPTION;
+DROP USER IF EXISTS 'root'@'%';
+DELETE FROM mysql.proxies_priv WHERE Host <> 'localhost' AND Host <> '127.0.0.1';
 __RECOVERY_SQL
     then
         if [ -n "${quser}" ] && [ "${quser}" != "root" ] && [ -n "${DB_PASSWORD:-}" ]; then
             "${client}" --protocol=socket --socket="${recovery_socket}" -u root -N 2>/dev/null <<__USER_SQL || true
+ALTER USER IF EXISTS '${quser}'@'%' IDENTIFIED BY '${quserpw}';
+ALTER USER IF EXISTS '${quser}'@'localhost' IDENTIFIED BY '${quserpw}';
 CREATE USER IF NOT EXISTS '${quser}'@'%' IDENTIFIED BY '${quserpw}';
 CREATE USER IF NOT EXISTS '${quser}'@'localhost' IDENTIFIED BY '${quserpw}';
 CREATE DATABASE IF NOT EXISTS \`${qdb}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
@@ -438,7 +457,7 @@ GRANT ALL PRIVILEGES ON \`${qdb}\`.* TO '${quser}'@'localhost';
 FLUSH PRIVILEGES;
 __USER_SQL
         fi
-        ok "MariaDB root authentication repaired; remote root and database-user access enabled."
+        ok "MariaDB root authentication repaired; root is local-only and the application account is provisioned."
     else
         warn "MariaDB recovery SQL failed. Existing data was left untouched."
         tail -n 40 "${recovery_log}" 2>/dev/null || true
@@ -447,11 +466,20 @@ __USER_SQL
         return 1
     fi
 
+    # The real daemon PID is in the pidfile (our run_db_as_runtime_user execs,
+    # so $! already matches, but reading the pidfile is authoritative and
+    # belt-and-braces against wrapper changes).
+    local recovery_real_pid=""
+    recovery_real_pid=$(cat "${recovery_pidfile}" 2>/dev/null || true)
+    [ -n "${recovery_real_pid}" ] && kill -TERM "${recovery_real_pid}" 2>/dev/null || true
     kill -TERM "${recovery_pid}" 2>/dev/null || true
     waited=0
-    while kill -0 "${recovery_pid}" 2>/dev/null && [ "${waited}" -lt 10 ]; do
+    while [ "${waited}" -lt 10 ]; do
+        if [ -n "${recovery_real_pid}" ] && ! kill -0 "${recovery_real_pid}" 2>/dev/null; then break; fi
+        if [ -z "${recovery_real_pid}" ] && ! kill -0 "${recovery_pid}" 2>/dev/null; then break; fi
         sleep 1; waited=$((waited + 1))
     done
+    [ -n "${recovery_real_pid}" ] && kill -KILL "${recovery_real_pid}" 2>/dev/null || true
     kill -KILL "${recovery_pid}" 2>/dev/null || true; wait "${recovery_pid}" 2>/dev/null || true
     rm -f "${recovery_socket}" "${recovery_pidfile}" 2>/dev/null || true
 
@@ -530,9 +558,15 @@ start_mariadb_mysql() {
     run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
     local daemon_pid=$!
 
-    # Existing installations may carry a stale/wrong root password. Probe once
-    # the socket is up; if auth fails, repair credentials without touching the
-    # data and continue supervising the replacement daemon.
+    # Account model:
+    #   * DB_USER / DB_PASSWORD is the REMOTE application account.
+    #   * root is local-only (localhost + 127.0.0.1) and is never root@%.
+    #   * A root-password drift alone must not take a healthy instance offline:
+    #     pf_users_reconcile_mysql repairs it via the stored credential.
+    # Full recovery (stop daemon -> skip-grant-tables repair -> restart) runs
+    # only when the application account is unusable, or when
+    # DB_FORCE_ROOT_RECOVERY=1 is explicitly requested. If recovery fails, the
+    # daemon is restarted normally so the server never stays down.
     local client_bin
     client_bin=$(find_mariadb_bin "mariadb" "mysql" 2>/dev/null || echo mysql)
     PF_MARIADB_RECOVERED_PID=""
@@ -540,11 +574,68 @@ start_mariadb_mysql() {
     while [ ! -S "${socket_path}" ] && [ "${auth_wait}" -gt 0 ] && kill -0 "${daemon_pid}" 2>/dev/null; do
         sleep 1; auth_wait=$((auth_wait - 1))
     done
-    if [ -S "${socket_path}" ] && ! pf_mariadb_root_auth_ok "${client_bin}" "${DB_ROOT_PASSWORD:-}"; then
-        if pf_mariadb_recover_root_auth "${daemon_pid}" "${daemon_bin}" "${my_cnf}" "${client_bin}"; then
-            daemon_pid="${PF_MARIADB_RECOVERED_PID:-${daemon_pid}}"
-        else
-            warn "Automatic MariaDB authentication recovery failed; continuing with the current daemon state."
+    if [ -S "${socket_path}" ]; then
+        # The app account's real password is the stored one (.db-users/
+        # credentials): credentials apply exactly once at creation, so an
+        # edited DB_PASSWORD must not make a healthy account look broken.
+        local app_user="${DB_USER:-}"
+        local app_pw=""
+        if [ -n "${app_user}" ] && [ "${app_user}" != "root" ]; then
+            if command -v pf_users_stored_password >/dev/null 2>&1; then
+                app_pw="$(pf_users_stored_password "${app_user}")"
+            fi
+            [ -n "${app_pw}" ] || app_pw="${DB_PASSWORD:-}"
+        fi
+        local app_ok=1
+        # Only probe the app account when it is EXPECTED to exist already.
+        # On a genuine first boot the account is created later by
+        # pf_users_reconcile_mysql - probing then would report a false
+        # "not usable" and trigger an unnecessary full recovery.
+        local app_expected=0
+        if command -v pf_users_prev_list >/dev/null 2>&1 && pf_users_prev_list 2>/dev/null | grep -qxF "${app_user}"; then
+            app_expected=1
+        elif command -v pf_users_is_new >/dev/null 2>&1 && ! pf_users_is_new "${app_user}"; then
+            app_expected=1
+        fi
+        if [ "${app_expected}" -eq 1 ] && [ -n "${app_user}" ] && [ "${app_user}" != "root" ] && [ -n "${app_pw}" ]; then
+            if "${client_bin}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u "${app_user}" -p"${app_pw}" -N -e "SELECT 1" >/dev/null 2>&1; then
+                log "Remote application account ${app_user}@% is healthy."
+            else
+                app_ok=0
+                warn "Remote application account ${app_user}@% is not usable; automatic account recovery is required."
+            fi
+        fi
+        local root_ok=1
+        if ! pf_mariadb_root_auth_ok "${client_bin}" "${DB_ROOT_PASSWORD:-}"; then
+            # If the app account is healthy, pf_users_reconcile_mysql repairs
+            # the drift via the stored credential - do not warn twice when the
+            # drift is about to be silently fixed a few lines below.
+            if ! [ "${app_ok}" -eq 0 ] && [ "${DB_FORCE_ROOT_RECOVERY:-0}" != "1" ]; then
+                root_ok=0
+            fi
+        fi
+
+        if [ "${app_ok}" -eq 0 ] || [ "${DB_FORCE_ROOT_RECOVERY:-0}" = "1" ]; then
+            if pf_mariadb_recover_root_auth "${daemon_pid}" "${daemon_bin}" "${my_cnf}" "${client_bin}"; then
+                daemon_pid="${PF_MARIADB_RECOVERED_PID:-${daemon_pid}}"
+            else
+                warn "Automatic account recovery failed; restarting MariaDB normally without changing database data."
+                rm -f "${socket_dir}/mysql.sock" "${socket_dir}/mysql.pid" 2>/dev/null || true
+                run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
+                daemon_pid=$!
+                local restart_retries=30
+                while [ ! -S "${socket_dir}/mysql.sock" ] && [ "${restart_retries}" -gt 0 ]; do
+                    if ! kill -0 "${daemon_pid}" 2>/dev/null; then
+                        warn "MariaDB could not be restarted after failed account recovery."
+                        break
+                    fi
+                    sleep 1
+                    restart_retries=$((restart_retries - 1))
+                done
+                [ -S "${socket_dir}/mysql.sock" ] && log "MariaDB restarted normally after failed account recovery."
+            fi
+        elif [ "${root_ok}" -eq 0 ]; then
+            warn "Root password drift detected, but ${app_user:-the application account}@% is healthy; keeping MariaDB online. Use DB_FORCE_ROOT_RECOVERY=1 to repair root."
         fi
     fi
 

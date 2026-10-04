@@ -314,31 +314,44 @@ pf_users_reconcile_mysql() { # pf_users_reconcile_mysql <client-bin>
     [ -n "${rootpw}" ] || { warn "User reconciliation skipped (no root password available)."; return 0; }
 
     local -a MYSQL_AUTH=(--protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${rootpw}" -N)
-    if ! _pf_users_retry 15 "${client}" "${MYSQL_AUTH[@]}" -e "SELECT 1"; then
-        # The stored root credential may differ (operator rotated the variable).
-        local stored_root; stored_root=$(pf_users_stored_root)
-        if [ -n "${stored_root}" ] && [ "${stored_root}" != "${rootpw}" ] \
-           && "${client}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${stored_root}" -N -e "SELECT 1" >/dev/null 2>&1; then
-            if [ -n "${rootpw}" ]; then
-                local qrp; qrp=$(_pf_sql_quote "${rootpw}")
-                if "${client}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${stored_root}" -N -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${qrp}'; ALTER USER IF EXISTS 'root'@'%' IDENTIFIED BY '${qrp}'; FLUSH PRIVILEGES;" >/dev/null 2>&1; then
-                    pf_users_store_root "${rootpw}"
-                    ok "Root password updated to match the DB_ROOT_PASSWORD startup variable."
-                else
-                    warn "Could not update the root password (check DB_ROOT_PASSWORD)."
-                fi
+    local stored_root; stored_root=$(pf_users_stored_root)
+    if [ -n "${stored_root}" ] && [ "${stored_root}" != "${rootpw}" ]; then
+        # Credential drift: try the STORED password first so a rotated
+        # DB_ROOT_PASSWORD never spams access-denied entries in the log.
+        if "${client}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${stored_root}" -N -e "SELECT 1" >/dev/null 2>&1; then
+            local qrp; qrp=$(_pf_sql_quote "${rootpw}")
+            # Rotate EVERY root account (localhost AND 127.0.0.1) and drop any
+            # legacy remote root - patching only localhost leaves the TCP
+            # account stale and every later statement fails its auth.
+            if "${client}" --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${stored_root}" -N -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '${qrp}'; ALTER USER IF EXISTS 'root'@'127.0.0.1' IDENTIFIED BY '${qrp}'; DROP USER IF EXISTS 'root'@'%'; FLUSH PRIVILEGES;" >/dev/null 2>&1; then
+                pf_users_store_root "${rootpw}"
+                ok "Root password synchronized with the DB_ROOT_PASSWORD startup variable."
+                # Rotation changed the credential MYSQL_AUTH was built with;
+                # later blocks in this function must use the new password.
+                MYSQL_AUTH=(--protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${rootpw}" -N)
             else
+                warn "Could not update the root password (check DB_ROOT_PASSWORD)."
                 rootpw="${stored_root}"
                 MYSQL_AUTH=(--protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" -u root -p"${rootpw}" -N)
             fi
         else
+            _pf_users_retry 3 "${client}" "${MYSQL_AUTH[@]}" -e "SELECT 1" || {
+                warn "Could not reach ${PROJECT_TYPE^^} as root (stored and configured credentials both fail) - user reconciliation skipped this boot."
+                return 0
+            }
+        fi
+    else
+        _pf_users_retry 3 "${client}" "${MYSQL_AUTH[@]}" -e "SELECT 1" || {
             warn "Could not reach ${PROJECT_TYPE^^} as root - user reconciliation skipped this boot."
             return 0
-        fi
+        }
     fi
 
     # Legacy/single-user mode: ensure the application account accepts remote
     # clients. Older egg versions could leave only the localhost account behind.
+    # NOTE: never ALTER an existing account's password here - the egg documents
+    # that credentials apply exactly once at user creation and are never
+    # changed by restarts or env edits (DB_PASSWORDS contract).
     if [ "${PF_USERS_MODE:-legacy}" != "multi" ] && [ -n "${DB_USER:-}" ] && [ "${DB_USER}" != "root" ] && [ -n "${DB_PASSWORD:-}" ]; then
         local legacy_qpw
         legacy_qpw=$(_pf_sql_quote "${DB_PASSWORD}")
@@ -355,6 +368,15 @@ __LEGACY_SQL
             warn "Could not ensure remote database access for ${DB_USER}."
         fi
     fi
+
+    # root is deliberately local-only. Remove root@% created by older egg
+    # versions, and drop stale proxies_priv rows so --skip-name-resolve
+    # stops logging "ignored" warnings on every start.
+    "${client}" "${MYSQL_AUTH[@]}" 2>/dev/null <<__ROOT_LOCAL_ONLY_SQL || true
+DROP USER IF EXISTS 'root'@'%';
+DELETE FROM mysql.proxies_priv WHERE Host <> 'localhost' AND Host <> '127.0.0.1';
+FLUSH PRIVILEGES;
+__ROOT_LOCAL_ONLY_SQL
 
     local u pw udb qpw
     if [ "${PF_USERS_MODE:-legacy}" = "multi" ]; then
