@@ -32,6 +32,55 @@ activate_engine_libs() { # bundle libaio etc. for generic tarball builds
     done
 }
 
+# MariaDB must never run as root. Bootstrap may remain privileged, but the
+# database daemon is always dropped to a dedicated non-root UID (default 988,
+# matching the image's `container` account).
+DB_RUNTIME_UID="${DB_RUNTIME_UID:-988}"
+DB_RUNTIME_GID="${DB_RUNTIME_GID:-988}"
+
+ensure_db_runtime_user() {
+    local uid="${DB_RUNTIME_UID}" gid="${DB_RUNTIME_GID}"
+    if [ "${uid}" != "988" ] || [ "${gid}" != "988" ]; then
+        # Custom UID/GID requested: refuse to mutate /etc/passwd for
+        # system-reserved identities.
+        [ "${uid}" -ge 1000 ] && [ "${gid}" -ge 1000 ] || return 1
+    fi
+    if ! getent passwd "${uid}" >/dev/null 2>&1; then
+        # The image chmods /etc/passwd 666; the `container` account (988)
+        # ships with the image, so this only fires for custom UIDs.
+        if [ -w /etc/group ]; then echo "dbuser:x:${gid}:" >> /etc/group 2>/dev/null || true; fi
+        if [ -w /etc/passwd ]; then
+            echo "dbuser:x:${uid}:${gid}:Database runtime user:${SERVER_DIR}:/bin/bash" >> /etc/passwd 2>/dev/null || true
+        fi
+    fi
+    getent passwd "${uid}" >/dev/null 2>&1 || return 1
+}
+
+run_db_as_runtime_user() {
+    # NOTE: every path below exec()s. Call this function only in a
+    # backgrounded context (`run_db_as_runtime_user daemon ... &`) so the
+    # replacement happens inside the subshell and $! stays the daemon PID.
+    ensure_db_runtime_user || return 1
+    if [ "$(id -u 2>/dev/null || echo 1)" != "0" ]; then
+        exec "$@"
+    fi
+    if command -v gosu >/dev/null 2>&1; then
+        exec gosu "${DB_RUNTIME_UID}:${DB_RUNTIME_GID}" "$@"
+    elif command -v runuser >/dev/null 2>&1; then
+        exec runuser -u "${DB_RUNTIME_UID}" -g "${DB_RUNTIME_GID}" -- "$@"
+    elif command -v setpriv >/dev/null 2>&1; then
+        exec setpriv --reuid="${DB_RUNTIME_UID}" --regid="${DB_RUNTIME_GID}" --clear-groups -- "$@"
+    else
+        error "No privilege-drop helper found (gosu/runuser/setpriv)."
+        return 1
+    fi
+}
+
+own_db_runtime_dirs() { # own_db_runtime_dirs <data_dir> <socket_dir>  (logs dir is derived)
+    local data="${1:?data_dir required}" sock="${2:?socket_dir required}"
+    chown -R "${DB_RUNTIME_UID}:${DB_RUNTIME_GID}" "${data}" "${sock}" "${SERVER_DIR}/logs" 2>/dev/null || true
+}
+
 init_mariadb_mysql() {
     activate_engine_libs
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
@@ -54,6 +103,8 @@ init_mariadb_mysql() {
 
     # Clean up any stale sockets or pid files from unclean shutdowns
     rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "${data_dir}/*.pid" 2>/dev/null || true
+
+    own_db_runtime_dirs "${data_dir}" "${socket_dir}"
 
     # Run dynamic performance auto-tuning if available
     if command -v tune_mariadb_mysql >/dev/null 2>&1; then
@@ -190,7 +241,8 @@ EOF
         # unprivileged (uid 988) init cannot use. Run the bootstrap daemon with
         # skip-grant-tables and FLUSH PRIVILEGES inside the session so the root
         # password + accounts are provisioned reliably on every major version.
-        "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --skip-grant-tables --socket="${socket_path}" > "${init_log}" 2>&1 &
+        # The daemon runs as the runtime user (never root) and owns the datadir.
+        run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" --skip-networking --skip-grant-tables --socket="${socket_path}" > "${init_log}" 2>&1 &
         local tmp_pid=$!
 
         # Wait for socket
@@ -301,8 +353,11 @@ start_mariadb_mysql() {
     # Remove stale sockets before launching
     rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "/tmp/.db-sockets/mysql.sock" 2>/dev/null || true
 
-    log "Starting ${PROJECT_TYPE^^} ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT}..."
-    "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
+    ensure_db_runtime_user || fail "Cannot prepare non-root MariaDB runtime user ${DB_RUNTIME_UID}:${DB_RUNTIME_GID}."
+    own_db_runtime_dirs "${data_dir}" "${socket_dir}"
+
+    log "Starting ${PROJECT_TYPE^^} ${actual_version:+v${actual_version} }on ${BIND_ADDRESS:-0.0.0.0}:${SERVER_PORT} as uid ${DB_RUNTIME_UID}..."
+    run_db_as_runtime_user "${daemon_bin}" --defaults-file="${my_cnf}" ${EXTRA_ARGS:-} < /dev/null &
     local daemon_pid=$!
 
     # Multi-user account reconciliation (idempotent, retries while daemon warms up)

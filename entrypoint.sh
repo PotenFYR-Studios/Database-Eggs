@@ -12,6 +12,32 @@
 #    - Kubernetes / OpenShift, Railway / Render / Fly.io, plain Docker
 # =============================================================================
 
+# If a panel overrides the image USER and starts the container as root,
+# immediately switch back to the image's dedicated runtime account (uid/gid 988).
+# Pelican/Wings can launch egg containers as uid 0 even though the image declares
+# USER container; database engines must never own the volume as root. Ownership
+# is fixed while we still have root, then privileges are dropped permanently via
+# gosu before any other entrypoint logic runs.
+if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
+    _DB_BOOT_UID="${DB_RUNTIME_UID:-988}"
+    _DB_BOOT_GID="${DB_RUNTIME_GID:-988}"
+
+    # Panel-managed server volumes can retain files from older root launches.
+    # Fix ownership first so .env, .profile, .db-users, logs, run/, .runtimes
+    # and database data are writable by the runtime user after the drop.
+    # (/mnt/server covers Pterodactyl-classic mounts; /home/container the rest.)
+    if command -v chown >/dev/null 2>&1; then
+        for _vol in /home/container /mnt/server; do
+            [ -d "${_vol}" ] && chown -R "${_DB_BOOT_UID}:${_DB_BOOT_GID}" "${_vol}" 2>/dev/null || true
+        done
+        unset _vol
+    fi
+
+    if command -v gosu >/dev/null 2>&1 && getent passwd "${_DB_BOOT_UID}" >/dev/null 2>&1; then
+        exec gosu "${_DB_BOOT_UID}:${_DB_BOOT_GID}" /entrypoint.sh "$@"
+    fi
+fi
+
 # --- Security baseline -----------------------------------------------------------
 # Files created by the entrypoint are group/other-readable but not writable; core
 # dumps are disabled so crashes cannot eat server disk space.
@@ -156,8 +182,17 @@ fi
 unset _LOGDIR
 
 # Running as root inside a panel container is a security anti-pattern; warn.
+# Exception: MariaDB/MySQL bootstrap may be root - scripts/db-init-mariadb.sh
+# drops the actual database daemon to DB_RUNTIME_UID/DB_RUNTIME_GID (988:988).
 if [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
-    warn "Container is running as ROOT. Panels should launch images as a non-root user (e.g. uid 988)."
+    case "${PROJECT_TYPE:-mariadb}" in
+        mariadb|mysql)
+            info "Root bootstrap detected; MariaDB/MySQL daemon will run as uid ${DB_RUNTIME_UID:-988}."
+            ;;
+        *)
+            warn "Container is running as ROOT. Panels should launch images as a non-root user (e.g. uid 988)."
+            ;;
+    esac
 fi
 
 # Image provenance stamp (written at docker build time) for supportability.

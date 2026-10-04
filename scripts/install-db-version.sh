@@ -522,7 +522,7 @@ try_fetch_candidates() { # try_fetch_candidates <outfile> <url> [url...]
 # user agents from datacenter IPs; present an honest client UA everywhere.
 PF_CURL_UA="${PF_CURL_UA:-PotenFYR-Installer/1.0 (+https://github.com/PotenFYR-Studios/Database-Eggs)}"
 
-probe_url() { curl -fsIL -A "${PF_CURL_UA}" --retry 1 --connect-timeout 10 --max-time 25 -o /dev/null "$1" 2>/dev/null; }
+probe_url() { curl -fsIL -A "${PF_CURL_UA}" --retry 1 --connect-timeout 5 --max-time 8 -o /dev/null "$1" 2>/dev/null; }
 
 # shellcheck disable=SC2120
 eofl_resolve() { # eofl_resolve <product> <prefix>
@@ -1118,7 +1118,7 @@ install_mariadb() {
 
     local candidates=("$(printf '%s' "${RESOLVED}")")
     local series="${RESOLVED%.*}" p cand
-    for p in 6 5 4 3 2 1 0; do
+    for p in 9 8 7 6 5 4 3 2 1 0; do
         cand="${series}.${p}"
         [ "${cand}" != "${RESOLVED}" ] && candidates+=("${cand}")
     done
@@ -1140,7 +1140,9 @@ install_mariadb() {
     RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
     log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"
-    tar -xzf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
+    # --no-same-owner/--no-same-permissions: bintars carry uid-0-owned entries;
+    # when a panel bootstraps us as root they must not own the runtime files.
+    tar --no-same-owner --no-same-permissions -xzf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
     rm -f "${tmp_tar}"
     chmod +x "${base}/bin/"* 2>/dev/null || true
     extract_libaio "${base}/lib-extra"
@@ -1230,7 +1232,7 @@ install_mysql() {
     RESOLVED="$(basename "${hit}" | sed -E 's/mysql-([0-9.]+)-linux.*/\1/')"
     log "Downloading MySQL ${RESOLVED} minimal tarball succeeded."
     mkdir -p "${base}"
-    tar -xJf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
+    tar --no-same-owner --no-same-permissions -xJf "${tmp_tar}" -C "${base}" --strip-components=1 || { rm -f "${tmp_tar}"; fail "Extraction failed."; }
     rm -f "${tmp_tar}"
     chmod +x "${base}/bin/"* 2>/dev/null || true
     extract_libaio "${base}/lib-extra"
