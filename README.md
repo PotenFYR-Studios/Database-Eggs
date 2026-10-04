@@ -95,7 +95,7 @@ Dispatched `DATABASE_TYPE` values (aliases in parentheses), straight from the eg
 
 ## ⚙️ Startup Variables
 
-The egg exports **28 variables**, the ones you will actually touch:
+The egg exports **33 variables**, the ones you will actually touch:
 
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
@@ -107,6 +107,7 @@ The egg exports **28 variables**, the ones you will actually touch:
 | `DB_PASSWORDS` | `auto` | Passwords matched positionally to `DB_USERNAMES`; empty slot = random |
 | `DB_ROOT_PASSWORD` | *(empty)* | Root/admin/master password; empty or `auto` = auto-generated |
 | `AUTO_GENERATE_CREDENTIALS` | `1` | Generate strong secrets for empty/`auto` fields |
+| `RESTORE_DUMP` | `0` | After MariaDB/MySQL starts, auto-restore the first SQL dump in /home/container/dump (`.sql`, `.sql.gz`, `.sql.xz`, `.sql.zst`). One restore per file checksum; delete `dump/.restored.sha256` (or replace the file) to restore again |
 | `PERFORMANCE_TUNING` | `1` | Auto-size buffers/caches from container RAM & CPU |
 | `SECURITY_HARDENING` | `1` | SCRAM auth, drop insecure defaults, disable debug commands |
 | `SAVE_TO_ENV` | `1` | Persist credentials to `/home/container/.env` (mode 600) |
@@ -118,7 +119,11 @@ The egg exports **28 variables**, the ones you will actually touch:
 | `GIT_POLL_SECONDS` | `300` | Poll interval in seconds for `GIT_AUTO_UPDATE` (30-86400) |
 | `EXTRA_RUNTIMES` | *(empty)* | Inject companions on demand (`python`, `nodejs`, `bun`, `psql`, …) |
 
-All 28 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
+All 33 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
+
+### Dump restore (MariaDB/MySQL)
+
+Drop a `.sql`, `.sql.gz`, `.sql.xz` or `.sql.zst` dump into `/home/container/dump`, set `RESTORE_DUMP=1` and restart. The first dump (glob order) is imported exactly once per file checksum. The restore runs before account reconciliation, so grants are re-applied even when the dump contains a `DROP DATABASE`. A failed restore never stops the database — fix the dump and restart to retry. Only one dump is picked per boot.
 
 ## 🛡️ Security & Performance
 

@@ -67,3 +67,25 @@ fetch() { return 0; }
 eval "case meilisearch in $(extract_case meilisearch) esac"
 [ "$(<"$TMP/primary")" = 'https://github.com/meilisearch/meilisearch/releases/download/v1.53.1/meilisearch-linux-aarch64' ] || fail "wrong Meilisearch primary: $(<"$TMP/primary")"
 printf 'PASS: Meilisearch arm64 primary uses aarch64\n'
+
+# pf_mariadb_urls: canonical archive.mariadb.org URL first, princeton mirror
+# second, interleaved for the resolved version then fallback patches .9..0.
+# Versions are deduplicated, so a resolved patch that already appears in the
+# fallback range is not emitted twice.
+eval "$(extract_fn pf_mariadb_urls)"
+mariadb_urls=$(pf_mariadb_urls 11.4.5 amd64 amd64)
+[ -n "$mariadb_urls" ] || fail 'pf_mariadb_urls produced no candidate URLs'
+first=$(printf '%s\n' "$mariadb_urls" | sed -n 1p)
+second=$(printf '%s\n' "$mariadb_urls" | sed -n 2p)
+[ "$first" = 'https://archive.mariadb.org/mariadb-11.4.5/bintar-linux-systemd-x86_64/mariadb-11.4.5-linux-systemd-amd64.tar.gz' ] \
+    || fail "pf_mariadb_urls primary is not the resolved archive URL: $first"
+[ "$second" = 'https://mirror.math.princeton.edu/pub/mariadb/mariadb-11.4.5/bintar-linux-systemd-x86_64/mariadb-11.4.5-linux-systemd-amd64.tar.gz' ] \
+    || fail "pf_mariadb_urls second is not the resolved princeton mirror URL: $second"
+arch9=$(printf '%s\n' "$mariadb_urls" | grep -n 'archive.mariadb.org/mariadb-11.4.9/' | cut -d: -f1 | head -n1)
+mir9=$(printf '%s\n' "$mariadb_urls" | grep -n 'mirror.math.princeton.edu/pub/mariadb/mariadb-11.4.9/' | cut -d: -f1 | head -n1)
+[ -n "$arch9" ] && [ -n "$mir9" ] || fail 'pf_mariadb_urls is missing the 11.4.9 fallback pair'
+[ "$arch9" -gt 2 ] || fail 'the 11.4.9 fallback did not appear after the resolved pair'
+[ "$mir9" -eq "$((arch9 + 1))" ] || fail 'the 11.4.9 fallback is not archive-then-mirror'
+count=$(printf '%s\n' "$mariadb_urls" | grep -c .)
+[ "$count" -eq 20 ] || fail "pf_mariadb_urls expected 20 candidates (10 deduped versions x 2 mirrors), got $count"
+printf 'PASS: pf_mariadb_urls archive-then-princeton interleave, fallback order and dedup (20 candidates)\n'

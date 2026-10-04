@@ -74,3 +74,8 @@ jobs:
         run: |
           chmod +x tests/test-git-sync.sh
           ./tests/test-git-sync.sh
+
+      - name: Hermetic dump-restore tests (no network)
+        run: |
+          chmod +x tests/test-restore-dump.sh
+          ./tests/test-restore-dump.sh
