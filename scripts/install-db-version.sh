@@ -518,6 +518,25 @@ try_fetch_candidates() { # try_fetch_candidates <outfile> <url> [url...]
     return 1
 }
 
+# MariaDB bintar candidate URLs: archive.mariadb.org first (canonical), with
+# mirror.math.princeton.edu as a per-version fallback, interleaved. Covers the
+# resolved version then fallback patches .9 down to .0 in the same series.
+pf_mariadb_urls() { # pf_mariadb_urls <resolved> <arch_alt> <arch_type>
+    local resolved="$1" arch_alt="$2" arch_type="$3"
+    local ad="bintar-linux-systemd-x86_64"
+    [ "${arch_type}" = "arm64" ] && ad="bintar-linux-systemd-aarch64"
+    local series="${resolved%.*}" p cand v
+    local -a versions=("${resolved}")
+    for p in 9 8 7 6 5 4 3 2 1 0; do
+        cand="${series}.${p}"
+        [ "${cand}" != "${resolved}" ] && versions+=("${cand}")
+    done
+    for v in "${versions[@]}"; do
+        printf '%s\n' "https://archive.mariadb.org/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${arch_alt}.tar.gz"
+        printf '%s\n' "https://mirror.math.princeton.edu/pub/mariadb/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${arch_alt}.tar.gz"
+    done
+}
+
 # Some CDNs (Akamai-fronted hosts like cdn.mysql.com) reject tool-default
 # user agents from datacenter IPs; present an honest client UA everywhere.
 PF_CURL_UA="${PF_CURL_UA:-PotenFYR-Installer/1.0 (+https://github.com/PotenFYR-Studios/Database-Eggs)}"
@@ -1116,20 +1135,8 @@ install_mariadb() {
         return 1
     fi
 
-    local candidates=("$(printf '%s' "${RESOLVED}")")
-    local series="${RESOLVED%.*}" p cand
-    for p in 9 8 7 6 5 4 3 2 1 0; do
-        cand="${series}.${p}"
-        [ "${cand}" != "${RESOLVED}" ] && candidates+=("${cand}")
-    done
-
-    local ad="bintar-linux-systemd-x86_64"
-    [ "${ARCH_TYPE}" = "arm64" ] && ad="bintar-linux-systemd-aarch64"
-
     local urls=() v
-    for v in "${candidates[@]}"; do
-        urls+=("https://archive.mariadb.org/mariadb-${v}/${ad}/mariadb-${v}-linux-systemd-${ARCH_ALT}.tar.gz")
-    done
+    mapfile -t urls < <(pf_mariadb_urls "${RESOLVED}" "${ARCH_ALT}" "${ARCH_TYPE}")
 
     disk_preflight_mb 1600
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
