@@ -62,12 +62,14 @@ cat > "$STUB_DIR/client" <<'STUB'
 dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cat > "$dir/stdin"
 printf '%s\n' "$@" > "$dir/args"
+printf 'call\n' >> "$dir/calls"
 rc=$(cat "$dir/rc" 2>/dev/null || printf 0)
 exit "$rc"
 STUB
 chmod +x "$STUB_DIR/client" 2>/dev/null || true
 CLIENT="$STUB_DIR/client"
-stub_reset() { rm -f "$STUB_DIR/stdin" "$STUB_DIR/args"; printf '0\n' > "$STUB_DIR/rc"; }
+stub_reset() { rm -f "$STUB_DIR/stdin" "$STUB_DIR/args" "$STUB_DIR/calls"; printf '0\n' > "$STUB_DIR/rc"; }
+stub_calls() { wc -l < "$STUB_DIR/calls" 2>/dev/null | tr -d '[:space:]'; }
 
 # ---- wired globals ---------------------------------------------------------
 SERVER_DIR="$SANDBOX/server"
@@ -269,6 +271,24 @@ expect "10b restore dump called before account reconciliation" \
     test "${restore_line:-0}" -lt "${reconcile_line:-0}"
 expect "10c account reconciliation called before supervise_daemon" \
     test "${reconcile_line:-0}" -lt "${supervise_line:-0}"
+
+# ===========================================================================
+# 11. first-dump-wins: with two dumps planted at once, the glob-first dump
+#     (aa-first.sql) is the only one imported, exactly once; the later dump
+#     (zz-last.sql) is never fed to the client. Pins the documented
+#     "only one dump is picked per boot" / glob-order selection contract.
+# ===========================================================================
+new_dump_dir
+printf 'AA_FIRST_MARKER_LINE;\n' > "$DUMP_DIR/aa-first.sql"
+printf 'ZZ_LAST_MARKER_LINE;\n' > "$DUMP_DIR/zz-last.sql"
+stub_reset
+run_restore; rc=$?
+first_hash=$(hash_of "$DUMP_DIR/aa-first.sql")
+expect "11a first-dump-wins: client received only aa-first content" \
+    bash -c 'grep -q "AA_FIRST_MARKER_LINE;" "$1" && ! grep -q "ZZ_LAST_MARKER_LINE;" "$1"' _ "$STUB_DIR/stdin"
+expect "11b first-dump-wins: marker == sha256(aa-first.sql)" \
+    test "$(cat "$MARKER" 2>/dev/null)" = "$first_hash"
+expect "11c first-dump-wins: client invoked exactly once" test "$(stub_calls)" = "1"
 
 # ===========================================================================
 printf '\n%d passed, %d failed\n' "$pass" "$failed"
