@@ -132,7 +132,7 @@
     },
     {
       "name": "Restore Dump Force",
-      "description": "1 = Pass --force to the client so the import continues past SQL errors. The file is still recorded as restored once per checksum, and the number of SQL errors is reported in the console and appended to dump/.restored.sha256. 0 = a dump with errors is not recorded, so the next restart retries it.",
+      "description": "1 = Pass --force to the client so the import continues past SQL errors. The file is recorded as restored once per checksum only when the import completes (every pipeline stage succeeds); when SQL errors were reported, their count is printed in the console and appended to dump/.restored.sha256. 0 = a dump that reports errors is not recorded, so the next restart retries it.",
       "env_variable": "RESTORE_DUMP_FORCE",
       "default_value": "0",
       "user_viewable": true,
