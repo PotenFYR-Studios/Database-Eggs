@@ -1138,12 +1138,18 @@ install_mariadb() {
     local urls=() v
     mapfile -t urls < <(pf_mariadb_urls "${RESOLVED}" "${ARCH_ALT}" "${ARCH_TYPE}")
 
+    # MariaDB bintars are hundreds of MB; the default 300s fetch budget needs
+    # >=1.2 MB/s sustained and stalls slow hosts. Widen only this real transfer
+    # (still bounded); the fast HEAD probe stage is unaffected.
+    local old_download_timeout="${PF_DOWNLOAD_TIMEOUT:-}"
+    export PF_DOWNLOAD_TIMEOUT=1800
     disk_preflight_mb 1600
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
         || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
+    if [ -n "${old_download_timeout}" ]; then export PF_DOWNLOAD_TIMEOUT="${old_download_timeout}"; else unset PF_DOWNLOAD_TIMEOUT; fi
     RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
     log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"

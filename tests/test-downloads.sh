@@ -89,3 +89,22 @@ mir9=$(printf '%s\n' "$mariadb_urls" | grep -n 'mirror.math.princeton.edu/pub/ma
 count=$(printf '%s\n' "$mariadb_urls" | grep -c .)
 [ "$count" -eq 20 ] || fail "pf_mariadb_urls expected 20 candidates (10 deduped versions x 2 mirrors), got $count"
 printf 'PASS: pf_mariadb_urls archive-then-princeton interleave, fallback order and dedup (20 candidates)\n'
+
+# install_mariadb(): the large bintar transfer gets a longer (still bounded)
+# wall-clock budget than fetch()'s default, and the caller's value is restored
+# afterwards. Structural/offline check -- no network or real download.
+mariadb_fn=$(extract_fn install_mariadb)
+[ -n "$mariadb_fn" ] || fail 'cannot extract install_mariadb()'
+tfc_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'try_fetch_candidates' | head -n1 | cut -d: -f1)
+[ -n "$tfc_line" ] || fail 'install_mariadb() does not call try_fetch_candidates'
+widen_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'export PF_DOWNLOAD_TIMEOUT=1800' | head -n1 | cut -d: -f1)
+[ -n "$widen_line" ] || fail 'install_mariadb() does not widen PF_DOWNLOAD_TIMEOUT to 1800'
+[ "$widen_line" -lt "$tfc_line" ] || fail 'PF_DOWNLOAD_TIMEOUT=1800 is not set before the bintar transfer'
+restore_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'old_download_timeout' | tail -n1 | cut -d: -f1)
+[ -n "$restore_line" ] || fail 'install_mariadb() does not restore old_download_timeout'
+[ "$restore_line" -gt "$tfc_line" ] || fail 'old_download_timeout is not restored after the bintar transfer'
+printf '%s\n' "$mariadb_fn" | sed -n "${restore_line}p" | grep -q 'unset PF_DOWNLOAD_TIMEOUT' \
+    || fail 'restore does not unset PF_DOWNLOAD_TIMEOUT when it was previously unset'
+printf '%s\n' "$(extract_fn fetch)" | grep -q '\${PF_DOWNLOAD_TIMEOUT:-300}' \
+    || fail 'fetch() default PF_DOWNLOAD_TIMEOUT=300 changed'
+printf 'PASS: install_mariadb() widens PF_DOWNLOAD_TIMEOUT for the bintar transfer and restores it; fetch() default unchanged\n'
