@@ -502,15 +502,30 @@ fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
 
 # Candidate downloader: HEAD probes first (fast); when a CDN blocks or lies
 # about HEAD (Akamai et al.), falls back to bounded real GET attempts.
+# Optional PF_FETCH_DEADLINE (seconds) caps the TOTAL search, not each attempt:
+# one slow transfer is still allowed up to fetch()'s per-attempt budget, but
+# once the overall search exceeds the deadline no further GET starts, so a
+# pathologically stalled host cannot hold the pre-ready boot for hours. When
+# PF_FETCH_DEADLINE is unset/empty/non-numeric the behavior is exactly as before.
 try_fetch_candidates() { # try_fetch_candidates <outfile> <url> [url...]
     local out="$1"; shift
     local u n=0
+    local _start=${SECONDS}
+    local _fetch_deadline="${PF_FETCH_DEADLINE:-}"
     for u in "$@"; do
         probe_url "${u}" || continue
+        if [ -n "${_fetch_deadline}" ] && [[ "${_fetch_deadline}" =~ ^[0-9]+$ ]] \
+            && [ $((SECONDS - _start)) -ge "${_fetch_deadline}" ]; then
+            rm -f "${out}"; return 1
+        fi
         if fetch "${u}" "${out}" && [ -s "${out}" ]; then printf '%s' "${u}"; return 0; fi
     done
     for u in "$@"; do
         n=$((n + 1)); [ ${n} -gt 4 ] && break
+        if [ -n "${_fetch_deadline}" ] && [[ "${_fetch_deadline}" =~ ^[0-9]+$ ]] \
+            && [ $((SECONDS - _start)) -ge "${_fetch_deadline}" ]; then
+            rm -f "${out}"; return 1
+        fi
         rm -f "${out}"
         if fetch "${u}" "${out}" && [ -s "${out}" ]; then printf '%s' "${u}"; return 0; fi
     done
@@ -1141,8 +1156,13 @@ install_mariadb() {
     # MariaDB bintars are hundreds of MB; the default 300s fetch budget needs
     # >=1.2 MB/s sustained and stalls slow hosts. Widen only this real transfer
     # (still bounded); the fast HEAD probe stage is unaffected.
+    # PF_FETCH_DEADLINE caps the TOTAL search across all 20 candidates: a single
+    # transfer may use the whole per-attempt budget above, but a stalled host
+    # cannot hold the pre-ready boot for hours (20 x 1800s).
     local old_download_timeout="${PF_DOWNLOAD_TIMEOUT:-}"
     export PF_DOWNLOAD_TIMEOUT=1800
+    local old_fetch_deadline="${PF_FETCH_DEADLINE:-}"
+    export PF_FETCH_DEADLINE=3600
     disk_preflight_mb 1600
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     local tmp_tar; tmp_tar=$(mktemp)
@@ -1150,6 +1170,7 @@ install_mariadb() {
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
         || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
     if [ -n "${old_download_timeout}" ]; then export PF_DOWNLOAD_TIMEOUT="${old_download_timeout}"; else unset PF_DOWNLOAD_TIMEOUT; fi
+    if [ -n "${old_fetch_deadline}" ]; then export PF_FETCH_DEADLINE="${old_fetch_deadline}"; else unset PF_FETCH_DEADLINE; fi
     RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
     log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"
