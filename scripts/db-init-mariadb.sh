@@ -539,11 +539,24 @@ pf_mariadb_restore_dump() {
     # system database. Importing it into a newer MariaDB release produces
     # errors such as an incompatible mysql.column_stats definition.
     # The running server owns these system tables, so skip them by default.
+    # Only the literal 0 disables the filter; empty/invalid keeps it enabled.
     local skip_system=1
-    local -a mysql_cmd=(--protocol=tcp -h 127.0.0.1 -P "${port}" -u root -p"${rootpw}")
+    [ "${RESTORE_DUMP_SKIP_SYSTEM:-1}" = "0" ] && skip_system=0
+    # Only the literal 1 enables --force; anything else keeps strict failure.
+    local restore_force=0
+    [ "${RESTORE_DUMP_FORCE:-0}" = "1" ] && restore_force=1
+    local -a mysql_cmd=(--protocol=tcp -h 127.0.0.1 -P "${port}" -u root -p"${rootpw}" --max_allowed_packet=1G)
+    [ "${restore_force}" = "1" ] && mysql_cmd+=(--force)
     local restore_log="${SERVER_DIR}/logs/dump-restore.log"
     log "Restoring database dump: $(basename "${dump_file}")..."
-    log "Skipping MariaDB system schemas (mysql, performance_schema, information_schema)."
+    if [ "${skip_system}" = "1" ]; then
+        log "Skipping MariaDB system schemas (mysql, performance_schema, information_schema)."
+    else
+        log "System-schema filtering disabled (RESTORE_DUMP_SKIP_SYSTEM=0)."
+    fi
+    if [ "${restore_force}" = "1" ]; then
+        log "MariaDB client --force enabled (RESTORE_DUMP_FORCE=1); SQL errors will not abort the import."
+    fi
 
     local awk_filter='
         BEGIN { db = "" }
@@ -618,10 +631,24 @@ pf_mariadb_restore_dump() {
         done
     fi
 
-    if [ "${restore_ok}" -eq 1 ]; then
+    # Error accounting: count the SQL error lines the client wrote to the log.
+    local errors
+    errors=$(grep -cE '^[[:space:]]*ERROR' "${restore_log}" 2>/dev/null || true)
+    case "${errors}" in
+        '' | *[!0-9]*) errors=0 ;;
+    esac
+
+    # force=1: record the restore even when SQL errors were reported, and note
+    # the error count. force=0: only a clean import (every stage 0 AND no ERROR
+    # lines) is recorded, so a partial import is never marked as restored.
+    if [ "${restore_ok}" -eq 1 ] && { [ "${restore_force}" = "1" ] || [ "${errors}" -eq 0 ]; }; then
         printf '%s\n' "${hash}" > "${marker}" 2>/dev/null || true
         chmod 600 "${marker}" 2>/dev/null || true
         ok "Database dump restored successfully: $(basename "${dump_file}")"
+        if [ "${restore_force}" = "1" ] && [ "${errors}" -gt 0 ]; then
+            warn "Database dump restored with ${errors} SQL error(s); see ${restore_log}."
+            printf '# forced=1 errors=%s at=%s\n' "${errors}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >> "${marker}" 2>/dev/null || true
+        fi
     else
         local last_err=""
         [ -f "${restore_log}" ] && last_err=$(grep -v '^[[:space:]]*$' "${restore_log}" 2>/dev/null | tail -n1)

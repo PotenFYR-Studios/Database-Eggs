@@ -49,9 +49,11 @@ case "$FUNC" in
 esac
 
 # Stubs the extracted function expects from the live entrypoint.
+WARN_LOG="$SANDBOX/warns"
+: > "$WARN_LOG"
 log() { :; }
 ok() { :; }
-warn() { :; }
+warn() { printf '%s\n' "$*" >> "$WARN_LOG"; }
 eval "$FUNC"
 
 # ---- stub client -----------------------------------------------------------
@@ -63,12 +65,13 @@ dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cat > "$dir/stdin"
 printf '%s\n' "$@" > "$dir/args"
 printf 'call\n' >> "$dir/calls"
+[ -f "$dir/stub_err" ] && cat "$dir/stub_err" >&2 || true
 rc=$(cat "$dir/rc" 2>/dev/null || printf 0)
 exit "$rc"
 STUB
 chmod +x "$STUB_DIR/client" 2>/dev/null || true
 CLIENT="$STUB_DIR/client"
-stub_reset() { rm -f "$STUB_DIR/stdin" "$STUB_DIR/args" "$STUB_DIR/calls"; printf '0\n' > "$STUB_DIR/rc"; }
+stub_reset() { rm -f "$STUB_DIR/stdin" "$STUB_DIR/args" "$STUB_DIR/calls" "$STUB_DIR/stub_err"; printf '0\n' > "$STUB_DIR/rc"; }
 stub_calls() { wc -l < "$STUB_DIR/calls" 2>/dev/null | tr -d '[:space:]'; }
 
 # ---- wired globals ---------------------------------------------------------
@@ -79,6 +82,10 @@ DB_ROOT_PASSWORD="s3cret"
 RESTORE_DUMP=1
 DUMP_DIR="$SERVER_DIR/dump"
 MARKER="$DUMP_DIR/.restored.sha256"
+
+# Keep the two new knobs out of the inherited environment so the default-run
+# assertions below exercise the documented defaults (skip=1, force=0).
+unset RESTORE_DUMP_SKIP_SYSTEM RESTORE_DUMP_FORCE 2>/dev/null || true
 
 new_dump_dir() { rm -rf "$DUMP_DIR"; mkdir -p "$DUMP_DIR"; }
 run_restore() { pf_mariadb_restore_dump "$CLIENT"; }
@@ -289,6 +296,102 @@ expect "11a first-dump-wins: client received only aa-first content" \
 expect "11b first-dump-wins: marker == sha256(aa-first.sql)" \
     test "$(cat "$MARKER" 2>/dev/null)" = "$first_hash"
 expect "11c first-dump-wins: client invoked exactly once" test "$(stub_calls)" = "1"
+
+# ===========================================================================
+# 12. default knobs: --max_allowed_packet=1G present, --force absent
+# ===========================================================================
+new_dump_dir
+printf 'CREATE TABLE args (id int);\n' > "$DUMP_DIR/args.sql"
+stub_reset
+run_restore; rc=$?
+expect "12a default argv contains --max_allowed_packet=1G" \
+    grep -qx -- '--max_allowed_packet=1G' "$STUB_DIR/args"
+expect "12b default argv has no --force" \
+    bash -c '! grep -qx -- "--force" "$1"' _ "$STUB_DIR/args"
+expect "12c default run returned 0" test "$rc" -eq 0
+
+# ===========================================================================
+# 13. RESTORE_DUMP_FORCE=1 -> --force passed to the client
+# ===========================================================================
+new_dump_dir
+printf 'CREATE TABLE force (id int);\n' > "$DUMP_DIR/force.sql"
+RESTORE_DUMP_FORCE=1
+stub_reset
+run_restore; rc=$?
+expect "13a force=1 argv contains --force" grep -qx -- '--force' "$STUB_DIR/args"
+expect "13b force=1 argv still contains --max_allowed_packet=1G" \
+    grep -qx -- '--max_allowed_packet=1G' "$STUB_DIR/args"
+expect "13c force=1 run returned 0" test "$rc" -eq 0
+RESTORE_DUMP_FORCE=0
+
+# ===========================================================================
+# 14. RESTORE_DUMP_SKIP_SYSTEM=0 -> system section reaches the client
+# ===========================================================================
+new_dump_dir
+cat > "$DUMP_DIR/skipoff.sql" <<'SQL'
+USE mysql;
+INSERT INTO mysql.user VALUES ('PLANTED_SYSTEM_LINE');
+USE mydb;
+INSERT INTO mydb.t VALUES ('KEEP_APP_LINE');
+SQL
+RESTORE_DUMP_SKIP_SYSTEM=0
+stub_reset
+run_restore; rc=$?
+expect "14a skip disabled: planted system line reaches client" grep -q 'PLANTED_SYSTEM_LINE' "$STUB_DIR/stdin"
+expect "14b skip disabled: application line still reaches client" grep -q 'KEEP_APP_LINE' "$STUB_DIR/stdin"
+expect "14c skip disabled: function returned 0" test "$rc" -eq 0
+RESTORE_DUMP_SKIP_SYSTEM=1
+
+# ===========================================================================
+# 15. SQL errors with client exit 0: strict by default, forced when asked
+# ===========================================================================
+# 15.1 force=0 (default): an ERROR line means failure -> no marker, warn
+new_dump_dir
+printf 'CREATE TABLE ferr (id int);\n' > "$DUMP_DIR/err.sql"
+stub_reset
+printf '%s\n' 'ERROR 1064 (42000) at line 1: You have an error in your SQL syntax' > "$STUB_DIR/stub_err"
+: > "$WARN_LOG"
+run_restore; rc=$?
+expect "15a force=0 error: no marker written" test ! -f "$MARKER"
+expect "15b force=0 error: warning mentions the SQL error" grep -q 'ERROR 1064' "$WARN_LOG"
+expect "15c force=0 error: function returned 0" test "$rc" -eq 0
+
+# 15.2 force=1: the same ERROR line is tolerated, marker + note + warn
+new_dump_dir
+printf 'CREATE TABLE ferr1 (id int);\n' > "$DUMP_DIR/err1.sql"
+RESTORE_DUMP_FORCE=1
+stub_reset
+printf '%s\n' 'ERROR 1064 (42000) at line 1: You have an error in your SQL syntax' > "$STUB_DIR/stub_err"
+: > "$WARN_LOG"
+run_restore; rc=$?
+expect "15d force=1 error: marker written" test -f "$MARKER"
+expect "15e force=1 error: marker first line == sha256(dump)" \
+    test "$(head -n1 "$MARKER" 2>/dev/null)" = "$(hash_of "$DUMP_DIR/err1.sql")"
+expect "15f force=1 error: marker second line records errors=1" grep -q 'errors=1' "$MARKER"
+expect "15g force=1 error: warning mentions SQL errors" grep -qi 'SQL error' "$WARN_LOG"
+expect "15h force=1 error: function returned 0" test "$rc" -eq 0
+
+# 15.3 idempotence survives the extra comment line: second run is a no-op
+stub_reset
+: > "$WARN_LOG"
+run_restore; rc=$?
+expect "15i force=1 rerun: client not called (marker hash still matches)" test ! -e "$STUB_DIR/stdin"
+expect "15j force=1 rerun: function returned 0" test "$rc" -eq 0
+RESTORE_DUMP_FORCE=0
+
+# ===========================================================================
+# 16. structural wiring for the two new variables
+# ===========================================================================
+egg_skip_default=$(jq -r '.variables[] | select(.env_variable == "RESTORE_DUMP_SKIP_SYSTEM") | .default_value' "$EGG" 2>/dev/null | tr -d '\r')
+egg_skip_rules=$(jq -r '.variables[] | select(.env_variable == "RESTORE_DUMP_SKIP_SYSTEM") | .rules' "$EGG" 2>/dev/null | tr -d '\r')
+egg_force_default=$(jq -r '.variables[] | select(.env_variable == "RESTORE_DUMP_FORCE") | .default_value' "$EGG" 2>/dev/null | tr -d '\r')
+egg_force_rules=$(jq -r '.variables[] | select(.env_variable == "RESTORE_DUMP_FORCE") | .rules' "$EGG" 2>/dev/null | tr -d '\r')
+expect "16a egg RESTORE_DUMP_SKIP_SYSTEM default_value is 1" test "$egg_skip_default" = "1"
+expect "16b egg RESTORE_DUMP_SKIP_SYSTEM rules is required|boolean" test "$egg_skip_rules" = "required|boolean"
+expect "16c egg RESTORE_DUMP_FORCE default_value is 0" test "$egg_force_default" = "0"
+expect "16d egg RESTORE_DUMP_FORCE rules is required|boolean" test "$egg_force_rules" = "required|boolean"
+expect "16e entrypoint persisted list contains both new names after RESTORE_DUMP" \
+    grep -q 'RESTORE_DUMP RESTORE_DUMP_SKIP_SYSTEM RESTORE_DUMP_FORCE' "$ENTRY"
 
 # ===========================================================================
 printf '\n%d passed, %d failed\n' "$pass" "$failed"

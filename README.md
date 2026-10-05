@@ -95,7 +95,7 @@ Dispatched `DATABASE_TYPE` values (aliases in parentheses), straight from the eg
 
 ## ⚙️ Startup Variables
 
-The egg exports **33 variables**, the ones you will actually touch:
+The egg exports **35 variables**, the ones you will actually touch:
 
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
@@ -108,6 +108,8 @@ The egg exports **33 variables**, the ones you will actually touch:
 | `DB_ROOT_PASSWORD` | *(empty)* | Root/admin/master password; empty or `auto` = auto-generated |
 | `AUTO_GENERATE_CREDENTIALS` | `1` | Generate strong secrets for empty/`auto` fields |
 | `RESTORE_DUMP` | `0` | After MariaDB/MySQL starts, auto-restore the first SQL dump in /home/container/dump (`.sql`, `.sql.gz`, `.sql.xz`, `.sql.zst`). One restore per file checksum; delete `dump/.restored.sha256` (or replace the file) to restore again |
+| `RESTORE_DUMP_SKIP_SYSTEM` | `1` | Skip old MariaDB/MySQL system schemas (`mysql`, `performance_schema`, `information_schema`) when restoring a dump; `0` imports them too |
+| `RESTORE_DUMP_FORCE` | `0` | Pass `--force` to the client so the import continues past SQL errors. A forced dump is still recorded once per checksum and the error count is reported; delete `dump/.restored.sha256` to retry |
 | `PERFORMANCE_TUNING` | `1` | Auto-size buffers/caches from container RAM & CPU |
 | `SECURITY_HARDENING` | `1` | SCRAM auth, drop insecure defaults, disable debug commands |
 | `SAVE_TO_ENV` | `1` | Persist credentials to `/home/container/.env` (mode 600) |
@@ -119,11 +121,13 @@ The egg exports **33 variables**, the ones you will actually touch:
 | `GIT_POLL_SECONDS` | `300` | Poll interval in seconds for `GIT_AUTO_UPDATE` (30-86400) |
 | `EXTRA_RUNTIMES` | *(empty)* | Inject companions on demand (`python`, `nodejs`, `bun`, `psql`, …) |
 
-All 33 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
+All 35 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
 
 ### Dump restore (MariaDB/MySQL)
 
 Drop a `.sql`, `.sql.gz`, `.sql.xz` or `.sql.zst` dump into `/home/container/dump`, set `RESTORE_DUMP=1` and restart. The first dump (glob order) is imported exactly once per file checksum. The restore runs before account reconciliation, so grants are re-applied even when the dump contains a `DROP DATABASE`. A failed restore never stops the database — fix the dump and restart to retry. Only one dump is picked per boot.
+
+The import runs through the MariaDB client with `--max_allowed_packet=1G`, so large rows in the dump are accepted regardless of the server's own packet setting. `RESTORE_DUMP_SKIP_SYSTEM` defaults to `1`: the version-specific `mysql`, `performance_schema` and `information_schema` schemas from older dumps are skipped because the running server owns them — set it to `0` only when a dump is genuinely meant to recreate those schemas. With `RESTORE_DUMP_FORCE=1` the client keeps going past SQL errors: the dump is still recorded as restored once per checksum (the marker gets a `# forced=1 errors=N` line) and the error count is reported in the console; with the default `0`, any SQL error means the dump is not recorded, so the next restart retries it. Delete `dump/.restored.sha256` if you want to force a re-import.
 
 ## 🛡️ Security & Performance
 

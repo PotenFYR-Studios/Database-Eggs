@@ -121,6 +121,26 @@
       "field_type": "text"
     },
     {
+      "name": "Restore Dump Skip System Schemas",
+      "description": "1 = Skip old MariaDB/MySQL system schemas (mysql, performance_schema, information_schema) when restoring a dump; 0 = import them as well.",
+      "env_variable": "RESTORE_DUMP_SKIP_SYSTEM",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
+      "name": "Restore Dump Force",
+      "description": "1 = Pass --force to the client so the import continues past SQL errors. The file is still recorded as restored once per checksum, and the number of SQL errors is reported in the console and appended to dump/.restored.sha256. 0 = a dump with errors is not recorded, so the next restart retries it.",
+      "env_variable": "RESTORE_DUMP_FORCE",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
       "name": "Save Credentials to .env",
       "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
       "env_variable": "SAVE_TO_ENV",
