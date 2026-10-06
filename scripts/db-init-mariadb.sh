@@ -885,7 +885,9 @@ start_mariadb_mysql() {
                 tail -n 40 "${upgrade_log}" 2>/dev/null || true
             fi
         else
-            warn "mariadb-upgrade/mysql_upgrade was not found; old mysql.* system tables cannot be upgraded automatically."
+            # MySQL 8.0.16+ removed mysql_upgrade: the daemon upgrades system
+            # tables itself at startup, so a missing binary is expected there.
+            log "mariadb-upgrade/mysql_upgrade not found; skipping explicit system-table upgrade (MySQL 8+ upgrades automatically)."
         fi
     else
         log "Automatic MariaDB system-table upgrade disabled (DB_AUTO_UPGRADE=0)."

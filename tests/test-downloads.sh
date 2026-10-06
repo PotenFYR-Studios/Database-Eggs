@@ -114,7 +114,16 @@ fd_restore_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'old_fetch_deadline' | t
 [ "$fd_restore_line" -gt "$tfc_line" ] || fail 'old_fetch_deadline is not restored after the bintar transfer'
 printf '%s\n' "$mariadb_fn" | sed -n "${fd_restore_line}p" | grep -q 'unset PF_FETCH_DEADLINE' \
     || fail 'restore does not unset PF_FETCH_DEADLINE when it was previously unset'
-printf '%s\n' "$(extract_fn fetch)" | grep -q '\${PF_DOWNLOAD_TIMEOUT:-300}' \
+# Download progress: exported for the bintar transfer, restored right after.
+prog_widen_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'export PF_DOWNLOAD_PROGRESS=1' | head -n1 | cut -d: -f1)
+[ -n "$prog_widen_line" ] || fail 'install_mariadb() does not enable PF_DOWNLOAD_PROGRESS=1'
+[ "$prog_widen_line" -lt "$tfc_line" ] || fail 'PF_DOWNLOAD_PROGRESS=1 is not set before the bintar transfer'
+prog_restore_line=$(printf '%s\n' "$mariadb_fn" | grep -n 'old_download_progress' | tail -n1 | cut -d: -f1)
+[ -n "$prog_restore_line" ] || fail 'install_mariadb() does not restore old_download_progress'
+[ "$prog_restore_line" -gt "$tfc_line" ] || fail 'old_download_progress is not restored after the bintar transfer'
+printf '%s\n' "$mariadb_fn" | sed -n "${prog_restore_line}p" | grep -q 'unset PF_DOWNLOAD_PROGRESS' \
+    || fail 'restore does not unset PF_DOWNLOAD_PROGRESS when it was previously unset'
+printf '%s\n' "$(extract_fn fetch)" | grep -q '${PF_DOWNLOAD_TIMEOUT:-300}' \
     || fail 'fetch() default PF_DOWNLOAD_TIMEOUT=300 changed'
 printf 'PASS: install_mariadb() widens PF_DOWNLOAD_TIMEOUT/PF_FETCH_DEADLINE for the bintar transfer and restores both; fetch() default unchanged\n'
 
