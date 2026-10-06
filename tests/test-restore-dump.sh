@@ -211,6 +211,30 @@ expect "5b system-schema skip: planted system line dropped" \
 expect "5c system-schema skip: function returned 0" test "$rc" -eq 0
 
 # ===========================================================================
+# 5d. legacy-dump compatibility: replication state is removed, deprecated
+# SQL mode token is removed, and MySQL 8 0900 collation is mapped.
+# ===========================================================================
+new_dump_dir
+cat > "$DUMP_DIR/compat.sql" <<'SQL'
+SET @@GLOBAL.GTID_PURGED='0-1-123';
+SET SQL_MODE='NO_AUTO_CREATE_USER,STRICT_TRANS_TABLES';
+USE mydb;
+CREATE TABLE compat_table (id int) COLLATE=utf8mb4_0900_ai_ci;
+INSERT INTO mydb.compat_table VALUES (1);
+SQL
+stub_reset
+run_restore; rc=$?
+expect "5d-1 compatibility: GTID_PURGED statement removed" \
+    bash -c '! grep -q "GTID_PURGED" "$1"' _ "$STUB_DIR/stdin"
+expect "5d-2 compatibility: NO_AUTO_CREATE_USER removed" \
+    bash -c '! grep -q "NO_AUTO_CREATE_USER" "$1"' _ "$STUB_DIR/stdin"
+expect "5d-3 compatibility: 0900 collation mapped" \
+    grep -q 'utf8mb4_unicode_ci' "$STUB_DIR/stdin"
+expect "5d-4 compatibility: application data preserved" \
+    grep -q 'INSERT INTO mydb.compat_table VALUES (1);' "$STUB_DIR/stdin"
+expect "5d-5 compatibility: function returned 0" test "$rc" -eq 0
+
+# ===========================================================================
 # 6. marker already correct -> idempotent, client never invoked
 # ===========================================================================
 new_dump_dir
