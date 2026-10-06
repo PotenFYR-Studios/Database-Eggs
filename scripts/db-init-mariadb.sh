@@ -852,6 +852,36 @@ start_mariadb_mysql() {
         fi
     fi
 
+    # Upgrade the target server's own system tables before restoring any dump.
+    # A logical dump filter cannot fix an OLD PHYSICAL datadir: for example,
+    # MariaDB 10.3's mysql.column_stats can remain on disk when the daemon is
+    # replaced by MariaDB 13.x. MariaDB documents mariadb-upgrade/mysql_upgrade
+    # as the step that updates system tables after a version change.
+    #
+    # Run this after root authentication is known to work, so the upgrade tool
+    # can repair mysql.* before the restore touches application data.
+    if [ "${DB_AUTO_UPGRADE:-1}" = "1" ]; then
+        local upgrade_bin=""
+        upgrade_bin=$(find_mariadb_bin "mariadb-upgrade" "mysql_upgrade" 2>/dev/null || true)
+        if [ -n "${upgrade_bin}" ] && [ -x "${upgrade_bin}" ]; then
+            local upgrade_log="${SERVER_DIR}/logs/mariadb-upgrade.log"
+            log "Checking/upgrading MariaDB system tables for the running server..."
+            if "${upgrade_bin}" \
+                --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" \
+                -u root -p"${DB_ROOT_PASSWORD:-}" \
+                --force >>"${upgrade_log}" 2>&1; then
+                ok "MariaDB system-table upgrade completed."
+            else
+                warn "MariaDB system-table upgrade reported an error; see ${upgrade_log}."
+                tail -n 40 "${upgrade_log}" 2>/dev/null || true
+            fi
+        else
+            warn "mariadb-upgrade/mysql_upgrade was not found; old mysql.* system tables cannot be upgraded automatically."
+        fi
+    else
+        log "Automatic MariaDB system-table upgrade disabled (DB_AUTO_UPGRADE=0)."
+    fi
+
     # Restore the optional dump first so account reconciliation re-applies
     # grants after any DROP DATABASE inside the dump (RESTORE_DUMP=1).
     pf_mariadb_restore_dump "${client_bin}"
