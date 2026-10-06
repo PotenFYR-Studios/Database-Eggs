@@ -586,7 +586,10 @@ pf_mariadb_restore_dump() {
                 }
                 if (low ~ /^[[:space:]]*create[[:space:]]+database[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*;/) next
                 if (low ~ /^[[:space:]]*(drop|alter)[[:space:]]+database[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*;/) next
-                if (low ~ /^[[:space:]]*(insert[[:space:]]+into|replace[[:space:]]+into|update|delete[[:space:]]+from|create[[:space:]]+table|alter[[:space:]]+table|drop[[:space:]]+table|lock[[:space:]]+tables)[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?\./) next
+                # Dumps commonly qualify system tables as `mysql`.`table`
+                # (or "mysql"."table"). Match optional quoting on BOTH
+                # identifiers; the previous filter only matched mysql.table.
+                if (low ~ /^[[:space:]]*(insert[[:space:]]+into|replace[[:space:]]+into|update|delete[[:space:]]+from|create[[:space:]]+table|alter[[:space:]]+table|drop[[:space:]]+table|lock[[:space:]]+tables)[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*.[[:space:]]*[`"]?[^[:space:];()]+[`"]?/) next
                 if (db == "##PF_SYSTEM##") {
                     # A new USE statement switches away from the system DB.
                     if (low ~ /^[[:space:]]*use[[:space:]]+/) db = ""
