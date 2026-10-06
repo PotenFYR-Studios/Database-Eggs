@@ -130,6 +130,26 @@ Drop a `.sql`, `.sql.gz`, `.sql.xz` or `.sql.zst` dump into `/home/container/dum
 
 The import runs through the MariaDB client with `--max_allowed_packet=1G`, so large rows in the dump are accepted regardless of the server's own packet setting. Compatibility normalization is enabled by default, so a logical dump made by an older MariaDB release (for example 10.3) can be restored into a newer release (for example 13.0) without modifying the original dump file. `RESTORE_DUMP_SKIP_SYSTEM` defaults to `1`: the version-specific `mysql`, `performance_schema` and `information_schema` schemas from older dumps are skipped because the running server owns them — set it to `0` only when a dump is genuinely meant to recreate those schemas. With `RESTORE_DUMP_FORCE=1` the client keeps going past SQL errors, but the dump is recorded as restored once per checksum only when the import completes (every pipeline stage succeeds); when SQL errors were reported, their count is printed in the console and appended to the marker as a `# forced=1 errors=N` line. With the default `0`, a dump that reports SQL errors is not recorded, so the next restart retries it. Delete `dump/.restored.sha256` if you want to force a re-import.
 
+On every boot, `mariadb-upgrade` (or `mysql_upgrade`) checks and upgrades the server's own system tables before any dump restore (`DB_AUTO_UPGRADE=0` disables this); it is a fast no-op when nothing changed, and repairs stale `mysql.*` definitions after a version switch.
+
+### Management console (MariaDB/MySQL)
+
+On MariaDB and MySQL servers, the panel console accepts management commands while the database runs. Authentication is fixed to the local root account; commands connect over TCP to the running server.
+
+| Command | Effect |
+| --- | --- |
+| `help` | List console commands |
+| `status` | Show whether the server answers queries |
+| `version` | Print the running server version |
+| `databases` / `users` | List databases / accounts |
+| `dump [db]`, `dump create [db]` | Write `dumps/<db>-<timestamp>.sql.gz` (single-transaction, routines, events, triggers) |
+| `restore <file> [db]`, `dump restore <file>` | Import a `.sql`/`.sql.gz` file (defaults to `DB_NAME`) |
+| `sql <statement>` / bare `sql` | Run one statement, or enter a live SQL session (`exit`/`quit` leaves) |
+| `root <new_password>` | Change the root password everywhere and persist it (credentials state + `.env`) |
+| `mysql [args]` / `mariadb [args]` | Pass arguments to the client (interactive when no `-e`); `-p` is ignored, user is forced to root |
+
+Dumps and restores run as the root account over TCP; the console is available on MariaDB/MySQL engines only. `stop`, `restart`, `exit` and friends still shut the server down through the panel stop watcher.
+
 ## 🛡️ Security & Performance
 
 - **Least privilege**: fully compliant with the Pterodactyl container UID `988:988`; never requires host root.
