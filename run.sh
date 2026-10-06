@@ -602,11 +602,23 @@ print_connection_guide() {
 
 # ---------------------------------------------------------------------------
 # Optional DB management console. This is an additive layer; the original
-# engine startup/reconciliation flow remains unchanged.
+# engine startup/reconciliation flow remains unchanged. Official images ship
+# the script under /usr/local/bin (Dockerfile COPY scripts/ /usr/local/bin/);
+# server-dir copies exist on git-synced or legacy installs, and generic
+# images bootstrap it into the isolated runtime dir.
 # ---------------------------------------------------------------------------
-if [ -f "${SERVER_DIR}/scripts/db-console.sh" ]; then
-    # shellcheck source=/dev/null
-    source "${SERVER_DIR}/scripts/db-console.sh" 2>/dev/null || true
+if [ "${PROJECT_TYPE}" = "mariadb" ] || [ "${PROJECT_TYPE}" = "mysql" ]; then
+    for _pf_console in \
+        "${SERVER_DIR}/scripts/db-console.sh" \
+        "/usr/local/bin/db-console.sh" \
+        "/tmp/.database-runtime/db-console.sh"; do
+        if [ -f "${_pf_console}" ]; then
+            # shellcheck source=/dev/null
+            source "${_pf_console}" 2>/dev/null || true
+            break
+        fi
+    done
+    unset _pf_console
 fi
 
 # ---------------------------------------------------------------------------

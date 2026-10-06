@@ -2,7 +2,22 @@
 DB_PORT="${SERVER_PORT:-3306}"
 
 _dbcli(){
-  command -v mariadb >/dev/null 2>&1 && echo mariadb || echo mysql
+  # Prefer the version-matched bintar client (same tree as the running
+  # daemon); fall back to whatever the image provides on PATH.
+  local c
+  for c in "${SERVER_DIR}/opt/mariadb/bin/mariadb" "${SERVER_DIR}/opt/mysql/bin/mysql" mariadb mysql; do
+    command -v "$c" >/dev/null 2>&1 && { echo "$c"; return; }
+  done
+  echo mysql
+}
+
+_dbdumpcli(){
+  # Version-matched dump client next to the running daemon first.
+  local d
+  for d in "${SERVER_DIR}/opt/mariadb/bin/mariadb-dump" "${SERVER_DIR}/opt/mysql/bin/mysqldump" mariadb-dump mysqldump; do
+    command -v "$d" >/dev/null 2>&1 && { echo "$d"; return; }
+  done
+  echo mysqldump
 }
 
 _db_sql_session(){
@@ -20,7 +35,7 @@ _db_sql_session(){
     [ -n "$line" ] || continue
 
     case "${line,,}" in
-      exit|quit|exit;|quit;)
+      exit|quit|'exit;'|'quit;')
         echo "Interactive console closed."
         return 0
         ;;
@@ -95,8 +110,10 @@ db_console_handle(){
       c=$(_dbcli)
       echo "Creating dump: $db"
 
-      if command -v mariadb-dump >/dev/null 2>&1; then
-        MYSQL_PWD="$DB_ROOT_PASSWORD" mariadb-dump --protocol=tcp -h 127.0.0.1 -P "$DB_PORT" -u root \
+      local d
+      d=$(_dbdumpcli)
+      if command -v "$d" >/dev/null 2>&1; then
+        MYSQL_PWD="$DB_ROOT_PASSWORD" "$d" --protocol=tcp -h 127.0.0.1 -P "$DB_PORT" -u root \
           --single-transaction --routines --events --triggers "$db" | gzip -c > "$out"
       else
         MYSQL_PWD="$DB_ROOT_PASSWORD" mysqldump --protocol=tcp -h 127.0.0.1 -P "$DB_PORT" -u root \
