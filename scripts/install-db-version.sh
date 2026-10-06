@@ -1176,7 +1176,18 @@ install_mariadb() {
     export PF_FETCH_DEADLINE=3600
     local old_download_progress="${PF_DOWNLOAD_PROGRESS:-}"
     export PF_DOWNLOAD_PROGRESS=1
-    disk_preflight_mb 1600
+    # Legacy series (<=10.4) archive tarballs are far larger than modern
+    # bintars (10.3.39 is ~1GB vs ~400MB); size the disk preflight and the
+    # per-transfer budget accordingly so slow hosts do not fail mid-fetch.
+    local required_mb=1600
+    case "${RESOLVED}" in
+        10.[0-4].*)
+            required_mb=3200
+            export PF_DOWNLOAD_TIMEOUT=3600
+            export PF_FETCH_DEADLINE=7200
+            ;;
+    esac
+    disk_preflight_mb "${required_mb}"
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     log "MariaDB download progress: live percentage is enabled."
     local tmp_tar; tmp_tar=$(mktemp)

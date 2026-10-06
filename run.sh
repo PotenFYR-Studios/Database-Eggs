@@ -474,7 +474,6 @@ verify_running_version() {
     fi
 
     export EFFECTIVE_DB_VERSION="${actual}"
-    local req_major="${req%%.*}" act_major="${actual%%.*}"
     # Installer runs as a subshell: substitution decisions reach us via marker
     # files, never environment variables. Announcements fire for EVERY request
     # (latest included) - substitutions are never silent.
@@ -506,13 +505,31 @@ verify_running_version() {
         log "Verified engine version: ${actual} (requested ${req})"
         return 0
     fi
-    if [ "${req_major}" != "${act_major}" ]; then
+
+    # Series-level contract: '10.3' must be served by a 10.3.x binary, not any
+    # 10.x. Comparing only the major let 10.3 requests silently pass while a
+    # 10.11 fallback served - a downgrade in everything but the major digit.
+    # A bare-major request ('11') pins only the major; a series request
+    # ('11.4') pins major+minor; a full pin is checked exactly.
+    local req_series act_series
+    req_series=$(printf '%s' "${req}" | grep -oE '^[0-9]+(\.[0-9]+)?' || true)
+    act_series=$(printf '%s' "${actual}" | grep -oE '^[0-9]+(\.[0-9]+)?' || true)
+    if [ -n "${req_series}" ] && [ "${req_series}" != "${act_series}" ]; then
+        # Granularity fix: when the request is major-only, compare majors
+        # only (req '11' matches actual '11.8').
+        if [ "${req_series}" = "${req_series%%.*}" ]; then
+            [ "${req_series}" = "${act_series%%.*}" ] || req_mismatch=1
+        else
+            req_mismatch=1
+        fi
+    fi
+    if [ "${req_mismatch:-0}" = "1" ]; then
         if [ "${STRICT_VERSION:-1}" = "1" ]; then
-            error "Version contract violated: requested ${PROJECT_TYPE} '${req}' but available binary is '${actual}'."
+            error "Version contract violated: requested ${PROJECT_TYPE} series '${req_series}' but available binary is '${actual}' (series '${act_series}')."
             error "The server refuses to silently run a different version than requested."
             error "Options: fix network/installer (logs/installer.log), set STRICT_VERSION=0 to allow fallback,"
             error "or adjust DB_VERSION to match reality."
-            fail "Strict version verification failed (${req} != ${actual})."
+            fail "Strict version verification failed (series ${req_series} != ${act_series})."
         else
             warn "Running ${PROJECT_TYPE} ${actual} although '${req}' was requested (STRICT_VERSION=0)."
         fi
