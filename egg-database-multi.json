@@ -141,6 +141,16 @@
       "field_type": "text"
     },
     {
+      "name": "Restore Dump Compatibility Mode",
+      "description": "1 = Normalize legacy MariaDB/MySQL logical dumps before import. Automatically skips source replication state (GTID/SQL_LOG_BIN), removes obsolete NO_AUTO_CREATE_USER SQL mode tokens, and maps common MySQL 8 utf8mb4_0900 collations to MariaDB-compatible collations. The original dump is never modified. 0 = disable compatibility normalization.",
+      "env_variable": "RESTORE_DUMP_COMPAT",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
       "name": "Save Credentials to .env",
       "description": "1 = Persist database connection parameters and credentials into /home/container/.env (mode 600). Set to 0 to keep credentials strictly in process startup variables.",
       "env_variable": "SAVE_TO_ENV",
