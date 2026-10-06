@@ -636,15 +636,22 @@ pf_mariadb_restore_dump() {
     # A single normalized stream is used for all supported dump formats.
     # PIPESTATUS is captured immediately so decompression/filter/client errors
     # cannot be mistaken for a successful restore.
+    log "Starting SQL dump import..."
+    log "Restore log: ${restore_log}"
+    log "Dump size: $(du -h "${dump_file}" 2>/dev/null | awk '{print $1}')"
+    : > "${restore_log}" 2>/dev/null || true
+
     case "${dump_file}" in
         *.sql)
             awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}" \
-                | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                | timeout 3600 "${client}" "${mysql_cmd[@]}" 2>&1 | tee -a "${restore_log}"
             rcs=("${PIPESTATUS[@]}")
             ;;
         *.sql.gz)
             if command -v gzip >/dev/null 2>&1; then
-                gzip -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                gzip -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" 2>&1 | tee -a "${restore_log}"
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "gzip is unavailable; cannot restore $(basename "${dump_file}")."
@@ -653,7 +660,9 @@ pf_mariadb_restore_dump() {
             ;;
         *.sql.xz)
             if command -v xz >/dev/null 2>&1; then
-                xz -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                xz -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" 2>&1 | tee -a "${restore_log}"
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "xz is unavailable; cannot restore $(basename "${dump_file}")."
@@ -662,7 +671,9 @@ pf_mariadb_restore_dump() {
             ;;
         *.sql.zst)
             if command -v zstd >/dev/null 2>&1; then
-                zstd -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                zstd -dc "${dump_file}" \
+                    | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" \
+                    | timeout 3600 "${client}" "${mysql_cmd[@]}" 2>&1 | tee -a "${restore_log}"
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "zstd is unavailable; cannot restore $(basename "${dump_file}")."
