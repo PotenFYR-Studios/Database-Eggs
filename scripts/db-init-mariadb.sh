@@ -866,13 +866,20 @@ start_mariadb_mysql() {
         if [ -n "${upgrade_bin}" ] && [ -x "${upgrade_bin}" ]; then
             local upgrade_log="${SERVER_DIR}/logs/mariadb-upgrade.log"
             log "Checking/upgrading MariaDB system tables for the running server..."
+            log "MariaDB upgrade tool: ${upgrade_bin}"
+            log "MariaDB upgrade log: ${upgrade_log}"
+            log "Starting system-table check. This can take a while on an existing datadir..."
+            : > "${upgrade_log}" 2>/dev/null || true
             if "${upgrade_bin}" \
                 --protocol=tcp -h 127.0.0.1 -P "${SERVER_PORT:-3306}" \
                 -u root -p"${DB_ROOT_PASSWORD:-}" \
-                --force >>"${upgrade_log}" 2>&1; then
+                --force 2>&1 | tee -a "${upgrade_log}"; then
                 ok "MariaDB system-table upgrade completed."
+                log "System-table upgrade finished successfully; continuing to dump restore/account reconciliation."
             else
-                warn "MariaDB system-table upgrade reported an error; see ${upgrade_log}."
+                local upgrade_rc=${PIPESTATUS[0]:-1}
+                warn "MariaDB system-table upgrade reported an error (exit code ${upgrade_rc}); see ${upgrade_log}."
+                warn "Last MariaDB upgrade messages:"
                 tail -n 40 "${upgrade_log}" 2>/dev/null || true
             fi
         else
