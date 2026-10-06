@@ -618,7 +618,7 @@ pf_mariadb_restore_dump() {
             # Track the database after compatibility/system filtering.
             if (low ~ /^[[:space:]]*use[[:space:]]+/) {
                 line_db = line
-                sub(/^[[:space:]]*USE[[:space:]]+/i, "", line_db)
+                sub(/^[[:space:]]*[Uu][Ss][Ee][[:space:]]+/, "", line_db)
                 gsub(/[`";]/, "", line_db)
                 gsub(/^[[:space:]]+|[[:space:]]+$/, "", line_db)
                 db = tolower(line_db)
