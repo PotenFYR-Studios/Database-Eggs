@@ -479,10 +479,21 @@ fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
         tmp_out="${out}.dl.$$"
     fi
     rm -f "${tmp_out}"
-    timeout -k 1 "${budget}" curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time "${budget}" -o "${tmp_out}" "${url}" 2>/dev/null && result=0
+    # Progress is opt-in so normal metadata/API requests stay quiet.
+    # When enabled, curl/wget write a live percentage to stderr; command
+    # substitution therefore still receives only the intended stdout.
+    if [ "${PF_DOWNLOAD_PROGRESS:-0}" = "1" ]; then
+        timeout -k 1 "${budget}" curl -fSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time "${budget}" --progress-bar -o "${tmp_out}" "${url}" && result=0
+    else
+        timeout -k 1 "${budget}" curl -fsSL -A "${UA}" --retry 3 --retry-delay 2 --connect-timeout 20 --max-time "${budget}" -o "${tmp_out}" "${url}" 2>/dev/null && result=0
+    fi
     remaining=$((deadline - SECONDS))
     if [ "$result" != 0 ] && [ "$remaining" -gt 0 ]; then
-        timeout -k 1 "${remaining}" wget -qO "${tmp_out}" --tries=3 --timeout=20 -U "${UA}" "${url}" 2>/dev/null && result=0
+        if [ "${PF_DOWNLOAD_PROGRESS:-0}" = "1" ]; then
+            timeout -k 1 "${remaining}" wget -O "${tmp_out}" --tries=3 --timeout=20 --progress=bar:force:noscroll -U "${UA}" "${url}" && result=0
+        else
+            timeout -k 1 "${remaining}" wget -qO "${tmp_out}" --tries=3 --timeout=20 -U "${UA}" "${url}" 2>/dev/null && result=0
+        fi
     fi
     if [ "$result" = 0 ]; then
         if [ "${out}" = "-" ]; then
@@ -1163,14 +1174,18 @@ install_mariadb() {
     export PF_DOWNLOAD_TIMEOUT=1800
     local old_fetch_deadline="${PF_FETCH_DEADLINE:-}"
     export PF_FETCH_DEADLINE=3600
+    local old_download_progress="${PF_DOWNLOAD_PROGRESS:-}"
+    export PF_DOWNLOAD_PROGRESS=1
     disk_preflight_mb 1600
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
+    log "MariaDB download progress: live percentage is enabled."
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
         || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
     if [ -n "${old_download_timeout}" ]; then export PF_DOWNLOAD_TIMEOUT="${old_download_timeout}"; else unset PF_DOWNLOAD_TIMEOUT; fi
     if [ -n "${old_fetch_deadline}" ]; then export PF_FETCH_DEADLINE="${old_fetch_deadline}"; else unset PF_FETCH_DEADLINE; fi
+    if [ -n "${old_download_progress}" ]; then export PF_DOWNLOAD_PROGRESS="${old_download_progress}"; else unset PF_DOWNLOAD_PROGRESS; fi
     RESOLVED="$(basename "${hit}" | sed -E 's/mariadb-([0-9.]+)-.*/\1/')"
     log "Downloading MariaDB ${RESOLVED} bintar succeeded."
     mkdir -p "${base}"
