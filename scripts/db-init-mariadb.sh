@@ -556,7 +556,6 @@ pf_mariadb_restore_dump() {
     [ "${restore_force}" = "1" ] && mysql_cmd+=(--force)
 
     local restore_log="${SERVER_DIR}/logs/dump-restore.log"
-    local compat_log="${SERVER_DIR}/logs/dump-restore-compat.log"
     log "Restoring database dump: $(basename "${dump_file}")..."
     [ "${compat}" = "1" ] && log "Compatibility mode enabled: legacy MariaDB/MySQL dump statements will be normalized for the running server."
     if [ "${skip_system}" = "1" ]; then
@@ -630,18 +629,14 @@ pf_mariadb_restore_dump() {
 
     local -a rcs=()
     : > "${restore_log}" 2>/dev/null || true
-    : > "${compat_log}" 2>/dev/null || true
 
     # A single normalized stream is used for all supported dump formats.
     # PIPESTATUS is captured immediately so decompression/filter/client errors
     # cannot be mistaken for a successful restore.
     case "${dump_file}" in
         *.sql)
-            if [ "${compat}" = "1" ]; then
-                awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}"                     | tee -a "${compat_log}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
-            else
-                awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
-            fi
+            awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}" \
+                | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
             rcs=("${PIPESTATUS[@]}")
             ;;
         *.sql.gz)
