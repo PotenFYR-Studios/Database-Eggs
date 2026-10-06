@@ -501,12 +501,15 @@ __USER_SQL
 }
 
 pf_mariadb_restore_dump() {
-    # Optional one-shot SQL dump restore from ${SERVER_DIR}/dump.
-    # RESTORE_DUMP=1 enables it. System schemas from older MariaDB/MySQL
-    # dumps are skipped by default because their internal table definitions
-    # are version-specific and must be managed by the running server.
-    # This function never fails the boot: every exit path returns 0.
+    # Restore a logical dump into the currently running MariaDB/MySQL instance.
+    # RESTORE_DUMP=1 enables it. The restore path is deliberately logical:
+    # old physical datadirs must NEVER be copied into a newer major version.
+    #
+    # Compatibility is enabled by default. This is important for migrations
+    # such as MariaDB 10.3 -> MariaDB 13.x, where the application data is
+    # portable but old replication/session/system-table statements are not.
     [ "${RESTORE_DUMP:-0}" = "1" ] || return 0
+
     local dump_dir="${SERVER_DIR}/dump"
     [ -d "${dump_dir}" ] || { mkdir -p "${dump_dir}" 2>/dev/null || true; return 0; }
 
@@ -535,20 +538,27 @@ pf_mariadb_restore_dump() {
     local client="${1:-mysql}" rootpw="${DB_ROOT_PASSWORD:-}" port="${SERVER_PORT:-3306}"
     [ -n "${rootpw}" ] || { warn "Dump restore skipped: DB_ROOT_PASSWORD is empty."; return 0; }
 
-    # Logical dumps from older MariaDB releases can contain the old mysql.*
-    # system database. Importing it into a newer MariaDB release produces
-    # errors such as an incompatible mysql.column_stats definition.
-    # The running server owns these system tables, so skip them by default.
-    # Only the literal 0 disables the filter; empty/invalid keeps it enabled.
+    # Compatibility mode is intentionally ON by default. It only rewrites the
+    # SQL stream sent to the client; the original dump file is NEVER modified.
+    local compat=1
+    [ "${RESTORE_DUMP_COMPAT:-1}" = "0" ] && compat=0
+
+    # Old MariaDB/MySQL dumps can contain their own system schemas. Those tables
+    # belong to the target server and their definitions differ between major
+    # releases, so skip them unless the operator explicitly disables filtering.
     local skip_system=1
     [ "${RESTORE_DUMP_SKIP_SYSTEM:-1}" = "0" ] && skip_system=0
-    # Only the literal 1 enables --force; anything else keeps strict failure.
+
     local restore_force=0
     [ "${RESTORE_DUMP_FORCE:-0}" = "1" ] && restore_force=1
+
     local -a mysql_cmd=(--protocol=tcp -h 127.0.0.1 -P "${port}" -u root -p"${rootpw}" --max_allowed_packet=1G)
     [ "${restore_force}" = "1" ] && mysql_cmd+=(--force)
+
     local restore_log="${SERVER_DIR}/logs/dump-restore.log"
+    local compat_log="${SERVER_DIR}/logs/dump-restore-compat.log"
     log "Restoring database dump: $(basename "${dump_file}")..."
+    [ "${compat}" = "1" ] && log "Compatibility mode enabled: legacy MariaDB/MySQL dump statements will be normalized for the running server."
     if [ "${skip_system}" = "1" ]; then
         log "Skipping MariaDB system schemas (mysql, performance_schema, information_schema)."
     else
@@ -558,38 +568,85 @@ pf_mariadb_restore_dump() {
         log "MariaDB client --force enabled (RESTORE_DUMP_FORCE=1); SQL errors will not abort the import."
     fi
 
+    # The filter is deliberately line-oriented and conservative. It does NOT
+    # rewrite application SQL/data. It removes only known migration-only
+    # statements and maps MySQL 8's 0900 collations to broadly compatible
+    # MariaDB collations. The original dump remains untouched.
     local awk_filter='
         BEGIN { db = "" }
-        /^[[:space:]]*USE[[:space:]]+/ {
-            line = $0
-            sub(/^[[:space:]]*USE[[:space:]]+/, "", line)
-            gsub(/[`;]/, "", line)
-            gsub(/^[[:space:]]+|[[:space:]]+$/, "", line)
-            db = tolower(line)
-        }
         {
-            if (skip_system && (db == "mysql" || db == "performance_schema" || db == "information_schema")) next
-            print
+            line = $0
+            low = tolower(line)
+
+            # System databases are owned by the target server. Catch both
+            # USE-based dumps and explicit mysql.schema/table references.
+            if (skip_system) {
+                if (low ~ /^[[:space:]]*use[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*;/) {
+                    db = "##PF_SYSTEM##"
+                    next
+                }
+                if (low ~ /^[[:space:]]*create[[:space:]]+database[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*;/) next
+                if (low ~ /^[[:space:]]*(drop|alter)[[:space:]]+database[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?[[:space:]]*;/) next
+                if (low ~ /^[[:space:]]*(insert[[:space:]]+into|replace[[:space:]]+into|update|delete[[:space:]]+from|create[[:space:]]+table|alter[[:space:]]+table|drop[[:space:]]+table|lock[[:space:]]+tables)[[:space:]]+[`"]?(mysql|performance_schema|information_schema)[`"]?\./) next
+                if (db == "##PF_SYSTEM##") {
+                    # A new USE statement switches away from the system DB.
+                    if (low ~ /^[[:space:]]*use[[:space:]]+/) db = ""
+                    else next
+                }
+            }
+
+            if (compat) {
+                # Replication state from the source server must not be applied
+                # to the target instance.
+                if (low ~ /^[[:space:]]*set[[:space:]]+.*(gtid_purged|gtid_slave_pos|gtid_current_pos|sql_log_bin)/) next
+
+                # NO_AUTO_CREATE_USER was removed/deprecated from modern SQL
+                # modes. Remove only the token, preserving the rest of SET SQL_MODE.
+                gsub(/NO_AUTO_CREATE_USER,[[:space:]]*/, "", line)
+                gsub(/,[[:space:]]*NO_AUTO_CREATE_USER/, "", line)
+
+                # MySQL 8.0 0900 collations are not a safe assumption on
+                # MariaDB. Map the common variants to MariaDB equivalents.
+                gsub(/utf8mb4_0900_ai_ci/, "utf8mb4_unicode_ci", line)
+                gsub(/utf8mb4_0900_as_ci/, "utf8mb4_unicode_ci", line)
+                gsub(/utf8mb4_0900_as_cs/, "utf8mb4_bin", line)
+                gsub(/utf8mb4_0900_bin/, "utf8mb4_bin", line)
+
+                # MySQL dump headers may contain this source-only assignment.
+                if (low ~ /^[[:space:]]*set[[:space:]]+@@global\.gtid_purged/) next
+            }
+
+            # Track the database after compatibility/system filtering.
+            if (low ~ /^[[:space:]]*use[[:space:]]+/) {
+                line_db = line
+                sub(/^[[:space:]]*USE[[:space:]]+/i, "", line_db)
+                gsub(/[`";]/, "", line_db)
+                gsub(/^[[:space:]]+|[[:space:]]+$/, "", line_db)
+                db = tolower(line_db)
+            }
+
+            print line
         }'
 
-    # Every pipeline stage is collected: a failure in decompression, the awk
-    # filter, or the client (including a 3600s timeout) must never be treated
-    # as a successful restore. The client stage is wrapped in `timeout` because
-    # it is the long pole that could otherwise hang startup forever.
     local -a rcs=()
     : > "${restore_log}" 2>/dev/null || true
+    : > "${compat_log}" 2>/dev/null || true
 
+    # A single normalized stream is used for all supported dump formats.
+    # PIPESTATUS is captured immediately so decompression/filter/client errors
+    # cannot be mistaken for a successful restore.
     case "${dump_file}" in
         *.sql)
-            awk -v skip_system="${skip_system}" "${awk_filter}" "${dump_file}" \
-                | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+            if [ "${compat}" = "1" ]; then
+                awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}"                     | tee -a "${compat_log}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+            else
+                awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}" "${dump_file}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+            fi
             rcs=("${PIPESTATUS[@]}")
             ;;
         *.sql.gz)
             if command -v gzip >/dev/null 2>&1; then
-                gzip -dc "${dump_file}" \
-                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
-                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                gzip -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "gzip is unavailable; cannot restore $(basename "${dump_file}")."
@@ -598,9 +655,7 @@ pf_mariadb_restore_dump() {
             ;;
         *.sql.xz)
             if command -v xz >/dev/null 2>&1; then
-                xz -dc "${dump_file}" \
-                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
-                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                xz -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "xz is unavailable; cannot restore $(basename "${dump_file}")."
@@ -609,9 +664,7 @@ pf_mariadb_restore_dump() {
             ;;
         *.sql.zst)
             if command -v zstd >/dev/null 2>&1; then
-                zstd -dc "${dump_file}" \
-                    | awk -v skip_system="${skip_system}" "${awk_filter}" \
-                    | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
+                zstd -dc "${dump_file}"                     | awk -v skip_system="${skip_system}" -v compat="${compat}" "${awk_filter}"                     | timeout 3600 "${client}" "${mysql_cmd[@]}" >>"${restore_log}" 2>&1
                 rcs=("${PIPESTATUS[@]}")
             else
                 warn "zstd is unavailable; cannot restore $(basename "${dump_file}")."
@@ -620,7 +673,6 @@ pf_mariadb_restore_dump() {
             ;;
     esac
 
-    # Strict success: requires every stage of the pipeline to have exited 0.
     local restore_ok=1
     if [ "${#rcs[@]}" -eq 0 ]; then
         restore_ok=0
@@ -631,16 +683,12 @@ pf_mariadb_restore_dump() {
         done
     fi
 
-    # Error accounting: count the SQL error lines the client wrote to the log.
     local errors
     errors=$(grep -cE '^[[:space:]]*ERROR' "${restore_log}" 2>/dev/null || true)
     case "${errors}" in
         '' | *[!0-9]*) errors=0 ;;
     esac
 
-    # force=1: record the restore even when SQL errors were reported, and note
-    # the error count. force=0: only a clean import (every stage 0 AND no ERROR
-    # lines) is recorded, so a partial import is never marked as restored.
     if [ "${restore_ok}" -eq 1 ] && { [ "${restore_force}" = "1" ] || [ "${errors}" -eq 0 ]; }; then
         printf '%s\n' "${hash}" > "${marker}" 2>/dev/null || true
         chmod 600 "${marker}" 2>/dev/null || true
@@ -656,7 +704,6 @@ pf_mariadb_restore_dump() {
     fi
     return 0
 }
-
 start_mariadb_mysql() {
     activate_engine_libs
     local conf_dir="${SERVER_DIR}/config"
