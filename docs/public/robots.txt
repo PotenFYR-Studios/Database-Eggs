@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://database-eggs.docs.potenfyr.in/sitemap.xml

@@ -13,7 +13,7 @@
 </p>
 
 <p align="center">
-  <a href="https://database-eggs.docs.potenfyr.in"><img src="https://img.shields.io/badge/Docs-database--eggs.docs.potenfyr.in-8b5cf6?style=flat-square&logo=gitbook&logoColor=white&labelColor=1c1e26" alt="Docs" /></a>
+  <a href="https:/docs.potenfyr.in/Database-Eggs"><img src="https://img.shields.io/badge/https:/docs.potenfyr.in/Database-Eggs-8b5cf6?style=flat-square&logo=gitbook&logoColor=white&labelColor=1c1e26" alt="Docs" /></a>
   <a href="https://nest.potenfyr.in"><img src="https://img.shields.io/badge/Egg%20Catalog-nest.potenfyr.in-2ea043?style=flat-square&logo=databricks&logoColor=white&labelColor=1c1e26" alt="Egg Nest" /></a>
   <a href="https://github.com/PotenFYR-Studios/Database-Eggs/actions/workflows/validate-eggs.yml"><img src="https://img.shields.io/github/actions/workflow/status/PotenFYR-Studios/Database-Eggs/validate-eggs.yml?style=flat-square&logo=githubactions&label=Validate%20Eggs&labelColor=1c1e26&color=2ea043" alt="Validate Eggs" /></a>
   <a href="https://github.com/PotenFYR-Studios/Database-Eggs/actions/workflows/test-docker.yml"><img src="https://img.shields.io/github/actions/workflow/status/PotenFYR-Studios/Database-Eggs/test-docker.yml?style=flat-square&logo=githubactions&label=Test%20Docker&labelColor=1c1e26&color=2ea043" alt="Test Docker" /></a>
@@ -27,7 +27,7 @@
 
 **Database-Eggs** is a production-ready multi-database egg collection: one universal egg, one universal container image, and every SQL, NoSQL, in-memory, vector, time-series, search, graph and object-storage engine you need: installable and version-pinned on demand. If you are looking for a **Pterodactyl database egg**, a **multi-database egg for Pelican or Feather Panel**, or a standalone **Docker database container**, this is it.
 
-[Docs](https://database-eggs.docs.potenfyr.in) · [Install Guide](https://database-eggs.docs.potenfyr.in/docs/) · [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/) · [Egg Nest](https://nest.potenfyr.in)
+[Docs](https:/docs.potenfyr.in/Database-Eggs) · [Install Guide](https:/docs.potenfyr.in/Database-Eggs/) · [Egg Catalog](https:/docs.potenfyr.in/Database-Eggs/eggs/) · [Egg Nest](https://nest.potenfyr.in)
 
 ---
 
@@ -58,7 +58,7 @@
 
 | Egg | File | Engines | Docker Image | Docs |
 | :-- | :--- | :---: | :--- | :--- |
-| **Multi Database** | [`egg-database-multi.json`](egg-database-multi.json) | 50 + custom | `ghcr.io/potenfyr-studios/database-eggs:latest` | [Install](https://database-eggs.docs.potenfyr.in/docs/) |
+| **Multi Database** | [`egg-database-multi.json`](egg-database-multi.json) | 50 + custom | `ghcr.io/potenfyr-studios/database-eggs:latest` | [Install](https:/docs.potenfyr.in/Database-Eggs/) |
 
 > The full machine-readable catalog of every PotenFYR egg collection lives at [nest.potenfyr.in](https://nest.potenfyr.in).
 
@@ -75,7 +75,7 @@
 4. **Set startup variables** (`DATABASE_TYPE=postgresql`, `DB_VERSION=18`) and start.
 5. **Read the connection card** in the console; credentials are saved to `/home/container/.env` (mode `600`), or use `db-cli` inside the server.
 
-Full walkthrough: [database-eggs.docs.potenfyr.in/docs](https://database-eggs.docs.potenfyr.in/docs/).
+Full walkthrough: [https:/docs.potenfyr.in/Database-Eggs/docs](https://database-eggs.docs.potenfyr.in/).
 
 ## 🗄️ Supported Engines
 
@@ -122,7 +122,7 @@ The egg exports **35 variables**, the ones you will actually touch:
 | `GIT_POLL_SECONDS` | `300` | Poll interval in seconds for `GIT_AUTO_UPDATE` (30-86400) |
 | `EXTRA_RUNTIMES` | *(empty)* | Inject companions on demand (`python`, `nodejs`, `bun`, `psql`, …) |
 
-All 35 variables with defaults, validation rules and descriptions: [Egg Catalog](https://database-eggs.docs.potenfyr.in/docs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
+All 35 variables with defaults, validation rules and descriptions: [Egg Catalog](https:/docs.potenfyr.in/Database-Eggs/eggs/). A handful of advanced internal overrides (`PF_DEBUG`, `SKIP_VERSION_INSTALL`, `DATA_DIR`, …) exist in the runtime scripts but are not exported to the panel.
 
 ### Dump restore (MariaDB/MySQL)
 
