@@ -24,9 +24,15 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
-      - name: Build Docker Image
-        run: |
-          docker build -t database-eggs:test .
+      - name: Build Docker Image (GHA layer cache)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: database-eggs:test
+          cache-from: type=gha,scope=test-image
+          cache-to: type=gha,scope=test-image,mode=max
 
       - name: Run Test Suite
         run: |

@@ -137,8 +137,9 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
 #      Compile failures must abort the build (never bake an image whose
 #      headline engines silently fell back to ancient distro packages);
 #      the runtime-side install script still carries its own fallbacks.
-#      -j1: the redis Lua build dead-locks under heavy parallelism in
-#      low-memory CI containers (undefined luaopen_* refs at link time).
+#      Bundled deps (lua, hdr_histogram, fpconv) build -j1 first, then the
+#      main compile goes full -j: deps' Makefiles race under parallelism
+#      (undefined luaopen_* refs at link time in low-memory CI).
 RUN set -eu; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "redis" ]; then \
         if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
@@ -146,13 +147,15 @@ RUN set -eu; \
                 build-essential pkg-config libevent-dev \
             && curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
             && tar -xzf /tmp/valkey.tar.gz -C /tmp \
-            && make -C /tmp/valkey-8.1.3 MALLOC=libc -j1 valkey-server valkey-cli \
+            && make -C /tmp/valkey-8.1.3 -j1 -C deps \
+            && make -C /tmp/valkey-8.1.3 MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" valkey-server valkey-cli \
             && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
             && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
             && rm -rf /tmp/valkey* \
             && curl -fsSL -o /tmp/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
             && tar -xzf /tmp/redis-stable.tar.gz -C /tmp \
-            && make -C /tmp/redis-stable MALLOC=libc -j1 redis-server redis-cli \
+            && make -C /tmp/redis-stable -j1 -C src deps MALLOC=libc \
+            && make -C /tmp/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli \
             && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
             && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
             && rm -rf /tmp/redis-stable* \

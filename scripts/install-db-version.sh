@@ -1850,14 +1850,20 @@ build_from_source() {
     done
     [ "${t_all}" = "1" ] || [ -n "${targets}" ] || targets="all"
     if [ "${t_all}" = "1" ]; then targets="all"; fi
-    # Parallelism capped by available memory: source builds (redis' Lua in
-    # particular) dead-lock or drop objects under heavy -j inside ~1GB panel
-    # containers, dying at link time with undefined luaopen_* references.
+    # Parallelism strategy: build the bundled dependencies (redis' Lua,
+    # hdr_histogram, fpconv) serially first — their Makefiles race under -j
+    # (undefined luaopen_* refs at link time in low-memory containers) —
+    # then the main compile goes full parallel.
     local jobs mem_mb
     jobs=$(nproc 2>/dev/null || echo 2)
     mem_mb=$(awk '/MemAvailable/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null || true)
     case "${mem_mb:-0}" in ''|*[!0-9]*) mem_mb=0 ;; esac
     if [ "${mem_mb}" -gt 0 ] && [ "${mem_mb}" -lt 2500 ]; then jobs=1; fi
+    if [ -d "${bd}/deps" ] && [ -f "${bd}/deps/Makefile" ]; then
+        ( cd "${bd}/deps" && make -j1 ) >&2 || { warn "Dependency build failed."; return 1; }
+    elif [ -d "${bd}/src/deps" ] && [ -f "${bd}/src/deps/Makefile" ]; then
+        ( cd "${bd}/src/deps" && MALLOC=libc make -j1 ) >&2 || { warn "Dependency build failed."; return 1; }
+    fi
     ( cd "${bd}" && make MALLOC=libc -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
         || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
     local b
