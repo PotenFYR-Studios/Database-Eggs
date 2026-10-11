@@ -262,7 +262,7 @@ run_db_test() {
 MATRIX=(
     # 0. VERSION CONTRACT REGRESSION TESTS (the core guarantee):
     #    explicitly pinned versions MUST be honored exactly - no silent downgrades.
-    'run_db_test "postgresql" "5432" "" "PGPASSWORD='"'"'RootPassword123!Secure'"'"' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tc '"'"'SELECT version();'"'"' 2>/dev/null | grep -q '"'"'PostgreSQL 18\.'"'"' && psql --version | grep -qE '"'"' 18\.'"'"'" "18"'
+    'run_db_test "postgresql" "5432" "" "PGPASSWORD='"'"'RootPassword123!Secure'"'"' psql -h 127.0.0.1 -p 5432 -U postgres -d postgres -tc '"'"'SELECT version();'"'"' 2>/dev/null | grep -q '"'"'PostgreSQL 18\.'"'"' && psql --version | grep -qE '"'"' 18\.'"'"' && PGPASSWORD='"'"'RootPassword123!Secure'"'"' psql -h 127.0.0.1 -p 5432 -U postgres -d testdb -tAc '"'"'SELECT 1 FROM pg_extension WHERE extname = chr(118)||chr(101)||chr(99)||chr(116)||chr(111)||chr(114)'"'"' 2>/dev/null | grep -q 1" "18"'
     'run_db_test "mariadb" "3306" "" "mariadb -h 127.0.0.1 -P 3306 -u root -p'"'"'RootPassword123!Secure'"'"' -NBe '"'"'SELECT VERSION();'"'"' 2>/dev/null | grep -q '"'"'^11\.4'"'"'" "11.4"'
     'run_db_test "mysql" "3307" "-e CDN_FALLBACK_SYSTEM=1" "" "8.0"'
 

@@ -124,27 +124,39 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
     fi; \
     if [ "${RUNTIME_VARIANT}" = "all" ]; then \
         curl -fsSL https://install.surrealdb.com | sh && (cp -f /root/.surrealdb/surreal /usr/local/bin/surreal 2>/dev/null || cp -f ~/.surrealdb/surreal /usr/local/bin/surreal 2>/dev/null || true) || true; \
-        curl -fsSL -o /usr/local/bin/minio "https://dl.min.io/server/minio/release/linux-${arch_type}/minio" || true; \
+        # dl.min.io community downloads are discontinued (410 Gone); bake the
+        # last GitHub-shipped release directly (same asset the runtime
+        # installer falls back to).
+        curl -fsSL -o /usr/local/bin/minio "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-${arch_type}.RELEASE.2025-09-07T16-13-09Z" || true; \
         curl -fsSL -o /tmp/pb.zip "https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_${arch_type}.zip" && unzip -q /tmp/pb.zip -d /tmp/pb && mv /tmp/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /tmp/pb* || true; \
         curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v1.12.1/qdrant-${arch_gnu}.tar.gz" 2>/dev/null | tar -xz -C /usr/local/bin/ 2>/dev/null || true; \
-    fi; \
+    fi
+
+# 14b. Redis & Valkey from source (amd64/arm64): ships the newest stable in
+#      the image so unprivileged panel containers never need a compiler.
+#      Compile failures must abort the build (never bake an image whose
+#      headline engines silently fell back to ancient distro packages);
+#      the runtime-side install script still carries its own fallbacks.
+#      -j1: the redis Lua build dead-locks under heavy parallelism in
+#      low-memory CI containers (undefined luaopen_* refs at link time).
+RUN set -eu; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "redis" ]; then \
         if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
             apt-get update -qq && apt-get install -y -qq --no-install-recommends \
                 build-essential pkg-config libevent-dev \
-                && curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
-                && tar -xzf /tmp/valkey.tar.gz -C /tmp \
-                && make -C /tmp/valkey-8.1.3 MALLOC=libc valkey-server valkey-cli >/dev/null 2>&1 \
-                && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
-                && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
-                && rm -rf /tmp/valkey* \
-                && curl -fsSL -o /tmp/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
-                && tar -xzf /tmp/redis-stable.tar.gz -C /tmp \
-                && make -C /tmp/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli >/dev/null 2>&1 \
-                && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
-                && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
-                && rm -rf /tmp/redis-stable* \
-                && rm -rf /var/lib/apt/lists/* || true; \
+            && curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
+            && tar -xzf /tmp/valkey.tar.gz -C /tmp \
+            && make -C /tmp/valkey-8.1.3 MALLOC=libc -j1 valkey-server valkey-cli \
+            && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
+            && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
+            && rm -rf /tmp/valkey* \
+            && curl -fsSL -o /tmp/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
+            && tar -xzf /tmp/redis-stable.tar.gz -C /tmp \
+            && make -C /tmp/redis-stable MALLOC=libc -j1 redis-server redis-cli \
+            && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
+            && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
+            && rm -rf /tmp/redis-stable* \
+            && rm -rf /var/lib/apt/lists/*; \
         fi; \
     fi; \
     rm -rf /*.deb /root/*.deb /root/.surrealdb /root/.cache /tmp/* /var/tmp/* 2>/dev/null || true; \

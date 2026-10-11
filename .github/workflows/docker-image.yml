@@ -177,5 +177,10 @@ jobs:
         with:
           package-name: database-eggs
           package-type: container
-          min-versions-to-keep: 5
+          # Every publish run pushes SIX untagged per-arch manifest entries
+          # (amd64/arm64/armv7/s390x/ppc64le/riscv64) that the merge job's
+          # multi-arch tags then reference. Keeping only 5 deleted one leg of
+          # the FRESH manifest on every run, so `latest` and `sha-*` pulls
+          # 404'd on a missing blob. Keep strictly more than one run's worth.
+          min-versions-to-keep: 20
           delete-only-untagged-versions: true

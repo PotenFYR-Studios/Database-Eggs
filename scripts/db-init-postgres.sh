@@ -365,9 +365,10 @@ EOSQL
         fi
 
         # Load standard extensions - each independently, only if the build
-        # provides it (zero error spam on minimal/standalone builds)
+        # provides it (zero error spam on minimal/standalone builds).
+        # vector (pgvector) is opt-out via PG_ENABLE_PGVECTOR (default on).
         local ext
-        for ext in pg_trgm uuid-ossp vector; do
+        for ext in pg_trgm uuid-ossp; do
             if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d postgres -Atc \
                 "SELECT 1 FROM pg_available_extensions WHERE name='${ext}'" 2>/dev/null | grep -q 1; then
                 if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d "${DB_NAME:-postgres}" \
@@ -380,6 +381,21 @@ EOSQL
                 log "Extension '${ext}' not present in this PostgreSQL build - skipped."
             fi
         done
+        if [ "${PG_ENABLE_PGVECTOR:-1}" = "1" ]; then
+            if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d postgres -Atc \
+                "SELECT 1 FROM pg_available_extensions WHERE name='vector'" 2>/dev/null | grep -q 1; then
+                if psql -h "${socket_dir}" -p "${SERVER_PORT}" -U "${superuser}" -d "${DB_NAME:-postgres}" \
+                    -c "CREATE EXTENSION IF NOT EXISTS \"vector\";" >/dev/null 2>&1; then
+                    ok "Extension ready: vector (pgvector)"
+                else
+                    warn "Extension vector available but CREATE failed (see postgres logs)."
+                fi
+            else
+                log "Extension 'vector' not present in this PostgreSQL build - skipped (pgvector not provisioned)."
+            fi
+        else
+            log "pgvector disabled (PG_ENABLE_PGVECTOR=0) - skipping vector extension."
+        fi
 
         log "Shutting down temporary PostgreSQL daemon..."
         "${pg_ctl_bin}" -D "${data_dir}" -w stop >/dev/null 2>&1 || true

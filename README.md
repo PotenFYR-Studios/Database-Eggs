@@ -95,7 +95,7 @@ Dispatched `DATABASE_TYPE` values (aliases in parentheses), straight from the eg
 
 ## ⚙️ Startup Variables
 
-The egg exports **35 variables**, the ones you will actually touch:
+The egg exports **36 variables**, the ones you will actually touch:
 
 | Variable | Default | What it does |
 | :--- | :--- | :--- |
@@ -112,6 +112,7 @@ The egg exports **35 variables**, the ones you will actually touch:
 | `RESTORE_DUMP_FORCE` | `0` | Pass `--force` to the client so the import continues past SQL errors. The dump is recorded as restored once per checksum only when the import completes; when SQL errors were reported, their count is printed and appended to the marker. `0`: a dump that reports errors is not recorded, so the next restart retries it; delete `dump/.restored.sha256` to retry |
 | `RESTORE_DUMP_COMPAT` | `1` | Normalize older MariaDB/MySQL logical dumps before restore. Removes source replication state, obsolete `NO_AUTO_CREATE_USER`, and maps common MySQL 8 `utf8mb4_0900_*` collations. The original dump is never modified. |
 | `PERFORMANCE_TUNING` | `1` | Auto-size buffers/caches from container RAM & CPU |
+| `PG_ENABLE_PGVECTOR` | `1` | PostgreSQL only: provision the pgvector extension (`CREATE EXTENSION vector`) on first boot for vector similarity search / AI embeddings. PostgreSQL 14-18, amd64/arm64 (`0` = disable) |
 | `SECURITY_HARDENING` | `1` | SCRAM auth, drop insecure defaults, disable debug commands |
 | `SAVE_TO_ENV` | `1` | Persist credentials to `/home/container/.env` (mode 600) |
 | `ARCHIVE_ON_SWITCH` | `1` | Snapshot the old datadir into `./archive/` on version switches |

@@ -171,6 +171,16 @@
       "field_type": "text"
     },
     {
+      "name": "PostgreSQL pgvector (AI embeddings)",
+      "description": "PostgreSQL only: 1 = provision the pgvector extension (CREATE EXTENSION vector) on first boot for vector similarity search / AI embeddings (0 = disable). Applies to PostgreSQL 14-18 on amd64/arm64.",
+      "env_variable": "PG_ENABLE_PGVECTOR",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|boolean",
+      "field_type": "text"
+    },
+    {
       "name": "Production Security Hardening",
       "description": "1 = Enforce SCRAM-SHA-256 encryption, drop insecure default database accounts, restrict permissions, and disable dangerous debug commands.",
       "env_variable": "SECURITY_HARDENING",

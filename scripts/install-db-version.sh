@@ -1057,6 +1057,7 @@ install_postgresql() {
         # provisioned before bundling was introduced (uuid-ossp needs
         # libossp-uuid.so.16 at CREATE EXTENSION time).
         bundle_pg_runtime_libs "${dest}/lib-extra"
+        ensure_pgvector "${dest}" "${tag%%.*}"
         local b
         for b in "${dest}/bin/"*; do
             [ -f "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/$(basename "${b}")" 2>/dev/null || true
@@ -1099,7 +1100,10 @@ install_postgresql() {
             fetch "https://www.postgresql.org/media/keys/ACCC4CF8.asc" - | gpg --dearmor > /usr/share/keyrings/pgdg.gpg 2>/dev/null || true
             printf 'deb [signed-by=/usr/share/keyrings/pgdg.gpg] http://apt.postgresql.org/pub/repos/apt %s-pgdg main\n' "${coden}" > /etc/apt/sources.list.d/pgdg.list 2>/dev/null || true
             apt-get update -qq 2>/dev/null || true
-            apt-get install -y -qq "postgresql-${want_major}" "postgresql-client-${want_major}" 2>/dev/null && return 0
+            apt-get install -y -qq "postgresql-${want_major}" "postgresql-client-${want_major}" 2>/dev/null && {
+                ensure_pgvector "/usr/lib/postgresql/${want_major}" "${want_major}"
+                return 0
+            }
         fi
         pf_suggest_versions "${RESOLVED}"
         fail "PostgreSQL ${RESOLVED} installation failed (download + fallback exhausted)."
@@ -1126,6 +1130,77 @@ install_postgresql() {
             [ -e "${b}" ] && ln -sf "${b}" "${INSTALL_DIR}/lib-extra/$(basename "${b}")" 2>/dev/null || true
         done
     fi
+    ensure_pgvector "${dest}" "${tag%%.*}"
+    return 0
+}
+
+# -----------------------------------------------------------------------------
+# pgvector (postgresql-<major>-pgvector from PGDG) - optional, default ON
+# -----------------------------------------------------------------------------
+# Extracts the PGDG pgvector .deb into the PostgreSQL tree so CREATE EXTENSION
+# vector works with zero compilation. PGDG builds are self-contained (libc6
+# only), matching the theseus-rs binaries' glibc baseline. Handles both
+# layouts: standalone (lib/ + share/extension/) and apt-style
+# (lib/postgresql/ + share/postgresql/extension/). Enable/disable with
+# PG_ENABLE_PGVECTOR (default 1); every failure is non-fatal - PostgreSQL
+# simply serves without vector support.
+ensure_pgvector() { # ensure_pgvector <pg_dest> <pg_major>
+    [ "${PG_ENABLE_PGVECTOR:-1}" = "1" ] || { log "pgvector disabled (PG_ENABLE_PGVECTOR=0)."; return 0; }
+    local pg_dest="$1" pg_major="$2"
+    [ -n "${pg_dest}" ] && [ -n "${pg_major}" ] || return 0
+    # Target dirs per layout (standalone first: the theseus-rs default)
+    local lib_dir sql_dir
+    if [ -d "${pg_dest}/share/extension" ]; then
+        lib_dir="${pg_dest}/lib"; sql_dir="${pg_dest}/share/extension"
+    elif [ -d "${pg_dest}/share/postgresql/extension" ] || [ -d "${pg_dest}/lib/postgresql" ]; then
+        lib_dir="${pg_dest}/lib/postgresql"; sql_dir="${pg_dest}/share/postgresql/extension"
+    else
+        warn "pgvector: unrecognized PostgreSQL layout at ${pg_dest} - skipped."
+        return 0
+    fi
+    if [ -e "${lib_dir}/vector.so" ] && ls "${sql_dir}"/vector--*.sql >/dev/null 2>&1; then
+        log "pgvector already present for PostgreSQL ${pg_major}."
+        return 0
+    fi
+    have dpkg-deb || { warn "pgvector: dpkg-deb unavailable - skipped."; return 0; }
+    local arch_deb base lookup dpath tmp_deb
+    case "${ARCH_TYPE}" in
+        amd64) arch_deb="amd64" ;;
+        arm64) arch_deb="arm64" ;;
+        *)
+            # PGDG ships no armhf/pgvector; keep it honest instead of
+            # cross-extracting an amd64 .so onto another architecture.
+            warn "pgvector: PGDG ships no build for ${ARCH_TYPE} - skipped."
+            return 0
+            ;;
+    esac
+    local coden
+    coden=$(. /etc/os-release 2>/dev/null; printf '%s' "${VERSION_CODENAME:-}")
+    [ -n "${coden}" ] || coden="jammy"
+    base="https://apt.postgresql.org/pub/repos/apt"
+    # Line-scanning matcher (proven against mawk/gawk: the RS="" paragraph
+    # regex silently misses records on some awk builds); newest record wins.
+    lookup=$(fetch "${base}/dists/${coden}-pgdg/main/binary-${arch_deb}/Packages.gz" - 2>/dev/null | gzip -dc 2>/dev/null \
+        | awk -v pkg="postgresql-${pg_major}-pgvector" 'function flush(){if(p==pkg && f!=""){print v "	" f} p="";v="";f=""} /^Package: /{flush(); p=substr($0,10); next} /^Version: /{v=substr($0,10); next} /^Filename: /{f=substr($0,11); next} END{flush()}' | head -n1)
+    [ -n "${lookup%%$'	'*}" ] || { warn "pgvector: no PGDG package for PostgreSQL ${pg_major} (${coden}/${arch_deb}) - skipped."; return 0; }
+    dpath="${lookup#*$'	'}"
+    tmp_deb=$(mktemp 2>/dev/null) || return 0
+    if fetch "${base}/${dpath}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${pg_dest}/.pgv.$$" 2>/dev/null; then
+        local xdir="${pg_dest}/.pgv.$$"
+        mkdir -p "${lib_dir}" "${sql_dir}"
+        cp -a "${xdir}"/usr/lib/postgresql/"${pg_major}"/lib/vector.* "${lib_dir}/" 2>/dev/null || true
+        cp -a "${xdir}"/usr/share/postgresql/"${pg_major}"/extension/vector* "${sql_dir}/" 2>/dev/null || true
+        rm -rf "${xdir}" "${tmp_deb}"
+        if [ -e "${lib_dir}/vector.so" ] && ls "${sql_dir}"/vector--*.sql >/dev/null 2>&1; then
+            ok "pgvector provisioned for PostgreSQL ${pg_major} (CREATE EXTENSION vector)."
+            return 0
+        fi
+        warn "pgvector package extracted but files incomplete - removed."
+        rm -f "${lib_dir}"/vector* "${sql_dir}"/vector*
+        return 0
+    fi
+    rm -rf "${pg_dest}/.pgv.$$" "${tmp_deb}"
+    warn "pgvector download failed - PostgreSQL will serve without vector support."
     return 0
 }
 
@@ -1558,24 +1633,48 @@ deb_extract_engine() { # deb_extract_engine <suite> [suite...] -- <pkg:bin> [pkg
                     ok_suite=0
                 fi
             done
-            [ "${ok_suite}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
-            [ "${found_any}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
+            [ "${ok_suite}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+                # Companion binaries copied before the suite failed (server
+                # package missing etc.) must never linger: a CLI from a
+                # foreign suite stays broken and later poisons readiness.
+                for pair in "${pairs[@]}"; do
+                    rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
+                done; continue; }
+            [ "${found_any}" = "1" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+                for pair in "${pairs[@]}"; do
+                    rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
+                done; continue; }
 
             local server_bin="${pairs[0]#*:}"
-            [ -x "${INSTALL_DIR}/${server_bin}" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done; continue; }
+            [ -x "${INSTALL_DIR}/${server_bin}" ] || { for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+                for pair in "${pairs[@]}"; do
+                    rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
+                done; continue; }
 
             # Runtime self-check; close missing-library gaps from the same suite.
-            if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${server_bin}" --version >/dev/null 2>&1; then
-                _deb_bundle_missing_libs "${prefix}" "${idx}" "${INSTALL_DIR}/${server_bin}" || true
-                if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${server_bin}" --version >/dev/null 2>&1; then
-                    for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
-                    # Rejected build: purge its binaries so nothing broken is left
-                    # behind posing as a provisioned engine.
-                    for pair in "${pairs[@]}"; do
-                        rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
-                    done
-                    continue   # incompatible build (glibc too new etc.) -> next suite
+            # EVERY extracted binary is checked, not just the server: a CLI
+            # pulled from a foreign suite (e.g. redis-tools from a newer
+            # distro needing libhiredis.so.0.14) must not survive broken —
+            # readiness probes shell out to redis-cli, so a dead CLI fails
+            # boots even when the server is perfectly healthy.
+            local chk_bin chk_ok=1
+            for chk_bin in "${pairs[@]}"; do
+                [ -x "${INSTALL_DIR}/${chk_bin#*:}" ] || continue
+                if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${chk_bin#*:}" --version >/dev/null 2>&1; then
+                    _deb_bundle_missing_libs "${prefix}" "${idx}" "${INSTALL_DIR}/${chk_bin#*:}" || true
+                    if ! LD_LIBRARY_PATH="${INSTALL_DIR}/lib-extra:${LD_LIBRARY_PATH:-}" "${INSTALL_DIR}/${chk_bin#*:}" --version >/dev/null 2>&1; then
+                        chk_ok=0
+                    fi
                 fi
+            done
+            if [ "${chk_ok}" != "1" ]; then
+                for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
+                # Rejected build: purge its binaries so nothing broken is left
+                # behind posing as a provisioned engine.
+                for pair in "${pairs[@]}"; do
+                    rm -f "${INSTALL_DIR}/${pair#*:}" 2>/dev/null || true
+                done
+                continue   # incompatible build (glibc too new etc.) -> next suite
             fi
 
             for ext_dir in "${tmpdirs[@]:-}"; do [ -n "${ext_dir}" ] && rm -rf "${ext_dir}"; done
@@ -1751,7 +1850,15 @@ build_from_source() {
     done
     [ "${t_all}" = "1" ] || [ -n "${targets}" ] || targets="all"
     if [ "${t_all}" = "1" ]; then targets="all"; fi
-    ( cd "${bd}" && make MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" ${MAKE_ARGS:-} ${targets} ) >&2 \
+    # Parallelism capped by available memory: source builds (redis' Lua in
+    # particular) dead-lock or drop objects under heavy -j inside ~1GB panel
+    # containers, dying at link time with undefined luaopen_* references.
+    local jobs mem_mb
+    jobs=$(nproc 2>/dev/null || echo 2)
+    mem_mb=$(awk '/MemAvailable/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null || true)
+    case "${mem_mb:-0}" in ''|*[!0-9]*) mem_mb=0 ;; esac
+    if [ "${mem_mb}" -gt 0 ] && [ "${mem_mb}" -lt 2500 ]; then jobs=1; fi
+    ( cd "${bd}" && make MALLOC=libc -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
         || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
     local b
     for b in "$@"; do
@@ -2004,10 +2111,18 @@ case "${ENGINE}" in
                 ok "SurrealDB ${TAG} installed."
             else
                 warn "Tarball fetch failed; trying official installer..."
+                # install.surrealdb.com has served stale/410-prone responses;
+                # the direct release asset is the reliable path. v3.x assets
+                # are .tgz named surreal-<tag>.linux-<arch>.tgz; older v2.x
+                # used the rust-triple spelling the first fetch above tries.
                 curl -fsSL https://install.surrealdb.com 2>/dev/null | sh >&2 || true
                 for src in /root/.surrealdb/surreal "${HOME}/.surrealdb/surreal" /usr/local/bin/surreal; do
                     [ -f "${src}" ] && cp -f "${src}" "${INSTALL_DIR}/surreal" && break
                 done
+                if [ ! -x "${INSTALL_DIR}/surreal" ]; then
+                    fetch "https://github.com/surrealdb/surrealdb/releases/download/${TAG}/surreal-${TAG}.linux-${ARCH_ALT}.tgz" - 2>/dev/null \
+                        | tar -xz -C "${INSTALL_DIR}/" 2>/dev/null || true
+                fi
                 chmod +x "${INSTALL_DIR}/surreal" 2>/dev/null || true
             fi
         fi
