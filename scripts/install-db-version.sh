@@ -23,6 +23,24 @@ INSTALL_DIR="${3:-${SERVER_DIR:-$(pwd)}/bin}"
 
 mkdir -p "${INSTALL_DIR}" "${INSTALL_DIR}/.versions" "${SERVER_DIR:-.}/logs" 2>/dev/null || true
 
+# Scratch space for downloads and source builds lives on the server volume, not
+# /tmp: container /tmp is often a small tmpfs (79 MB free was enough to skip a
+# Redis build), and it cannot hold a source tree or a 400 MB+ bintar. Override
+# the location with STAGE_DIR. Falls back to /tmp only if the volume is unusable.
+STAGE_DIR="${STAGE_DIR:-${SERVER_DIR:-$(pwd)}/.stage}"
+mkdir -p "${STAGE_DIR}" 2>/dev/null || STAGE_DIR=""
+# Point TMPDIR at the staging volume too: bash spills large here-strings and
+# heredocs (apt index lookups) into TMPDIR, and make/gcc/tar honour it as well.
+[ -n "${STAGE_DIR}" ] && export TMPDIR="${STAGE_DIR}"
+stage_file() { # stage_file — create an empty scratch file (staging volume when usable)
+    if [ -n "${STAGE_DIR}" ]; then mktemp "${STAGE_DIR}/dl.XXXXXXXX" 2>/dev/null && return 0; fi
+    mktemp
+}
+stage_dir() { # stage_dir — create an empty scratch directory (staging volume when usable)
+    if [ -n "${STAGE_DIR}" ]; then mktemp -d "${STAGE_DIR}/build.XXXXXXXX" 2>/dev/null && return 0; fi
+    mktemp -d
+}
+
 # -----------------------------------------------------------------------------
 # Central Diagnostics Library (unified logging, traces, crash safety)
 # -----------------------------------------------------------------------------
@@ -478,7 +496,7 @@ fetch() { # fetch <url> <outfile|->   (atomic for file output: temp + rename)
     deadline=$((SECONDS + budget))
     local tmp_out
     if [ "${out}" = "-" ]; then
-        tmp_out=$(mktemp) || return 1
+        tmp_out=$(stage_file) || return 1
     else
         tmp_out="${out}.dl.$$"
     fi
@@ -653,7 +671,7 @@ extract_libaio() { # bundle libaio.so.1 + libnuma.so.1 beside daemons that link 
         for u in \
             "https://archive.ubuntu.com/ubuntu/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb" \
             "https://deb.debian.org/debian/pool/main/liba/libaio/libaio1_0.3.112-13build1_${arch_deb}.deb"; do
-            tmp_deb=$(mktemp)
+            tmp_deb=$(stage_file)
             if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.lx" 2>/dev/null; then
                 find "${dest}/.lx" -name 'libaio.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
                 rm -rf "${dest}/.lx" "${tmp_deb}"
@@ -668,7 +686,7 @@ extract_libaio() { # bundle libaio.so.1 + libnuma.so.1 beside daemons that link 
     for u in \
         "https://archive.ubuntu.com/ubuntu/pool/main/n/numactl/libnuma1_2.0.14-3ubuntu2_${arch_deb}.deb" \
         "https://archive.ubuntu.com/ubuntu/pool/main/n/numactl/libnuma1_2.0.18-1_${arch_deb}.deb"; do
-        tmp_deb=$(mktemp)
+        tmp_deb=$(stage_file)
         if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.nx" 2>/dev/null; then
             find "${dest}/.nx" -name 'libnuma.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
             rm -rf "${dest}/.nx" "${tmp_deb}"
@@ -709,7 +727,7 @@ ensure_java() { # Temurin JRE 17 for Java-hosted engines (Neo4j, Cassandra, Solr
     log "Installing Temurin JRE 17 (${ENGINE} requirement)..."
     local jarch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && jarch="aarch64"
     mkdir -p "${jdir}"
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     if fetch "https://api.adoptium.net/v3/binary/latest/17/ga/linux/${jarch}/jre/hotspot/normal/eclipse?project=jdk" "${tmp_tar}" \
        && tar -xzf "${tmp_tar}" -C "${jdir}" --strip-components=1 2>/dev/null; then
         rm -f "${tmp_tar}"
@@ -994,7 +1012,7 @@ if [[ "${RESOLVED}" =~ ^https?:// ]] || [[ -n "${CUSTOM_DOWNLOAD_URL:-}" && "${E
     DL_URL="${CUSTOM_DOWNLOAD_URL:-${RESOLVED}}"
     log "Downloading custom binary/package: ${DL_URL}"
     filename=$(basename "${DL_URL}" | sed 's/[?].*//')
-    tmp_dl=$(mktemp)
+    tmp_dl=$(stage_file)
     if fetch "${DL_URL}" "${tmp_dl}"; then
         case "${filename}" in
             *.tar.gz|*.tgz) tar -xzf "${tmp_dl}" -C "${INSTALL_DIR}/" ;;
@@ -1092,7 +1110,7 @@ install_postgresql() {
         url="https://github.com/theseus-rs/postgresql-binaries/releases/download/${tag}/postgresql-${tag}-${pg_target}.tar.gz"
         probe_url "${url}" || no_arch_build_fallback
     fi
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     if ! fetch "${url}" "${tmp_tar}"; then
         rm -f "${tmp_tar}"
         # Opt-in root fallback only (default: fully isolated container installs)
@@ -1188,7 +1206,7 @@ ensure_pgvector() { # ensure_pgvector <pg_dest> <pg_major>
         | awk -v pkg="postgresql-${pg_major}-pgvector" 'function flush(){if(p==pkg && f!=""){print v "	" f} p="";v="";f=""} /^Package: /{flush(); p=substr($0,10); next} /^Version: /{v=substr($0,10); next} /^Filename: /{f=substr($0,11); next} END{flush()}' | head -n1)
     [ -n "${lookup%%$'	'*}" ] || { warn "pgvector: no PGDG package for PostgreSQL ${pg_major} (${coden}/${arch_deb}) - skipped."; return 0; }
     dpath="${lookup#*$'	'}"
-    tmp_deb=$(mktemp 2>/dev/null) || return 0
+    tmp_deb=$(stage_file 2>/dev/null) || return 0
     if fetch "${base}/${dpath}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${pg_dest}/.pgv.$$" 2>/dev/null; then
         local xdir="${pg_dest}/.pgv.$$"
         mkdir -p "${lib_dir}" "${sql_dir}"
@@ -1269,7 +1287,7 @@ install_mariadb() {
     disk_preflight_mb "${required_mb}" || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~${required_mb} MB free."
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     log "MariaDB download progress: live percentage is enabled."
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
         || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MariaDB build found near '${RESOLVED}' for ${ARCH_TYPE}."; }
@@ -1348,7 +1366,7 @@ install_mysql() {
 
     disk_preflight_mb 1200 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1200 MB free."
     log "Probing MySQL builds (HEAD + direct-download fallback for CDN HEAD-blocking)..."
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     local hit
     if ! hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}"); then
         rm -f "${tmp_tar}"
@@ -1385,7 +1403,7 @@ bundle_deb_libs() { # bundle_deb_libs <dest_dir> <deb_url...>  (extract shared l
     local u tmp_deb
     for u in "$@"; do
         probe_url "${u}" || continue
-        tmp_deb=$(mktemp)
+        tmp_deb=$(stage_file)
         if fetch "${u}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${dest}/.bx" 2>/dev/null; then
             find "${dest}/.bx" -name '*.so*' -exec cp -a {} "${dest}/" \; 2>/dev/null || true
         fi
@@ -1518,7 +1536,7 @@ _deb_bundle_missing_libs() { # _deb_bundle_missing_libs <prefix> <index_text> <b
                 lookup=$(_deb_pkg_lookup "${idx}" "${pkg}")
                 [ -n "${lookup}" ] || continue
                 path="${lookup#*$'\t'}"
-                tmp_deb=$(mktemp 2>/dev/null) || continue
+                tmp_deb=$(stage_file 2>/dev/null) || continue
                 if fetch "${prefix}/${path}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${libs_extra}/.bundle" 2>/dev/null; then
                     find "${libs_extra}/.bundle" -name '*.so*' -exec cp -a {} "${libs_extra}/" \; 2>/dev/null || true
                     rm -rf "${libs_extra}/.bundle"
@@ -1617,8 +1635,8 @@ deb_extract_engine() { # deb_extract_engine <suite> [suite...] -- <pkg:bin> [pkg
                     continue
                 fi
                 local dpath="${lookup#*$'\t'}"
-                tmp_deb=$(mktemp 2>/dev/null) || { ok_suite=0; break; }
-                ext_dir=$(mktemp -d 2>/dev/null) || { rm -f "${tmp_deb}"; ok_suite=0; break; }
+                tmp_deb=$(stage_file 2>/dev/null) || { ok_suite=0; break; }
+                ext_dir=$(stage_dir 2>/dev/null) || { rm -f "${tmp_deb}"; ok_suite=0; break; }
                 if ! fetch "${prefix}/${dpath}" "${tmp_deb}" || [ ! -s "${tmp_deb}" ] \
                    || ! dpkg-deb -x "${tmp_deb}" "${ext_dir}" 2>/dev/null; then
                     rm -rf "${ext_dir}" "${tmp_deb}"
@@ -1706,9 +1724,9 @@ apk_extract_engine() { # apk_extract_engine <main|community> <pkg> <bin> [bin...
     listing=$(fetch "${base}/" - 2>/dev/null) || return 1
     href=$(printf '%s' "${listing}" | grep -oE "${pkg}-[0-9][^\"]*\.apk" | sort -V | tail -n1)
     [ -n "${href}" ] || return 1
-    tmp_apk=$(mktemp 2>/dev/null) || return 1
+    tmp_apk=$(stage_file 2>/dev/null) || return 1
     fetch "${base}/${href}" "${tmp_apk}" || { rm -f "${tmp_apk}"; return 1; }
-    ext=$(mktemp -d 2>/dev/null) || { rm -f "${tmp_apk}"; return 1; }
+    ext=$(stage_dir 2>/dev/null) || { rm -f "${tmp_apk}"; return 1; }
     tar -xzf "${tmp_apk}" -C "${ext}" 2>/dev/null || { rm -rf "${ext}" "${tmp_apk}"; return 1; }
     rm -f "${tmp_apk}"
     for b in "$@"; do
@@ -1743,7 +1761,7 @@ ensure_mongosh() {
     [ -z "${url}" ] && url=$(fetch "https://api.github.com/repos/mongodb-js/mongosh/releases?per_page=5" - 2>/dev/null         | grep -oE '"browser_download_url"[[:space:]]*:[[:space:]]*"[^"]*linux-'${os_arch}'-openssl11\.tgz"'         | head -n1 | sed -E 's/.*"([^"]*)"$//')
     # Legacy direct URL as a final fallback for cached mirrors.
     [ -z "${url}" ] && url="https://downloads.mongodb.com/compass/mongosh-2.3.8-linux-${os_arch}.tgz"
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     if fetch "${url}" "${tmp_tar}"; then
         local ext="${INSTALL_DIR}/.msh.$$"
         mkdir -p "${ext}"
@@ -1807,7 +1825,7 @@ install_mongodb() {
 
     disk_preflight_mb 700 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~700 MB free."
     log "Probing MongoDB builds (HEAD + direct-download fallback)..."
-    local tmp_tar; tmp_tar=$(mktemp)
+    local tmp_tar; tmp_tar=$(stage_file)
     local hit
     hit=$(try_fetch_candidates "${tmp_tar}" "${urls[@]}") \
         || { rm -f "${tmp_tar}"; pf_suggest_versions "${RESOLVED}"; fail "No downloadable MongoDB build found for '${RESOLVED}' on ${ARCH_TYPE}."; }
@@ -1833,14 +1851,14 @@ build_from_source() {
     have make || apt_try_install build-essential || true
     have make || { warn "'make' unavailable (no root?). Cannot compile."; return 1; }
     have cc || have gcc || { warn "No C compiler present. Cannot compile."; return 1; }
-    # Extraction goes to the temp dir, so check it too: a full /tmp previously
-    # produced a half-extracted tree that then failed to compile.
     disk_preflight_mb 600 || { warn "Skipping source build: not enough free space in ${INSTALL_DIR}."; return 1; }
-    local tmp_tar; tmp_tar=$(mktemp)
-    fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; warn "Source fetch failed: ${url}"; return 1; }
-    local bd; bd=$(mktemp -d)
-    disk_preflight_mb 600 "${bd}" || { rm -rf "${bd}" "${tmp_tar}"; warn "Skipping source build: not enough free space in the build directory ${bd}."; return 1; }
-    tar -xzf "${tmp_tar}" -C "${bd}" --strip-components=1 || { rm -rf "${bd}" "${tmp_tar}"; return 1; }
+    # The tarball and the build tree go to STAGE_DIR (the server volume), so the
+    # preflight below measures the disk the build really writes to, not /tmp.
+    local bd; bd=$(stage_dir) || { warn "Skipping source build: cannot create a build directory under ${STAGE_DIR:-/tmp}."; return 1; }
+    disk_preflight_mb 600 "${bd}" || { rm -rf "${bd}"; warn "Skipping source build: not enough free space in the build directory ${bd}."; return 1; }
+    local tmp_tar; tmp_tar=$(stage_file)
+    fetch "${url}" "${tmp_tar}" || { rm -rf "${bd}" "${tmp_tar}"; warn "Source fetch failed: ${url}"; return 1; }
+    tar -xzf "${tmp_tar}" -C "${bd}" --strip-components=1 || { rm -rf "${bd}" "${tmp_tar}"; warn "Source extraction failed."; return 1; }
     rm -f "${tmp_tar}"
     # Build ONLY the requested program targets (make goals = basenames, e.g.
     # 'redis-server redis-cli'; 'all' restores legacy whole-tree behavior).
@@ -1867,9 +1885,9 @@ build_from_source() {
     case "${mem_mb:-0}" in ''|*[!0-9]*) mem_mb=0 ;; esac
     if [ "${mem_mb}" -gt 0 ] && [ "${mem_mb}" -lt 2500 ]; then jobs=1; fi
     if [ -d "${bd}/deps" ] && [ -f "${bd}/deps/Makefile" ]; then
-        ( cd "${bd}/deps" && make -j1 ) >&2 || { warn "Dependency build failed."; return 1; }
+        ( cd "${bd}/deps" && make -j1 ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
     elif [ -d "${bd}/src/deps" ] && [ -f "${bd}/src/deps/Makefile" ]; then
-        ( cd "${bd}/src/deps" && MALLOC=libc make -j1 ) >&2 || { warn "Dependency build failed."; return 1; }
+        ( cd "${bd}/src/deps" && MALLOC=libc make -j1 ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
     fi
     ( cd "${bd}" && make MALLOC=libc -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
         || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
@@ -1907,7 +1925,7 @@ gh_release_install() { # gh_release_install <repo> <asset_regex> <inner_name> <f
         fi)
     [ -z "${asset_url}" ] && { warn "No release asset matched '${regex}' for ${repo} (version filter: '${ver_filter:-none}')."; return 1; }
     log "Fetching $(basename "${asset_url}") ..."
-    local tmp_dl; tmp_dl=$(mktemp)
+    local tmp_dl; tmp_dl=$(stage_file)
     fetch "${asset_url}" "${tmp_dl}" || { rm -f "${tmp_dl}"; warn "Download failed."; return 1; }
     local fname; fname=$(basename "${asset_url}")
     case "${fname}" in
@@ -2101,7 +2119,7 @@ case "${ENGINE}" in
         [ -z "${TAG}" ] && TAG="0.25.0"
         if [ ! -x "${INSTALL_DIR}/pocketbase" ]; then
             URL="https://github.com/pocketbase/pocketbase/releases/download/v${TAG}/pocketbase_${TAG}_linux_${ARCH_TYPE}.zip"
-            tmp_zip=$(mktemp)
+            tmp_zip=$(stage_file)
             if fetch "${URL}" "${tmp_zip}"; then
                 unzip -q -o "${tmp_zip}" -d "${INSTALL_DIR}/"
                 seal_binary "${INSTALL_DIR}/pocketbase"
@@ -2266,7 +2284,7 @@ case "${ENGINE}" in
         fi
         if [ ! -x "${INSTALL_DIR}/consul" ]; then
             URL="https://releases.hashicorp.com/consul/${CV}/consul_${CV}_linux_${ARCH_ALT}.zip"
-            tmp_zip=$(mktemp)
+            tmp_zip=$(stage_file)
             if fetch "${URL}" "${tmp_zip}" && unzip -q -o "${tmp_zip}" consul -d "${INSTALL_DIR}/"; then
                 chmod +x "${INSTALL_DIR}/consul"
                 ok "Consul ${CV} installed."
@@ -2290,7 +2308,7 @@ case "${ENGINE}" in
             for ku in \
                 "https://downloads.apache.org/kafka/${KV}/kafka_2.13-${KV}.tgz" \
                 "https://archive.apache.org/dist/kafka/${KV}/kafka_2.13-${KV}.tgz"; do
-                tmp_tar=$(mktemp)
+                tmp_tar=$(stage_file)
                 if fetch "${ku}" "${tmp_tar}"; then
                     mkdir -p "${ka_base}"
                     tar -xzf "${tmp_tar}" -C "${ka_base}" --strip-components=1
@@ -2325,7 +2343,7 @@ case "${ENGINE}" in
             if [ -n "${V}" ] && [ "${V}" != "latest" ]; then
                 log "Installing ClickHouse ${V} (official tgz)..."
                 URL="https://packages.clickhouse.com/tgz/stable/clickhouse-common-static-${V}-${ch_arch}.tgz"
-                tmp_tgz=$(mktemp)
+                tmp_tgz=$(stage_file)
                 if fetch "${URL}" "${tmp_tgz}"; then
                     ext="${INSTALL_DIR}/.chx.$$"; mkdir -p "${ext}"
                     tar -xzf "${tmp_tgz}" -C "${ext}" 2>/dev/null || true
@@ -2368,7 +2386,7 @@ case "${ENGINE}" in
             suffix="linux-x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && suffix="linux-aarch64"
             disk_preflight_mb 3000 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~3000 MB free."
             URL="https://software.yugabyte.com/releases/${YV}/yugabyte-${YV}-${suffix}.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${yb_base}"
                 tar -xzf "${tmp_tar}" -C "${yb_base}" --strip-components=1
@@ -2383,7 +2401,7 @@ case "${ENGINE}" in
         if [ ! -x "${tb_base}/bin/tidb-server" ]; then
             TV="${RESOLVED#v}"
             URL="https://download.pingcap.org/tidb-v${TV}-linux-${ARCH_ALT}.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${tb_base}"
                 tar -xzf "${tmp_tar}" -C "${tb_base}" --strip-components=2
@@ -2425,7 +2443,7 @@ case "${ENGINE}" in
             downloaded=0
             for art in ubuntu2204 ubuntu2004 el8 tgz; do
                 URL="https://www.aerospike.com/download/server/${AV}/artifact/${art}"
-                tmp_dl=$(mktemp)
+                tmp_dl=$(stage_file)
                 if fetch "${URL}" "${tmp_dl}" && dpkg-deb -I "${tmp_dl}" >/dev/null 2>&1; then
                     mkdir -p "${as_base}/pkg"
                     dpkg-deb -x "${tmp_dl}" "${as_base}/pkg"
@@ -2449,7 +2467,7 @@ case "${ENGINE}" in
             ensure_java || true
             CV="${RESOLVED}"
             URL="https://archive.apache.org/dist/cassandra/${CV}/apache-cassandra-${CV}-bin.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${cs_base}"
                 tar -xzf "${tmp_tar}" -C "${cs_base}" --strip-components=1
@@ -2468,7 +2486,7 @@ case "${ENGINE}" in
             [ "${ARCH_TYPE}" = "arm64" ] && urls=("https://download.arangodb.com/arangodb${series}/Community/Linux/aarch64/arangodb3-linux-${GV}_aarch64.tar.gz" "https://download.arangodb.com/arangodb${series}/Community/Linux/x86_64/arangodb3-linux-${GV}.tar.gz")
             downloaded=0
             for URL in "${urls[@]}"; do
-                tmp_tar=$(mktemp)
+                tmp_tar=$(stage_file)
                 if fetch "${URL}" "${tmp_tar}"; then
                     mkdir -p "${ag_base}"
                     tar -xzf "${tmp_tar}" -C "${ag_base}" --strip-components=1
@@ -2487,7 +2505,7 @@ case "${ENGINE}" in
             NV="${RESOLVED#v}"
             ensure_java || true
             URL="https://dist.neo4j.org/neo4j-community-${NV}-unix.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${nj_base}"
                 tar -xzf "${tmp_tar}" -C "${nj_base}" --strip-components=1
@@ -2506,7 +2524,7 @@ case "${ENGINE}" in
         if [ ! -d "${qd_base}" ]; then
             QV="${RESOLVED#v}"
             URL="https://github.com/questdb/questdb/releases/download/${QV}/questdb-${QV}-jdk17-bin.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${qd_base}"
                 tar -xzf "${tmp_tar}" -C "${qd_base}" --strip-components=1
@@ -2523,7 +2541,7 @@ case "${ENGINE}" in
             es_arch="x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && es_arch="aarch64"
             disk_preflight_mb 1500 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1500 MB free."
             URL="https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-${EV}-linux-${es_arch}.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${es_base}"
                 tar -xzf "${tmp_tar}" -C "${es_base}" --strip-components=1
@@ -2540,7 +2558,7 @@ case "${ENGINE}" in
             os_arch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && os_arch="arm64"
             disk_preflight_mb 1500 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1500 MB free."
             URL="https://artifacts.opensearch.org/releases/bundle/opensearch/${OV}/opensearch-${OV}-linux-${os_arch}.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${os_base}"
                 tar -xzf "${tmp_tar}" -C "${os_base}" --strip-components=1
@@ -2556,7 +2574,7 @@ case "${ENGINE}" in
             SV="${RESOLVED}"
             ensure_java || true
             URL="https://archive.apache.org/dist/lucene/solr/${SV}/solr-${SV}.tgz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${sl_base}"
                 tar -xzf "${tmp_tar}" -C "${sl_base}" --strip-components=1
@@ -2573,7 +2591,7 @@ case "${ENGINE}" in
             [[ "${BV}" != v* ]] && BV="v${BV}"
             ensure_java || true
             URL="https://github.com/orientechnologies/orientdb/releases/download/${BV}/orientdb-${BV#v}.tar.gz"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${ob_base}"
                 tar -xzf "${tmp_tar}" -C "${ob_base}" --strip-components=1
@@ -2591,7 +2609,7 @@ case "${ENGINE}" in
             rv_arch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && rv_arch="arm64"
             URL="https://github.com/ravendb/ravendb/releases/download/${RVV}/linux/${RVV}-linux-${rv_arch}.tar.bz2"
             probe_url "${URL}" || URL="https://github.com/ravendb/ravendb/releases/download/${RVV}/RavenDB-${RVV}-linux-${rv_arch}.tar.bz2"
-            tmp_tar=$(mktemp)
+            tmp_tar=$(stage_file)
             if fetch "${URL}" "${tmp_tar}"; then
                 mkdir -p "${rv_base}"
                 tar -xjf "${tmp_tar}" -C "${rv_base}"
@@ -2625,7 +2643,7 @@ case "${ENGINE}" in
                 "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-${deb_arch}.deb" \
                 "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-jammy_${deb_arch}.deb" \
                 "https://github.com/manticoresoftware/manticoresearch/releases/download/${MV}/manticore-${MV}-focal_${deb_arch}.deb"; do
-                tmp_deb=$(mktemp)
+                tmp_deb=$(stage_file)
                 if fetch "${du}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${mc_base}/.mdx"; then
                     find "${mc_base}/.mdx" \( -name searchd -o -name indexer \) -type f -exec cp -f {} "${mc_base}/" \; 2>/dev/null || true
                     fetched=1
@@ -2669,7 +2687,7 @@ case "${ENGINE}" in
                 mark_engine_ready; exit 0 ;;
             esac
             deb_url="https://download.rethinkdb.com/repository/ubuntu-22.04/pool/r/rethinkdb/rethinkdb_${RTV}_${deb_suffix}.deb"
-            tmp_deb=$(mktemp)
+            tmp_deb=$(stage_file)
             if fetch "${deb_url}" "${tmp_deb}" && dpkg-deb -x "${tmp_deb}" "${rt_base}/.rdx"; then
                 find "${rt_base}/.rdx" -name rethinkdb -type f -exec cp -f {} "${rt_base}/rethinkdb" \; 2>/dev/null || true
                 chmod +x "${rt_base}/rethinkdb" 2>/dev/null || true
