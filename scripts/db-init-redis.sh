@@ -57,6 +57,16 @@ pf_redis_major_version() { # pf_redis_major_version <server-bin>
     "$1" --version 2>/dev/null | grep -oE '[0-9]+' | head -n1
 }
 
+pf_rdb_min_major() { # pf_rdb_min_major <dump.rdb> -> oldest Redis major able to load it (empty if no RDB)
+    local hdr ver
+    [ -s "$1" ] || return 0
+    hdr=$(head -c 9 "$1" 2>/dev/null) || return 0
+    case "${hdr}" in REDIS[0-9][0-9][0-9][0-9]) ;; *) return 0 ;; esac
+    ver=$((10#${hdr:5:4}))
+    # RDB 1-9: Redis <=6.2 · RDB 10-11: Redis 7.x · RDB 12+: Redis 8+
+    if [ "${ver}" -le 9 ]; then printf '1'; elif [ "${ver}" -le 11 ]; then printf '7'; else printf '8'; fi
+}
+
 pf_redis_apply_acls() { # pf_redis_apply_acls <cli-bin> <port>
     local cli="$1" port="$2"
     command -v pf_users_plan >/dev/null 2>&1 || return 0
@@ -376,6 +386,22 @@ start_redis_family() {
             }
             local actual_version
             actual_version=$("${rs_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+' | head -n1)
+            # A substituted (older) binary cannot load a dump written by a newer
+            # Redis and would exit on load with "Can't handle RDB format version".
+            # Refuse up front with an actionable message instead of a crash loop.
+            local rdb_min bin_major
+            rdb_min=$(pf_rdb_min_major "${data_dir}/dump.rdb")
+            bin_major=$(pf_redis_major_version "${rs_bin}")
+            # Multi-part AOF (appendonlydir/, Redis 7+) is silently ignored by
+            # older servers, which would start empty and overwrite it: refuse too.
+            if [ -d "${data_dir}/appendonlydir" ] && { [ -z "${rdb_min}" ] || [ "${rdb_min}" -lt 7 ]; }; then
+                rdb_min=7
+            fi
+            if [ -n "${rdb_min}" ] && [ -n "${bin_major}" ] && [ "${bin_major}" -lt "${rdb_min}" ]; then
+                error "Persisted data in ${data_dir} needs Redis >= ${rdb_min}.x; the served binary is ${actual_version:-unknown}."
+                error "Starting it would fail on load and lose access to the dataset. Restore a matching build (build tools/root, or DB_VERSION=latest with network access)."
+                fail "Redis data format is newer than the served binary."
+            fi
             log "Starting Redis ${actual_version:+v${actual_version} }on 0.0.0.0:${SERVER_PORT} (MaxMemory: ${TUNED_REDIS_MAXMEMORY:-auto}, IO Threads: ${TUNED_REDIS_IO_THREADS:-auto})..."
             "${rs_bin}" "${redis_conf}" ${EXTRA_ARGS:-} < /dev/null &
             daemon_pid=$!

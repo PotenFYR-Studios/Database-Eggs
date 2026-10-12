@@ -621,11 +621,11 @@ verify_checksum() { # verify_checksum <file> <sidecar_url>
     return 1
 }
 
-disk_preflight_mb() { # warn when less than <mb> available
+disk_preflight_mb() { # disk_preflight_mb <mb> [dir] — warn and return 1 when less than <mb> free
     local need_mb="${1:-1024}" avail_kb
-    avail_kb=$(df -Pk "${INSTALL_DIR}" 2>/dev/null | awk 'NR==2{print $4}')
+    avail_kb=$(df -Pk "${2:-${INSTALL_DIR}}" 2>/dev/null | awk 'NR==2{print $4}')
     if [ -n "${avail_kb}" ] && [ "${avail_kb}" -lt $((need_mb * 1024)) ]; then
-        warn "Low disk: ${ENGINE} ${RESOLVED} wants ~${need_mb}MB; only $((avail_kb / 1024))MB free."
+        warn "Low disk: ${ENGINE} ${RESOLVED} wants ~${need_mb}MB; only $((avail_kb / 1024))MB free in ${2:-${INSTALL_DIR}}."
         return 1
     fi
     return 0
@@ -1075,7 +1075,7 @@ install_postgresql() {
         return 0
     fi
 
-    disk_preflight_mb 400
+    disk_preflight_mb 400 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~400 MB free."
     log "Installing standalone PostgreSQL ${tag}..."
     # Match libc family (musl hosts get musl builds); cross-fallback probe
     local pg_target="${ARCH_GNU}"
@@ -1266,7 +1266,7 @@ install_mariadb() {
             export PF_FETCH_DEADLINE=7200
             ;;
     esac
-    disk_preflight_mb "${required_mb}"
+    disk_preflight_mb "${required_mb}" || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~${required_mb} MB free."
     log "Probing MariaDB builds (HEAD + direct-download fallback)..."
     log "MariaDB download progress: live percentage is enabled."
     local tmp_tar; tmp_tar=$(mktemp)
@@ -1346,7 +1346,7 @@ install_mysql() {
         done
     done
 
-    disk_preflight_mb 1200
+    disk_preflight_mb 1200 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1200 MB free."
     log "Probing MySQL builds (HEAD + direct-download fallback for CDN HEAD-blocking)..."
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
@@ -1805,7 +1805,7 @@ install_mongodb() {
         done
     done
 
-    disk_preflight_mb 700
+    disk_preflight_mb 700 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~700 MB free."
     log "Probing MongoDB builds (HEAD + direct-download fallback)..."
     local tmp_tar; tmp_tar=$(mktemp)
     local hit
@@ -1833,10 +1833,13 @@ build_from_source() {
     have make || apt_try_install build-essential || true
     have make || { warn "'make' unavailable (no root?). Cannot compile."; return 1; }
     have cc || have gcc || { warn "No C compiler present. Cannot compile."; return 1; }
-    disk_preflight_mb 600
+    # Extraction goes to the temp dir, so check it too: a full /tmp previously
+    # produced a half-extracted tree that then failed to compile.
+    disk_preflight_mb 600 || { warn "Skipping source build: not enough free space in ${INSTALL_DIR}."; return 1; }
     local tmp_tar; tmp_tar=$(mktemp)
     fetch "${url}" "${tmp_tar}" || { rm -f "${tmp_tar}"; warn "Source fetch failed: ${url}"; return 1; }
     local bd; bd=$(mktemp -d)
+    disk_preflight_mb 600 "${bd}" || { rm -rf "${bd}" "${tmp_tar}"; warn "Skipping source build: not enough free space in the build directory ${bd}."; return 1; }
     tar -xzf "${tmp_tar}" -C "${bd}" --strip-components=1 || { rm -rf "${bd}" "${tmp_tar}"; return 1; }
     rm -f "${tmp_tar}"
     # Build ONLY the requested program targets (make goals = basenames, e.g.
@@ -2283,7 +2286,7 @@ case "${ENGINE}" in
         { [ -z "${KV}" ] || [ "${KV}" = "latest" ]; } && { KV=$(gh_latest_tag "apache/kafka"); KV="${KV#kafka-}"; }
         ka_base="${SERVER_DIR:-$(pwd)}/opt/kafka"
         if [ ! -x "${ka_base}/bin/kafka-server-start.sh" ]; then
-            disk_preflight_mb 1200
+            disk_preflight_mb 1200 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1200 MB free."
             for ku in \
                 "https://downloads.apache.org/kafka/${KV}/kafka_2.13-${KV}.tgz" \
                 "https://archive.apache.org/dist/kafka/${KV}/kafka_2.13-${KV}.tgz"; do
@@ -2363,7 +2366,7 @@ case "${ENGINE}" in
         if [ ! -x "${yb_base}/bin/yugabyted" ]; then
             YV="${RESOLVED#v}"
             suffix="linux-x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && suffix="linux-aarch64"
-            disk_preflight_mb 3000
+            disk_preflight_mb 3000 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~3000 MB free."
             URL="https://software.yugabyte.com/releases/${YV}/yugabyte-${YV}-${suffix}.tar.gz"
             tmp_tar=$(mktemp)
             if fetch "${URL}" "${tmp_tar}"; then
@@ -2518,7 +2521,7 @@ case "${ENGINE}" in
         if [ ! -x "${es_base}/bin/elasticsearch" ]; then
             EV="${RESOLVED#v}"
             es_arch="x86_64"; [ "${ARCH_TYPE}" = "arm64" ] && es_arch="aarch64"
-            disk_preflight_mb 1500
+            disk_preflight_mb 1500 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1500 MB free."
             URL="https://artifacts.elastic.co/downloads/elasticsearch/elasticsearch-${EV}-linux-${es_arch}.tar.gz"
             tmp_tar=$(mktemp)
             if fetch "${URL}" "${tmp_tar}"; then
@@ -2535,7 +2538,7 @@ case "${ENGINE}" in
         if [ ! -x "${os_base}/bin/opensearch" ]; then
             OV="${RESOLVED#v}"
             os_arch="x64"; [ "${ARCH_TYPE}" = "arm64" ] && os_arch="arm64"
-            disk_preflight_mb 1500
+            disk_preflight_mb 1500 || fail "Insufficient disk space in ${INSTALL_DIR}: needs ~1500 MB free."
             URL="https://artifacts.opensearch.org/releases/bundle/opensearch/${OV}/opensearch-${OV}-linux-${os_arch}.tar.gz"
             tmp_tar=$(mktemp)
             if fetch "${URL}" "${tmp_tar}"; then

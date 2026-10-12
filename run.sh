@@ -550,7 +550,35 @@ verify_running_version() {
 verify_running_version
 
 # --- Connection Summary Helper (Strictly Masked - No Cleartext Passwords in Logs)
+# Announce connection details only once the engine actually accepts TCP
+# connections. The dispatcher calls this BEFORE start_*(), which blocks in
+# supervise_daemon, so the check runs in the background and the banner is
+# printed from there. A server that dies on load (e.g. a version/format
+# mismatch) now produces an error instead of a false "DATABASE READY".
+_pf_port_open() { # _pf_port_open <port>
+    (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null
+}
+
 print_connection_guide() {
+    local _pf_port="${SERVER_PORT:-}" _pf_i
+    if [ "${PROJECT_TYPE}" = "custom" ] || [ -z "${_pf_port}" ]; then
+        _print_connection_guide_body
+        return 0
+    fi
+    (
+        for _pf_i in $(seq 1 90); do
+            if _pf_port_open "${_pf_port}"; then
+                _print_connection_guide_body
+                exit 0
+            fi
+            sleep 1
+        done
+        printf "\n${C_RED}${C_BOLD}[database-eggs] ✗ %s did not accept connections on port %s within 90s.${C_RESET}\n" "${PROJECT_TYPE}" "${_pf_port}" >&2
+        printf "${C_RED}  Check logs/ (the engine may have exited on startup). Connection details suppressed.${C_RESET}\n" >&2
+    ) &
+}
+
+_print_connection_guide_body() {
     local _pf_users_count=1 _pf_user_note=""
     if [ -n "${PF_USERS:-}" ] && [ "${PF_USERS_MODE:-legacy}" = "multi" ]; then
         _pf_users_count="$(printf '%s' "${PF_USERS}" | awk -F, '{print NF}')"
