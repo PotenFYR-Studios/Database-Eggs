@@ -1875,21 +1875,39 @@ build_from_source() {
     done
     [ "${t_all}" = "1" ] || [ -n "${targets}" ] || targets="all"
     if [ "${t_all}" = "1" ]; then targets="all"; fi
-    # Parallelism strategy: build the bundled dependencies (redis' Lua,
-    # hdr_histogram, fpconv) serially first — their Makefiles race under -j
-    # (undefined luaopen_* refs at link time in low-memory containers) —
-    # then the main compile goes full parallel.
+    # Every make invocation must see the same variables. Redis' Makefile
+    # compares its persisted settings and runs 'distclean' (wiping the deps)
+    # whenever they differ, so a deps pre-build with different flags is torn
+    # down by the main build mid-compile. That race is what produced the
+    # intermittent "lua" link errors.
+    #  - MALLOC=libc: no bundled jemalloc in a container build.
+    #  - LTO off: Redis adds -flto=auto whenever OPTIMIZATION is exactly -O3.
+    #    LTO link jobs are memory-hungry (they ICE/OOM in 1-3 GB containers
+    #    with "resolution sub id ... not in object file") and buy little for a
+    #    server binary. "-O3 -fno-lto" keeps -O3 but is not exactly "-O3".
+    local mkvars=("MALLOC=libc")
+    if [ -f "${bd}/src/Makefile" ] && grep -q 'flto=auto' "${bd}/src/Makefile"; then
+        mkvars+=("OPTIMIZATION=-O3 -fno-lto")
+    fi
+    # Parallelism strategy: a serial prep step first builds the bundled
+    # dependencies (Lua, hdr_histogram, fpconv) and persists the build settings
+    # through Redis' own .make-prerequisites rule. The main compile then runs
+    # full parallel against an already-settled tree and never triggers a
+    # distclean.
     local jobs mem_mb
     jobs=$(nproc 2>/dev/null || echo 2)
     mem_mb=$(awk '/MemAvailable/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null || true)
     case "${mem_mb:-0}" in ''|*[!0-9]*) mem_mb=0 ;; esac
     if [ "${mem_mb}" -gt 0 ] && [ "${mem_mb}" -lt 2500 ]; then jobs=1; fi
-    if [ -d "${bd}/deps" ] && [ -f "${bd}/deps/Makefile" ]; then
-        ( cd "${bd}/deps" && make -j1 ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
+    if [ -f "${bd}/src/Makefile" ] && grep -q '^\.make-prerequisites:' "${bd}/src/Makefile"; then
+        ( cd "${bd}/src" && make -j1 "${mkvars[@]}" .make-prerequisites ) >&2 \
+            || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
+    elif [ -d "${bd}/deps" ] && [ -f "${bd}/deps/Makefile" ]; then
+        ( cd "${bd}/deps" && make -j1 "${mkvars[@]}" ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
     elif [ -d "${bd}/src/deps" ] && [ -f "${bd}/src/deps/Makefile" ]; then
-        ( cd "${bd}/src/deps" && MALLOC=libc make -j1 ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
+        ( cd "${bd}/src/deps" && make -j1 "${mkvars[@]}" ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
     fi
-    ( cd "${bd}" && make MALLOC=libc -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
+    ( cd "${bd}" && make "${mkvars[@]}" -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
         || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
     local b
     for b in "$@"; do
