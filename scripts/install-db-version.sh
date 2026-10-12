@@ -1881,13 +1881,15 @@ build_from_source() {
     # down by the main build mid-compile. That race is what produced the
     # intermittent "lua" link errors.
     #  - MALLOC=libc: no bundled jemalloc in a container build.
-    #  - LTO off: Redis adds -flto=auto whenever OPTIMIZATION is exactly -O3.
-    #    LTO link jobs are memory-hungry (they ICE/OOM in 1-3 GB containers
-    #    with "resolution sub id ... not in object file") and buy little for a
-    #    server binary. "-O3 -fno-lto" keeps -O3 but is not exactly "-O3".
+    #  - LTO kept, but serial: Redis adds -flto=auto whenever OPTIMIZATION is
+    #    exactly -O3. Parallel LTO partitions are what ICE in small containers
+    #    ("resolution sub id ... not in object file") and spike memory. -flto=1
+    #    keeps the full LTO optimisation with one partition. Clang takes its
+    #    own -flto spelling, so Redis' default is left alone there.
     local mkvars=("MALLOC=libc")
-    if [ -f "${bd}/src/Makefile" ] && grep -q 'flto=auto' "${bd}/src/Makefile"; then
-        mkvars+=("OPTIMIZATION=-O3 -fno-lto")
+    if [ -f "${bd}/src/Makefile" ] && grep -q 'flto=auto' "${bd}/src/Makefile" \
+        && ! cc --version 2>/dev/null | head -n1 | grep -qi clang; then
+        mkvars+=("OPTIMIZATION=-O3 -flto=1")
     fi
     # Parallelism strategy: a serial prep step first builds the bundled
     # dependencies (Lua, hdr_histogram, fpconv) and persists the build settings
