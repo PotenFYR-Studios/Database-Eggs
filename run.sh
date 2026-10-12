@@ -179,7 +179,17 @@ ensure_engine_binary() {
     # is idempotent, so existing correct installs cost one cheap feed lookup.
     if [ -n "${installer_bin}" ]; then
         log "Resolving ${engine} version request (v${DB_VERSION:-latest})..."
-        if ! "${installer_bin}" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin"; then
+        local prov_rc=0
+        "${installer_bin}" "${engine}" "${DB_VERSION:-latest}" "${SERVER_DIR}/bin" || prov_rc=$?
+        if [ "${prov_rc}" != "0" ]; then
+            # Invalid user input (bad DB_VERSION) is a configuration error, not
+            # a transient upstream failure: serving a silently different binary
+            # would mask the typo (and violates the STRICT version contract).
+            # Distinguish via the installer's sentinel file; transient failures
+            # still fall back to best-available so boots survive API outages.
+            if [ -f "/tmp/.pf-invalid-version" ]; then
+                fail "Refusing to start with invalid DB_VERSION '${DB_VERSION}'. Fix the version and restart (no fallback is served for invalid input)."
+            fi
             error "Version provisioning failed for ${engine} - falling back to best-available binaries (see .logs/installer.log and .logs/launcher-errors.log)."
         fi
     fi

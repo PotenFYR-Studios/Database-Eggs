@@ -253,6 +253,10 @@ validate_version_input() {
     # Wrong-but-close: before rejecting, surface published versions that look
     # like what the user typed (e.g. '11.6' -> '11.4 / 11.8' for MariaDB).
     pf_suggest_versions "${v}"
+    # Sentinel for the launcher: invalid USER INPUT must abort the boot
+    # (never silently serve a different version); transient upstream
+    # failures do not set this and keep the best-available fallback.
+    : > /tmp/.pf-invalid-version 2>/dev/null || true
     fail "Invalid DB_VERSION '${v}'. Valid forms: latest | stable | beta | alpha |
   nightly | snapshot | a major (18), series (11.4), exact version (8.0.45,
   v2.1.0), or a direct download URL."
