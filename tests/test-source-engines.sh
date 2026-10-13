@@ -15,16 +15,28 @@ budget=${READY_TIMEOUT:-120}
 [[ $budget =~ ^[1-9][0-9]*$ ]] || exit 2
 root=$(cd "$(dirname "$0")/.." && pwd)
 name="source-${engine}-$$"
-log=${TEST_LOG:-/tmp/${name}.log}
+log=${TEST_LOG:-$root/.cache/${name}.log}
+mkdir -p "$(dirname "$log")"
 cleanup() {
     docker logs "$name" > "$log" 2>&1 || true
     docker rm -f "$name" >/dev/null 2>&1 || true
 }
-trap cleanup EXIT
-mounts=(-v "$root/entrypoint.sh:/entrypoint.sh:ro" -v "$root/run.sh:/usr/local/bin/run.sh:ro")
-for file in "$root"/scripts/*.sh; do mounts+=(-v "$file:/usr/local/bin/${file##*/}:ro"); done
+trap 'cleanup; rm -rf "${stage:-}"' EXIT
+# Git stores these files as 644 and the image chmods them at build time; the
+# bind mounts skip that step, so mount executable copies staged under the repo.
+stage="$root/.cache/test-runtime-$$"
+mkdir -p "$stage/scripts"
+cp "$root/entrypoint.sh" "$root/run.sh" "$stage/"
+cp "$root"/scripts/*.sh "$stage/scripts/"
+chmod +x "$stage"/*.sh "$stage"/scripts/*.sh
+mounts=(-v "$stage/entrypoint.sh:/entrypoint.sh:ro" -v "$stage/run.sh:/usr/local/bin/run.sh:ro")
+for file in "$stage"/scripts/*.sh; do mounts+=(-v "$file:/usr/local/bin/${file##*/}:ro"); done
+# TMPFS_TMP_MB caps the container's /tmp to reproduce the small-tmpfs failure
+# (the installer must not depend on /tmp at all).
+tmpfs=()
+[ -n "${TMPFS_TMP_MB:-}" ] && tmpfs=(--tmpfs "/tmp:size=${TMPFS_TMP_MB}m,exec")
 printf 'IMAGE=%s ENGINE=%s REQUEST=%s MODE=%s BUDGET=%ss LOG=%s\n' "$image" "$engine" "$version" "$mode" "$budget" "$log"
-docker run -d --name "$name" --cpus=2 --memory=1536m -u 988:988 \
+docker run -d --name "$name" "${tmpfs[@]}" --cpus=2 --memory=1536m -u 988:988 \
     "${mounts[@]}" -e AUTO_UPDATE_EGG=0 -e DATABASE_TYPE="$engine" \
     -e DB_VERSION="$version" -e SERVER_PORT="$port" -e SERVER_MEMORY=256 \
     -e DB_PASSWORD=SourceEngineTestOnly123 -e MAKE_ARGS=-j2 -e MAKEFLAGS=-j2 \
@@ -52,9 +64,14 @@ fi
 if [[ $mode == source ]]; then
     docker exec "$name" test -x "/home/container/bin/$binary"
     # Reject successful distro/package fallback as proof of a native source build.
-    (grep -Eq "Entering directory|[[:space:]]CC[[:space:]]|gcc |cc |make\[" "$log" 2>/dev/null) || {
-        printf 'FAIL: no source compilation evidence\n'; exit 1;
-    }
+    # docker logs can lag the compiler output by a moment; re-read for a few seconds.
+    compiled=0
+    for _ in $(seq 1 10); do
+        docker logs "$name" > "$log" 2>&1 || true
+        if grep -Eq "Entering directory|[[:space:]]CC[[:space:]]|gcc |cc |make\[" "$log" 2>/dev/null; then compiled=1; break; fi
+        sleep 1
+    done
+    [[ $compiled == 1 ]] || { printf 'FAIL: no source compilation evidence\n'; exit 1; }
 fi
 if [[ $engine == redis ]]; then
     docker exec "$name" bash -c '[[ $(redis-cli --raw -p "$SERVER_PORT" PING 2>&1) == *NOAUTH* ]]'

@@ -71,3 +71,6 @@ docs/src/data/catalog.json
 
 # Serena MCP local state
 .serena/
+
+# Local test scratch (source-build logs, staged runtime copies)
+.cache/
