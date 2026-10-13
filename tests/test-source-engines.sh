@@ -31,12 +31,8 @@ cp "$root"/scripts/*.sh "$stage/scripts/"
 chmod +x "$stage"/*.sh "$stage"/scripts/*.sh
 mounts=(-v "$stage/entrypoint.sh:/entrypoint.sh:ro" -v "$stage/run.sh:/usr/local/bin/run.sh:ro")
 for file in "$stage"/scripts/*.sh; do mounts+=(-v "$file:/usr/local/bin/${file##*/}:ro"); done
-# TMPFS_TMP_MB caps the container's /tmp to reproduce the small-tmpfs failure
-# (the installer must not depend on /tmp at all).
-tmpfs=()
-[ -n "${TMPFS_TMP_MB:-}" ] && tmpfs=(--tmpfs "/tmp:size=${TMPFS_TMP_MB}m,exec")
 printf 'IMAGE=%s ENGINE=%s REQUEST=%s MODE=%s BUDGET=%ss LOG=%s\n' "$image" "$engine" "$version" "$mode" "$budget" "$log"
-docker run -d --name "$name" "${tmpfs[@]}" --cpus=2 --memory=1536m -u 988:988 \
+docker run -d --name "$name" --cpus=2 --memory=1536m -u 988:988 \
     "${mounts[@]}" -e AUTO_UPDATE_EGG=0 -e DATABASE_TYPE="$engine" \
     -e DB_VERSION="$version" -e SERVER_PORT="$port" -e SERVER_MEMORY=256 \
     -e DB_PASSWORD=SourceEngineTestOnly123 -e MAKE_ARGS=-j2 -e MAKEFLAGS=-j2 \
@@ -72,6 +68,9 @@ if [[ $mode == source ]]; then
         sleep 1
     done
     [[ $compiled == 1 ]] || { printf 'FAIL: no source compilation evidence\n'; exit 1; }
+    # The installer must keep its scratch under the server dir, never /tmp.
+    leftover=$(docker exec "$name" find /tmp -mindepth 1 2>/dev/null | wc -l)
+    [[ $leftover == 0 ]] || { printf 'FAIL: %s new path(s) written under /tmp\n' "$leftover"; exit 1; }
 fi
 if [[ $engine == redis ]]; then
     docker exec "$name" bash -c '[[ $(redis-cli --raw -p "$SERVER_PORT" PING 2>&1) == *NOAUTH* ]]'

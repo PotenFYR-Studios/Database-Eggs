@@ -39,10 +39,10 @@ jobs:
           chmod +x tests/test-docker.sh
           IMAGE_NAME="database-eggs:test" BUILD_IMAGE="0" ./tests/test-docker.sh
 
-      - name: Redis source build with a small /tmp
+      - name: Redis source build (installer must not write /tmp)
         run: |
           chmod +x tests/test-source-engines.sh
-          IMAGE_NAME="database-eggs:test" TMPFS_TMP_MB=80 READY_TIMEOUT=1500 \
+          IMAGE_NAME="database-eggs:test" READY_TIMEOUT=1500 \
             ./tests/test-source-engines.sh redis 8.2.2 source
 
   panel-lifecycle:

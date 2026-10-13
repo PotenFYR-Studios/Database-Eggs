@@ -16,8 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -g 988 container 2>/dev/null || true \
     && useradd -d /home/container -m -u 988 -g 988 container 2>/dev/null || true \
-    && mkdir -p /opt/potenfyr /home/container /mnt/server /tmp \
-    && chmod -R 777 /opt/potenfyr /home/container /mnt/server /tmp \
+    && mkdir -p /opt/potenfyr /home/container /mnt/server \
+    && chmod -R 777 /opt/potenfyr /home/container /mnt/server \
     && chown -R 988:988 /opt/potenfyr
 
 COPY entrypoint.sh /entrypoint.sh

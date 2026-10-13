@@ -128,7 +128,7 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
         # last GitHub-shipped release directly (same asset the runtime
         # installer falls back to).
         curl -fsSL -o /usr/local/bin/minio "https://github.com/minio/minio/releases/download/RELEASE.2025-09-07T16-13-09Z/minio.linux-${arch_type}.RELEASE.2025-09-07T16-13-09Z" || true; \
-        curl -fsSL -o /tmp/pb.zip "https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_${arch_type}.zip" && unzip -q /tmp/pb.zip -d /tmp/pb && mv /tmp/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /tmp/pb* || true; \
+        mkdir -p /home/container/.build && curl -fsSL -o /home/container/.build/pb.zip "https://github.com/pocketbase/pocketbase/releases/download/v0.25.0/pocketbase_0.25.0_linux_${arch_type}.zip" && unzip -q /home/container/.build/pb.zip -d /home/container/.build/pb && mv /home/container/.build/pb/pocketbase /usr/local/bin/pocketbase && rm -rf /home/container/.build/pb* || true; \
         curl -fsSL "https://github.com/qdrant/qdrant/releases/download/v1.12.1/qdrant-${arch_gnu}.tar.gz" 2>/dev/null | tar -xz -C /usr/local/bin/ 2>/dev/null || true; \
     fi
 
@@ -145,24 +145,25 @@ RUN set -eu; \
         if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
             apt-get update -qq && apt-get install -y -qq --no-install-recommends \
                 build-essential pkg-config libevent-dev \
-            && curl -fsSL -o /tmp/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
-            && tar -xzf /tmp/valkey.tar.gz -C /tmp \
-            && make -C /tmp/valkey-8.1.3 -j1 -C deps \
-            && make -C /tmp/valkey-8.1.3 MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" valkey-server valkey-cli \
-            && cp -f /tmp/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
-            && cp -f /tmp/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
-            && rm -rf /tmp/valkey* \
-            && curl -fsSL -o /tmp/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
-            && tar -xzf /tmp/redis-stable.tar.gz -C /tmp \
-            && make -C /tmp/redis-stable -j1 -C src deps MALLOC=libc \
-            && make -C /tmp/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli \
-            && cp -f /tmp/redis-stable/src/redis-server /usr/local/bin/ \
-            && cp -f /tmp/redis-stable/src/redis-cli /usr/local/bin/ \
-            && rm -rf /tmp/redis-stable* \
+            && mkdir -p /home/container/.build \
+            && curl -fsSL -o /home/container/.build/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
+            && tar -xzf /home/container/.build/valkey.tar.gz -C /home/container/.build \
+            && make -C /home/container/.build/valkey-8.1.3 -j1 -C deps \
+            && make -C /home/container/.build/valkey-8.1.3 MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" valkey-server valkey-cli \
+            && cp -f /home/container/.build/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
+            && cp -f /home/container/.build/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
+            && rm -rf /home/container/.build/valkey* \
+            && curl -fsSL -o /home/container/.build/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
+            && tar -xzf /home/container/.build/redis-stable.tar.gz -C /home/container/.build \
+            && make -C /home/container/.build/redis-stable -j1 -C src deps MALLOC=libc \
+            && make -C /home/container/.build/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli \
+            && cp -f /home/container/.build/redis-stable/src/redis-server /usr/local/bin/ \
+            && cp -f /home/container/.build/redis-stable/src/redis-cli /usr/local/bin/ \
+            && rm -rf /home/container/.build/redis-stable* \
             && rm -rf /var/lib/apt/lists/*; \
         fi; \
     fi; \
-    rm -rf /*.deb /root/*.deb /root/.surrealdb /root/.cache /tmp/* /var/tmp/* 2>/dev/null || true; \
+    rm -rf /*.deb /root/*.deb /root/.surrealdb /root/.cache /home/container/.build 2>/dev/null || true; \
     chmod +x /usr/local/bin/* 2>/dev/null || true
 
 # Create container users and configure permissions for dynamic UID mapping (OpenShift/Pterodactyl/Docker)

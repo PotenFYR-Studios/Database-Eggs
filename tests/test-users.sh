@@ -89,7 +89,8 @@ trap 'exit 143' TERM
 if [ "$SKIP_VERSION_INSTALL" = 1 ]; then
     echo 'MODE: cached distro binaries only; NOT latest/pinned version verification'
 fi
-RESULT_DIR=$(mktemp -d "${TMPDIR:-/tmp}/database-users.XXXXXXXX") || exit 1
+mkdir -p "${SERVER_DIR:-$PWD}/.cache"
+RESULT_DIR=$(mktemp -d "${SERVER_DIR:-$PWD}/.cache/database-users.XXXXXXXX") || exit 1
 echo "Private logs and data: $RESULT_DIR"
 VOL="$RESULT_DIR/data"; mkdir "$VOL"; chmod 777 "$VOL" 2>/dev/null || true
 # Git Bash/MSYS mangles colon-separated docker -v args into path lists; hand

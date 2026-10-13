@@ -33,7 +33,7 @@ checks = [
   ('selected version and offline mode reach Docker', '''
   docker() { case "$1" in inspect) printf true;; *) printf '%s\\n' "$@" >> "$TRACE";; esac; }
   export -f docker
-  boot sample /tmp mariadb 13306 alice secret
+  boot sample .cache/sample mariadb 13306 alice secret
   python3 -c 'import os; s=open(os.environ["TRACE"]).read(); assert "DB_VERSION=10.11" in s; assert "SKIP_VERSION_INSTALL=1" in s'
   '''),
   ('readiness command has a wall clock bound', '''

@@ -154,7 +154,7 @@ Dumps and restores run as the root account over TCP; the console is available on
 ## 🛡️ Security & Performance
 
 - **Least privilege**: fully compliant with the Pterodactyl container UID `988:988`; never requires host root.
-- **Credential isolation**: secrets live only in `.env` (mode `600`) and the startup environment; sockets under `/tmp/.db-sockets`; passwords masked across stdout and crash logs.
+- **Credential isolation**: secrets live only in `.env` (mode `600`) and the startup environment; sockets under `.run/sockets` in the server directory; passwords masked across stdout and crash logs.
 - **Strict version contract**: resolved binaries are run with `--version` and verified against the requested series; upstream failures abort with diagnostics instead of downgrading.
 - **Isolated instances**: data is partitioned per `data/<engine>/<series>/`; major upgrades create a fresh namespace and never touch the old one.
 
