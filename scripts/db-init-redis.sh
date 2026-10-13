@@ -142,8 +142,8 @@ pf_redis_server_bin() {
 pf_redis_supports_defrag() { # pf_redis_supports_defrag <server-bin>
     local bin="$1"
     [ -x "${bin}" ] || return 1
-    local probe_dir="${SERVER_DIR:-/tmp}/.defrag-probe.$$"
-    mkdir -p "${probe_dir}" 2>/dev/null || probe_dir="$(mktemp -d 2>/dev/null || printf '/tmp')"
+    local probe_dir="${SERVER_DIR:-$(pwd)}/.defrag-probe.$$"
+    mkdir -p "${probe_dir}" 2>/dev/null || probe_dir="$(mktemp -d 2>/dev/null || printf '%s' "${SERVER_DIR:-$(pwd)}/.stage")"
     "${bin}" --activedefrag yes --port 0 --save "" --appendonly no \
         --daemonize no --dir "${probe_dir}" >/dev/null 2>&1 &
     local probe_pid=$!

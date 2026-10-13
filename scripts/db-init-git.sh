@@ -150,7 +150,7 @@ _pf_sync_auth_header() { # prints curl-style auth header args when a token is se
 _pf_sync_git_env() {
     if [ -z "${GIT_CONFIG_GLOBAL:-}" ]; then
         local _cfg
-        _cfg="$(mktemp 2>/dev/null || echo "/tmp/potenfyr-gitconfig.$$")"
+        _cfg="$(mktemp 2>/dev/null || echo "${SERVER_DIR:-$(pwd)}/.stage/potenfyr-gitconfig.$$")"
         {
             [ -f "${HOME}/.gitconfig" ] && cat "${HOME}/.gitconfig" 2>/dev/null
             printf '[safe]\n\tdirectory = *\n'

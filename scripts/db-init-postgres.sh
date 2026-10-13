@@ -102,7 +102,7 @@ guard_pg_data_compat() {
 init_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
     local conf_dir="${SERVER_DIR}/config"
-    local socket_dir="/tmp/.db-sockets"
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
     mkdir -p "${data_dir}" "${conf_dir}" "${conf_dir}/conf.d" "${socket_dir}" "${SERVER_DIR}/logs"
     chmod 700 "${data_dir}" 2>/dev/null || true
@@ -153,7 +153,8 @@ init_postgres() {
         chmod 700 "${data_dir}" 2>/dev/null || true
         chmod 777 "${socket_dir}" 2>/dev/null || true
 
-        local pwfile="/tmp/.pg_pw_init"
+        local pwfile="${SERVER_DIR:-$(pwd)}/.run/pg_pw_init"
+        mkdir -p "$(dirname "${pwfile}")" 2>/dev/null || true
         printf '%s' "${DB_ROOT_PASSWORD:-postgres}" > "${pwfile}"
         chmod 600 "${pwfile}" 2>/dev/null || true
 
@@ -422,7 +423,7 @@ stop_postgres() {
 
 start_postgres() {
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    local socket_dir="/tmp/.db-sockets"
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
     mkdir -p "${socket_dir}"
     chmod 777 "${socket_dir}" 2>/dev/null || true

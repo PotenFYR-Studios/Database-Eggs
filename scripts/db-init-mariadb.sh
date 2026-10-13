@@ -87,8 +87,8 @@ init_mariadb_mysql() {
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
 
-    # Isolate unix sockets into /tmp/.db-sockets or fallback to internal socket dir
-    local socket_dir="/tmp/.db-sockets"
+    # Keep unix sockets under the server dir (.run/sockets)
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     mkdir -p "${socket_dir}" 2>/dev/null || socket_dir="${SERVER_DIR}/socket"
     mkdir -p "${socket_dir}" "${data_dir}" "${conf_dir}" "${SERVER_DIR}/logs"
     chmod 700 "${socket_dir}" "${data_dir}" 2>/dev/null || true
@@ -341,7 +341,7 @@ EOSQL
  
 stop_mariadb_mysql() {
     local pid="$1"
-    local socket_dir="/tmp/.db-sockets"
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     local socket_path="${socket_dir}/mysql.sock"
     local client_bin
     client_bin=$(find_mariadb_bin "mariadb-admin" "mysqladmin") || client_bin=""
@@ -371,7 +371,7 @@ pf_mariadb_recover_root_auth() {
     # daemon PID is published via PF_MARIADB_RECOVERED_PID for the supervisor.
     local old_pid="$1" daemon_bin="$2" my_cnf="$3" client="$4"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    local socket_dir="/tmp/.db-sockets"
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     local recovery_socket="${socket_dir}/mysql-recovery.sock"
     local recovery_pidfile="${socket_dir}/mysql-recovery.pid"
     local recovery_log="${SERVER_DIR}/logs/mariadb-recovery.log"
@@ -718,7 +718,7 @@ start_mariadb_mysql() {
     local conf_dir="${SERVER_DIR}/config"
     local my_cnf="${conf_dir}/my.cnf"
     local data_dir="${DATA_DIR:-${SERVER_DIR}/data}"
-    local socket_dir="/tmp/.db-sockets"
+    local socket_dir="${SERVER_DIR:-$(pwd)}/.run/sockets"
     local socket_path="${socket_dir}/mysql.sock"
     local pid_path="${socket_dir}/mysql.pid"
 
@@ -762,7 +762,7 @@ start_mariadb_mysql() {
     actual_version=$("${daemon_bin}" --version 2>/dev/null | grep -oE '[0-9]+(\.[0-9]+)+(-MariaDB)?' | head -n1)
 
     # Remove stale sockets before launching
-    rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "/tmp/.db-sockets/mysql.sock" 2>/dev/null || true
+    rm -f "${socket_path}" "${pid_path}" "${SERVER_DIR}/mysql.sock" "${SERVER_DIR}/mysql.pid" "${SERVER_DIR}/.run/sockets/mysql.sock" 2>/dev/null || true
 
     ensure_db_runtime_user || fail "Cannot prepare non-root MariaDB runtime user ${DB_RUNTIME_UID}:${DB_RUNTIME_GID}."
     own_db_runtime_dirs "${data_dir}" "${socket_dir}"

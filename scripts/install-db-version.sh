@@ -23,22 +23,25 @@ INSTALL_DIR="${3:-${SERVER_DIR:-$(pwd)}/bin}"
 
 mkdir -p "${INSTALL_DIR}" "${INSTALL_DIR}/.versions" "${SERVER_DIR:-.}/logs" 2>/dev/null || true
 
-# Scratch space for downloads and source builds lives on the server volume, not
-# /tmp: container /tmp is often a small tmpfs (79 MB free was enough to skip a
-# Redis build), and it cannot hold a source tree or a 400 MB+ bintar. Override
-# the location with STAGE_DIR. Falls back to /tmp only if the volume is unusable.
-STAGE_DIR="${STAGE_DIR:-${SERVER_DIR:-$(pwd)}/.stage}"
-mkdir -p "${STAGE_DIR}" 2>/dev/null || STAGE_DIR=""
-# Point TMPDIR at the staging volume too: bash spills large here-strings and
-# heredocs (apt index lookups) into TMPDIR, and make/gcc/tar honour it as well.
-[ -n "${STAGE_DIR}" ] && export TMPDIR="${STAGE_DIR}"
-stage_file() { # stage_file — create an empty scratch file (staging volume when usable)
-    if [ -n "${STAGE_DIR}" ]; then mktemp "${STAGE_DIR}/dl.XXXXXXXX" 2>/dev/null && return 0; fi
-    mktemp
+# Everything this installer writes lives under the server directory, never /tmp:
+# container /tmp is often a small tmpfs (79 MB free was enough to skip a Redis
+# build), and it cannot hold a source tree or a 400 MB+ bintar. Scratch space
+# (downloads, source builds) goes to STAGE_DIR; caches and sentinels go to
+# PF_CACHE_DIR. Both can be overridden via the environment.
+SERVER_ROOT="${SERVER_DIR:-$(pwd)}"
+STAGE_DIR="${STAGE_DIR:-${SERVER_ROOT}/.stage}"
+PF_CACHE_DIR="${PF_CACHE_DIR:-${SERVER_ROOT}/.cache/installer}"
+mkdir -p "${STAGE_DIR}" "${PF_CACHE_DIR}" 2>/dev/null || true
+# A previous run's invalid-input sentinel must not outlive a fixed DB_VERSION.
+rm -f "${PF_CACHE_DIR}/pf-invalid-version" 2>/dev/null || true
+# Point TMPDIR at the staging volume so every plain mktemp, bash here-string
+# spill, make, gcc and tar lands there too.
+export TMPDIR="${STAGE_DIR}"
+stage_file() { # stage_file — create an empty scratch file under STAGE_DIR
+    mktemp "${STAGE_DIR}/dl.XXXXXXXX" 2>/dev/null
 }
-stage_dir() { # stage_dir — create an empty scratch directory (staging volume when usable)
-    if [ -n "${STAGE_DIR}" ]; then mktemp -d "${STAGE_DIR}/build.XXXXXXXX" 2>/dev/null && return 0; fi
-    mktemp -d
+stage_dir() { # stage_dir — create an empty scratch directory under STAGE_DIR
+    mktemp -d "${STAGE_DIR}/build.XXXXXXXX" 2>/dev/null
 }
 
 # -----------------------------------------------------------------------------
@@ -197,14 +200,14 @@ _json_tags() { # Extract tag_name values without jq (first match wins upstream o
 
 # --- Resolution disk cache -------------------------------------------------------
 # api.github.com allows 60 requests/hour per IP; shared panel nodes exhaust that
-# instantly. Cache every upstream lookup for 6h in /tmp so repeat boots are
+# instantly. Cache every upstream lookup for 6h under PF_CACHE_DIR so repeat boots are
 # free and rate-limited boots still resolve from the last successful answer.
 pf_cache_get() { # pf_cache_get <key> [ttl_seconds]
     # NOTE: each declaration on its own line - bash expands the whole `local`
     # statement before binding, so a same-line self-reference dies under set -u.
     local key="$1"
     local ttl="${2:-21600}"
-    local f="/tmp/.pf-vercache-${key}"
+    local f="${PF_CACHE_DIR}/pf-vercache-${key}"
     [ -f "${f}" ] || return 1
     local ts now
     ts=$(head -n1 "${f}" 2>/dev/null)
@@ -214,7 +217,7 @@ pf_cache_get() { # pf_cache_get <key> [ttl_seconds]
     tail -n1 "${f}" 2>/dev/null
 }
 pf_cache_put() { # pf_cache_put <key> <value>
-    printf '%s\n%s\n' "$(date -u +%s 2>/dev/null || echo 0)" "$2" > "/tmp/.pf-vercache-${1}" 2>/dev/null || true
+    printf '%s\n%s\n' "$(date -u +%s 2>/dev/null || echo 0)" "$2" > "${PF_CACHE_DIR}/pf-vercache-${1}" 2>/dev/null || true
 }
 
 # Extract the newest tag from a releases LIST JSON document (array form).
@@ -274,7 +277,7 @@ validate_version_input() {
     # Sentinel for the launcher: invalid USER INPUT must abort the boot
     # (never silently serve a different version); transient upstream
     # failures do not set this and keep the best-available fallback.
-    : > /tmp/.pf-invalid-version 2>/dev/null || true
+    : > "${PF_CACHE_DIR}/pf-invalid-version" 2>/dev/null || true
     fail "Invalid DB_VERSION '${v}'. Valid forms: latest | stable | beta | alpha |
   nightly | snapshot | a major (18), series (11.4), exact version (8.0.45,
   v2.1.0), or a direct download URL."
@@ -392,7 +395,7 @@ pf_version_catalog() { # print known published versions for ${ENGINE}, one per l
     local product repo cf tags
     product=$(pf_eol_product "${ENGINE}")
     if [ -n "${product}" ]; then
-        cf="/tmp/.eofl-cache-${product}.json"
+        cf="${PF_CACHE_DIR}/eofl-cache-${product}.json"
         [ -s "${cf}" ] || fetch "https://endoflife.date/api/${product}.json" "${cf}" >/dev/null 2>&1 || true
         if [ -s "${cf}" ]; then
             grep -oE '"cycle"[[:space:]]*:[[:space:]]*"[^"]*"' "${cf}" 2>/dev/null | sed -E 's/.*"([^"]*)"[[:space:]]*$/\1/' | head -20
@@ -599,7 +602,7 @@ eofl_resolve() { # eofl_resolve <product> <prefix>
     cached=$(pf_cache_get "${key}" 21600 2>/dev/null || true)
     [ -n "${cached}" ] && { printf '%s' "${cached}"; return 0; }
 
-    local cache_file="/tmp/.eofl-cache-${product}.json"
+    local cache_file="${PF_CACHE_DIR}/eofl-cache-${product}.json"
     if [ ! -s "${cache_file}" ]; then
         fetch "https://endoflife.date/api/${product}.json" "${cache_file}" || true
     fi
@@ -1479,7 +1482,7 @@ _deb_build_suite_list() { # _deb_build_suite_list <with_redis_official:0|1>  -> 
 
 _deb_index_text() { # _deb_index_text <tag> <packages_gz_url>  (6h disk cache, prints Packages text)
     local tag="$1" url="$2"
-    local f="/tmp/.pf-debidx-${tag}"
+    local f="${PF_CACHE_DIR}/pf-debidx-${tag}"
     local now ts body
     now=$(date -u +%s 2>/dev/null || echo 0)
     if [ -s "${f}" ]; then
@@ -1853,8 +1856,8 @@ build_from_source() {
     have cc || have gcc || { warn "No C compiler present. Cannot compile."; return 1; }
     disk_preflight_mb 600 || { warn "Skipping source build: not enough free space in ${INSTALL_DIR}."; return 1; }
     # The tarball and the build tree go to STAGE_DIR (the server volume), so the
-    # preflight below measures the disk the build really writes to, not /tmp.
-    local bd; bd=$(stage_dir) || { warn "Skipping source build: cannot create a build directory under ${STAGE_DIR:-/tmp}."; return 1; }
+    # preflight below measures the disk the build really writes to, not the container /tmp.
+    local bd; bd=$(stage_dir) || { warn "Skipping source build: cannot create a build directory under ${STAGE_DIR}."; return 1; }
     disk_preflight_mb 600 "${bd}" || { rm -rf "${bd}"; warn "Skipping source build: not enough free space in the build directory ${bd}."; return 1; }
     local tmp_tar; tmp_tar=$(stage_file)
     fetch "${url}" "${tmp_tar}" || { rm -rf "${bd}" "${tmp_tar}"; warn "Source fetch failed: ${url}"; return 1; }

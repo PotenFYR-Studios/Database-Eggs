@@ -23,7 +23,7 @@ PF_FAIL_SLEEP=5
 _LIB_CANDIDATES=(
     "$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/scripts/lib-diagnostics.sh"
     "/usr/local/bin/lib-diagnostics.sh"
-    "/tmp/.database-runtime/lib-diagnostics.sh"
+    "${SERVER_DIR:-$(pwd)}/.runtime/lib-diagnostics.sh"
     "${SERVER_DIR:-}/scripts/lib-diagnostics.sh"
     "./lib-diagnostics.sh"
 )
@@ -98,7 +98,7 @@ build_isolated_environment() {
 }
 build_isolated_environment
 
-export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/.runtimes/bin:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:/tmp/.database-runtime:/usr/local/bin:${PATH}"
+export PATH="${SERVER_DIR}/bin:${SERVER_DIR}/.runtimes/bin:/usr/lib/postgresql/18/bin:/usr/lib/postgresql/17/bin:/usr/lib/postgresql/16/bin:/usr/lib/postgresql/15/bin:/usr/lib/postgresql/14/bin:${SERVER_DIR:-$(pwd)}/.runtime:/usr/local/bin:${PATH}"
 
 # Source .env if available to load active credentials and parameters
 if [ -f "${SERVER_DIR}/.env" ]; then
@@ -117,7 +117,7 @@ export SURREAL_PASS="${DB_PASSWORD:-${DB_ROOT_PASSWORD:-}}"
 
 # Source all modular initialization handlers, performance tuning, and companion loader
 for script in /usr/local/bin/companion-loader.sh /usr/local/bin/db-init-*.sh /usr/local/bin/performance-*.sh \
-              /tmp/.database-runtime/companion-loader.sh /tmp/.database-runtime/db-init-*.sh /tmp/.database-runtime/performance-*.sh \
+              ${SERVER_DIR:-$(pwd)}/.runtime/companion-loader.sh ${SERVER_DIR:-$(pwd)}/.runtime/db-init-*.sh ${SERVER_DIR:-$(pwd)}/.runtime/performance-*.sh \
               "${SERVER_DIR}/scripts"/companion-loader.sh "${SERVER_DIR}/scripts"/db-init-*.sh; do
     [ -f "${script}" ] && source "${script}" 2>/dev/null || true
 done
@@ -157,8 +157,8 @@ ensure_engine_binary() {
     local installer_bin=""
     if [ -x /usr/local/bin/install-db-version.sh ]; then
         installer_bin="/usr/local/bin/install-db-version.sh"
-    elif [ -x /tmp/.database-runtime/install-db-version.sh ]; then
-        installer_bin="/tmp/.database-runtime/install-db-version.sh"
+    elif [ -x "${SERVER_DIR:-$(pwd)}/.runtime/install-db-version.sh" ]; then
+        installer_bin="${SERVER_DIR:-$(pwd)}/.runtime/install-db-version.sh"
     elif [ -x "${SERVER_DIR}/scripts/install-db-version.sh" ]; then
         installer_bin="${SERVER_DIR}/scripts/install-db-version.sh"
     fi
@@ -187,7 +187,7 @@ ensure_engine_binary() {
             # would mask the typo (and violates the STRICT version contract).
             # Distinguish via the installer's sentinel file; transient failures
             # still fall back to best-available so boots survive API outages.
-            if [ -f "/tmp/.pf-invalid-version" ]; then
+            if [ -f "${SERVER_DIR}/.cache/installer/pf-invalid-version" ]; then
                 fail "Refusing to start with invalid DB_VERSION '${DB_VERSION}'. Fix the version and restart (no fallback is served for invalid input)."
             fi
             error "Version provisioning failed for ${engine} - falling back to best-available binaries (see .logs/installer.log and .logs/launcher-errors.log)."
@@ -666,7 +666,7 @@ if [ "${PROJECT_TYPE}" = "mariadb" ] || [ "${PROJECT_TYPE}" = "mysql" ]; then
     for _pf_console in \
         "${SERVER_DIR}/scripts/db-console.sh" \
         "/usr/local/bin/db-console.sh" \
-        "/tmp/.database-runtime/db-console.sh"; do
+        "${SERVER_DIR:-$(pwd)}/.runtime/db-console.sh"; do
         if [ -f "${_pf_console}" ]; then
             # shellcheck source=/dev/null
             source "${_pf_console}" 2>/dev/null || true

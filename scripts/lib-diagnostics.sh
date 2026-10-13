@@ -9,7 +9,7 @@
 #  Safety guarantees:
 #    * Works with or without `set -u` / `set -e` in the host script
 #    * Never leaks credentials (PASSWORD|PASSWD|SECRET|TOKEN|KEY|CREDENTIAL)
-#    * Survives read-only volumes (falls back to $HOME/logs, then /tmp)
+#    * Survives read-only volumes (falls back to $HOME/logs, then the server dir)
 #    * Recursion-guarded traps; EXIT hook catches silent abnormal terminations
 #    * Zero side effects on success paths beyond one small log line
 #
@@ -54,7 +54,7 @@ _egg_error_log() {
         if mkdir -p "${d}" 2>/dev/null && [ -w "${d}" ]; then
             ERROR_LOG="${d}/launcher-errors.log"
         else
-            ERROR_LOG="/tmp/potenfyr-errors.log"
+            ERROR_LOG="${SERVER_DIR:-${PWD}}/.logs/launcher-errors.log"; mkdir -p "$(dirname "${ERROR_LOG}")" 2>/dev/null || true
         fi
     fi
     printf '[%s] [%s] [panel=%s] %s\n' \
@@ -67,11 +67,11 @@ _egg_error_log() {
 _pf_log_dir() {
     if [ -n "${_PF_LOG_DIR_CACHE:-}" ]; then printf '%s' "${_PF_LOG_DIR_CACHE}"; return 0; fi
     local d picked=""
-    for d in "${SERVER_DIR:-}/logs" "${SERVER_DIR:-}" "${HOME:-}/logs" "/tmp/pf-logs"; do
+    for d in "${SERVER_DIR:-}/logs" "${SERVER_DIR:-}" "${HOME:-}/logs"; do
         [ -n "${d}" ] || continue
         if mkdir -p "${d}" 2>/dev/null && [ -w "${d}" ]; then picked="${d}"; break; fi
     done
-    [ -z "${picked}" ] && picked="/tmp"
+    [ -z "${picked}" ] && picked="${SERVER_DIR:-${PWD}}"
     case "${picked}" in */logs) : ;; *) mkdir -p "${picked}/logs" 2>/dev/null && picked="${picked}/logs" ;; esac
     _PF_LOG_DIR_CACHE="${picked}"
     printf '%s' "${picked}"

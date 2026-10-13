@@ -240,7 +240,7 @@ fi
 # Fallback bootstrap for generic images (only when not running the official pre-baked image)
 RUNTIME_DIR="/usr/local/bin"
 if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
-    RUNTIME_DIR="/tmp/.database-runtime"
+    RUNTIME_DIR="${SERVER_DIR:-$(pwd)}/.runtime"
     mkdir -p "${RUNTIME_DIR}"
     if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
         log "Bootstrapping runtime components into isolated runtime space..."
@@ -357,7 +357,7 @@ unset _key
 #     launcher scripts are refreshed from the same repo branch.
 # Failure of any step is non-fatal: the previously installed launcher runs.
 # The launcher override lives OUTSIDE the user's data volume (in /opt/potenfyr,
-# container-local, or /tmp/.database-runtime) so egg internals are never exposed
+# container-local, or ${SERVER_DIR:-$(pwd)}/.runtime) so egg internals are never exposed
 # under the workspace the panel file manager can see.
 phase "Egg Self-Update"
 EGG_UPDATE_URL="${EGG_UPDATE_URL:-https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json}"
@@ -375,13 +375,13 @@ if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
         if [ -f /usr/local/bin/run.sh ] && [ -w /usr/local/bin ] && [ "$(id -u 2>/dev/null || echo 1)" = "0" ]; then
             RUNTIME_DIR="/usr/local/bin"
         else
-            RUNTIME_DIR="/tmp/.database-runtime"
+            RUNTIME_DIR="${SERVER_DIR:-$(pwd)}/.runtime"
             mkdir -p "${RUNTIME_DIR}" 2>/dev/null || true
         fi
         _egg_target="${RUNTIME_DIR}/run.sh"
         _egg_hashfile="${RUNTIME_DIR}/.potenfyr-egg-hash"
         _egg_lhash="${RUNTIME_DIR}/.potenfyr-launcher-hash"
-        _egg_tmp="$(mktemp 2>/dev/null || echo "/tmp/potenfyr-egg.$$")"
+        _egg_tmp="$(mktemp 2>/dev/null || echo "${SERVER_DIR:-$(pwd)}/.stage/potenfyr-egg.$$")"
         _egg_fetch_ok=0
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --retry 2 --max-time 30 "${EGG_UPDATE_URL}" -o "${_egg_tmp}" 2>/dev/null && _egg_fetch_ok=1

@@ -170,8 +170,10 @@ eol_fixture() (
     fetch() { return 1; }
     [ "$2" != nojq ] || have() { [ "$1" != jq ] && command -v "$1" >/dev/null 2>&1; }
     product="pf-test-$$-$BASHPID"
-    fixture="/tmp/.eofl-cache-${product}.json"
-    trap 'rm -f "$fixture"' EXIT
+    PF_CACHE_DIR="${PWD}/.cache/test-eofl-$BASHPID"
+    mkdir -p "${PF_CACHE_DIR}"
+    fixture="${PF_CACHE_DIR}/eofl-cache-${product}.json"
+    trap 'rm -rf "$PF_CACHE_DIR"' EXIT
     printf '%s' '[{"cycle":"11.8","latest":"11.8.1"},{"cycle":"11.4","latest":"11.4.5"},{"cycle":"10.11","latest":"10.11.14"},{"cycle":"1.0","latest":"1.0.9"}]' > "$fixture"
     eofl_resolve "$product" "$1"
 )
