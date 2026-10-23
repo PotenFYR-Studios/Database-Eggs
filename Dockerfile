@@ -11,7 +11,7 @@
 #  - RUNTIME_VARIANT=sqlite       (SQLite3 + Litestream Replication)
 # =============================================================================
 
-FROM ubuntu:22.04
+FROM ubuntu:26.04
 
 LABEL author="PotenFYR Studios" maintainer="support@potenfyr.in" \
       org.opencontainers.image.title="PotenFYR Multi-Variant Database Runtime" \
