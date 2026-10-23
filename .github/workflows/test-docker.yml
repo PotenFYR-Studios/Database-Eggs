@@ -10,10 +10,17 @@ on:
 permissions:
   contents: read
 
+# A newer push (or PR update) supersedes the in-flight run; earlier hung runs
+# burned the full 6 h default before being cancelled.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test-docker:
     name: Run Docker Integration Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     permissions:
       contents: read
 
@@ -25,7 +32,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build Docker Image (GHA layer cache)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: false
@@ -45,9 +52,19 @@ jobs:
           IMAGE_NAME="database-eggs:test" READY_TIMEOUT=1500 \
             ./tests/test-source-engines.sh redis 8.2.2 source
 
+      - name: Upload source-build logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: source-build-logs
+          path: .cache/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
   panel-lifecycle:
     name: Panel Lifecycle Behavior Suite
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
       contents: read
 

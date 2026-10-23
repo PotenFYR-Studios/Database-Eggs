@@ -18,7 +18,12 @@ name="source-${engine}-$$"
 log=${TEST_LOG:-$root/.cache/${name}.log}
 mkdir -p "$(dirname "$log")"
 cleanup() {
+    local rc=$?
     docker logs "$name" > "$log" 2>&1 || true
+    # A failed run must explain itself in the CI log, not only in a file.
+    if ((rc != 0)); then printf '::group::last 120 lines of container log
+'; tail -n 120 "$log" || true; printf '::endgroup::
+'; fi
     docker rm -f "$name" >/dev/null 2>&1 || true
 }
 trap 'cleanup; rm -rf "${stage:-}"' EXIT

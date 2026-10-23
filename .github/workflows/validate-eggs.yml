@@ -10,10 +10,15 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate:
     name: Validate Egg JSON and Shell Scripts
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     permissions:
       contents: read
     steps:
@@ -64,6 +69,13 @@ jobs:
           done
           shopt -u nullglob
           echo "All shell scripts passed syntax check."
+
+      - name: ShellCheck (errors only)
+        run: |
+          set -euo pipefail
+          # Preinstalled on ubuntu-latest runners; -S error keeps this a gate
+          # for real bugs without failing on style findings.
+          shellcheck -S error -x *.sh scripts/*.sh tests/*.sh
 
       - name: Unit-test Redis defrag capability probe
         run: |

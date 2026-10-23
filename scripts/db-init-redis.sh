@@ -7,10 +7,8 @@
 
 find_inmemory_bin() {
     local name="$1"
-    local p
-    for p in "${SERVER_DIR}/bin/${name}"; do
-        [ -x "${p}" ] && { printf '%s' "${p}"; return 0; }
-    done
+    local p="${SERVER_DIR}/bin/${name}"
+    [ -x "${p}" ] && { printf '%s' "${p}"; return 0; }
     command -v "${name}" 2>/dev/null || return 1
 }
 

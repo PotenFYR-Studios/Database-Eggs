@@ -1,4 +1,5 @@
-﻿set -u
+#!/usr/bin/env bash
+set -u
 docker rm -f db-redis-fix >/dev/null 2>&1
 docker run -d --name db-redis-fix -e P_SERVER_UUID=11111111-2222-3333-4444-555555555555 -e DATABASE_TYPE=redis -e DB_VERSION=8.2 -e SERVER_PORT=16379 -e SERVER_MEMORY=512 -e AUTO_UPDATE_EGG=0 -e "DB_PASSWORD=TestPassword123!Secure" -e "DB_ROOT_PASSWORD=RootPassword123!Secure" dbeggs-test >/dev/null
 booted=0

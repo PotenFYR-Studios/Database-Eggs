@@ -143,24 +143,30 @@ RUN arch_type="amd64"; arch_alt="x86_64"; arch_gnu="x86_64-unknown-linux-gnu"; \
 RUN set -eu; \
     if [ "${RUNTIME_VARIANT}" = "all" ] || [ "${RUNTIME_VARIANT}" = "redis" ]; then \
         if [ "${TARGETARCH}" = "amd64" ] || [ "${TARGETARCH}" = "arm64" ]; then \
-            apt-get update -qq && apt-get install -y -qq --no-install-recommends \
-                build-essential pkg-config libevent-dev \
-            && mkdir -p /home/container/.build \
-            && curl -fsSL -o /home/container/.build/valkey.tar.gz "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" \
-            && tar -xzf /home/container/.build/valkey.tar.gz -C /home/container/.build \
-            && make -C /home/container/.build/valkey-8.1.3 -j1 -C deps \
-            && make -C /home/container/.build/valkey-8.1.3 MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" valkey-server valkey-cli \
-            && cp -f /home/container/.build/valkey-8.1.3/src/valkey-server /usr/local/bin/ \
-            && cp -f /home/container/.build/valkey-8.1.3/src/valkey-cli /usr/local/bin/ \
-            && rm -rf /home/container/.build/valkey* \
-            && curl -fsSL -o /home/container/.build/redis-stable.tar.gz "https://download.redis.io/redis-stable.tar.gz" \
-            && tar -xzf /home/container/.build/redis-stable.tar.gz -C /home/container/.build \
-            && make -C /home/container/.build/redis-stable -j1 -C src deps MALLOC=libc \
-            && make -C /home/container/.build/redis-stable MALLOC=libc -j"$(nproc 2>/dev/null || echo 2)" redis-server redis-cli \
-            && cp -f /home/container/.build/redis-stable/src/redis-server /usr/local/bin/ \
-            && cp -f /home/container/.build/redis-stable/src/redis-cli /usr/local/bin/ \
-            && rm -rf /home/container/.build/redis-stable* \
-            && rm -rf /var/lib/apt/lists/*; \
+            apt-get update -qq; \
+            apt-get install -y -qq --no-install-recommends build-essential pkg-config libevent-dev; \
+            bd=/home/container/.build; \
+            mkdir -p "${bd}"; \
+            jobs="$(nproc 2>/dev/null || echo 2)"; \
+            build_engine() { \
+                name="$1"; url="$2"; shift 2; \
+                mkdir -p "${bd}/${name}"; \
+                curl -fsSL --retry 3 -o "${bd}/${name}.tar.gz" "${url}"; \
+                tar -xzf "${bd}/${name}.tar.gz" -C "${bd}/${name}" --strip-components=1; \
+                if grep -q '^\.make-prerequisites:' "${bd}/${name}/src/Makefile"; then \
+                    make -C "${bd}/${name}/src" -j1 MALLOC=libc .make-prerequisites; \
+                elif [ -f "${bd}/${name}/deps/Makefile" ]; then \
+                    make -C "${bd}/${name}/deps" -j1 MALLOC=libc; \
+                fi; \
+                make -C "${bd}/${name}" MALLOC=libc -j"${jobs}" "$@"; \
+            }; \
+            build_engine valkey "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" valkey-server valkey-cli; \
+            cp -f "${bd}/valkey/src/valkey-server" "${bd}/valkey/src/valkey-cli" /usr/local/bin/; \
+            build_engine redis "https://download.redis.io/redis-stable.tar.gz" redis-server redis-cli; \
+            cp -f "${bd}/redis/src/redis-server" "${bd}/redis/src/redis-cli" /usr/local/bin/; \
+            rm -rf "${bd}" /var/lib/apt/lists/*; \
+            /usr/local/bin/redis-server --version; \
+            /usr/local/bin/valkey-server --version; \
         fi; \
     fi; \
     rm -rf /*.deb /root/*.deb /root/.surrealdb /root/.cache /home/container/.build 2>/dev/null || true; \

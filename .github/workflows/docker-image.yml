@@ -30,6 +30,7 @@ jobs:
   build:
     name: Build image (${{ matrix.slug }})
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 360
     permissions:
       contents: read
       packages: write

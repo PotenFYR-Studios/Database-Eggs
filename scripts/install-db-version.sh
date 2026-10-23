@@ -1849,6 +1849,42 @@ install_mongodb() {
 # -----------------------------------------------------------------------------
 # Source builds (Redis-family) + generic GitHub release helper
 # -----------------------------------------------------------------------------
+pf_cgroup_cpus() { # CPUs this container may use (cgroup quota, else nproc)
+    local n q p
+    n=$(nproc 2>/dev/null || echo 2)
+    if read -r q p < /sys/fs/cgroup/cpu.max 2>/dev/null; then
+        if [ "${q}" != "max" ] && [ "${p:-0}" -gt 0 ] 2>/dev/null; then
+            q=$(( (q + p - 1) / p ))
+            if [ "${q}" -ge 1 ] && [ "${q}" -lt "${n}" ]; then n="${q}"; fi
+        fi
+    elif [ -r /sys/fs/cgroup/cpu/cpu.cfs_quota_us ]; then # cgroup v1
+        q=$(cat /sys/fs/cgroup/cpu/cpu.cfs_quota_us 2>/dev/null || echo -1)
+        p=$(cat /sys/fs/cgroup/cpu/cpu.cfs_period_us 2>/dev/null || echo 0)
+        if [ "${q}" -gt 0 ] 2>/dev/null && [ "${p}" -gt 0 ] 2>/dev/null; then
+            q=$(( (q + p - 1) / p ))
+            if [ "${q}" -ge 1 ] && [ "${q}" -lt "${n}" ]; then n="${q}"; fi
+        fi
+    fi
+    echo "${n}"
+}
+
+pf_cgroup_mem_mb() { # usable memory in MB: min(host MemAvailable, cgroup limit - usage); 0 = unknown
+    local avail lim use
+    avail=$(awk '/MemAvailable/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null || true)
+    case "${avail:-0}" in ''|*[!0-9]*) avail=0 ;; esac
+    lim=$(cat /sys/fs/cgroup/memory.max 2>/dev/null || cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo max)
+    use=$(cat /sys/fs/cgroup/memory.current 2>/dev/null || cat /sys/fs/cgroup/memory/memory.usage_in_bytes 2>/dev/null || echo 0)
+    case "${lim}" in ''|max|*[!0-9]*) lim=0 ;; esac
+    case "${use}" in ''|*[!0-9]*) use=0 ;; esac
+    # cgroup v1 reports ~2^63 when unlimited; ignore anything over 1 TiB.
+    if [ "${lim}" -gt 0 ] && [ "${lim}" -lt 1099511627776 ]; then
+        lim=$(( (lim - use) / 1048576 ))
+        [ "${lim}" -ge 1 ] || lim=1
+        if [ "${avail}" -le 0 ] || [ "${lim}" -lt "${avail}" ]; then avail="${lim}"; fi
+    fi
+    echo "${avail}"
+}
+
 build_from_source() {
     local url="$1"; shift
     have make || apt_try_install build-essential || true
@@ -1899,11 +1935,17 @@ build_from_source() {
     # through Redis' own .make-prerequisites rule. The main compile then runs
     # full parallel against an already-settled tree and never triggers a
     # distclean.
+    # nproc and /proc/meminfo describe the HOST, not the container: a 1.5 GB /
+    # 2 CPU container on a 16 GB runner would otherwise run nproc parallel
+    # compiles and get OOM-killed. Honor the cgroup memory and CPU limits.
     local jobs mem_mb
-    jobs=$(nproc 2>/dev/null || echo 2)
-    mem_mb=$(awk '/MemAvailable/{print int($2/1024); exit}' /proc/meminfo 2>/dev/null || true)
-    case "${mem_mb:-0}" in ''|*[!0-9]*) mem_mb=0 ;; esac
-    if [ "${mem_mb}" -gt 0 ] && [ "${mem_mb}" -lt 2500 ]; then jobs=1; fi
+    jobs=$(pf_cgroup_cpus)
+    mem_mb=$(pf_cgroup_mem_mb)
+    if [ "${mem_mb}" -gt 0 ]; then
+        # ~1 GB per compile job (LTO links are the peak), never below 1.
+        local mem_jobs=$(( mem_mb / 1024 )); [ "${mem_jobs}" -ge 1 ] || mem_jobs=1
+        [ "${mem_jobs}" -ge "${jobs}" ] || jobs="${mem_jobs}"
+    fi
     if [ -f "${bd}/src/Makefile" ] && grep -q '^\.make-prerequisites:' "${bd}/src/Makefile"; then
         ( cd "${bd}/src" && make -j1 "${mkvars[@]}" .make-prerequisites ) >&2 \
             || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
@@ -1912,8 +1954,17 @@ build_from_source() {
     elif [ -d "${bd}/src/deps" ] && [ -f "${bd}/src/deps/Makefile" ]; then
         ( cd "${bd}/src/deps" && make -j1 "${mkvars[@]}" ) >&2 || { rm -rf "${bd}"; warn "Dependency build failed."; return 1; }
     fi
-    ( cd "${bd}" && make "${mkvars[@]}" -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2 \
-        || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
+    if ! ( cd "${bd}" && make "${mkvars[@]}" -j"${jobs}" ${MAKE_ARGS:-} ${targets} ) >&2; then
+        # Parallel compiles that die (OOM kill, make races) usually succeed
+        # serially; retry once before giving up on the source build.
+        if [ "${jobs}" -gt 1 ]; then
+            warn "Parallel compile failed (-j${jobs}); retrying serially."
+            ( cd "${bd}" && make "${mkvars[@]}" -j1 ${targets} ) >&2 \
+                || { rm -rf "${bd}"; warn "Compile failed."; return 1; }
+        else
+            rm -rf "${bd}"; warn "Compile failed."; return 1
+        fi
+    fi
     local b
     for b in "$@"; do
         [ -f "${bd}/${b}" ] && cp -f "${bd}/${b}" "${INSTALL_DIR}/${b##*/}"
