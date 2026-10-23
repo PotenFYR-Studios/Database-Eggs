@@ -40,6 +40,16 @@ DB_RUNTIME_GID="${DB_RUNTIME_GID:-988}"
 
 ensure_db_runtime_user() {
     local uid="${DB_RUNTIME_UID}" gid="${DB_RUNTIME_GID}"
+    # Pelican/Pterodactyl can force an arbitrary numeric non-root UID/GID that
+    # has no /etc/passwd entry. Such a process cannot (and need not) switch
+    # identity: run the daemon as-is and own the directories as that identity.
+    local cur_uid cur_gid
+    cur_uid="$(id -u 2>/dev/null || echo 0)"; cur_gid="$(id -g 2>/dev/null || echo 0)"
+    if [ "${cur_uid}" != "0" ]; then
+        DB_RUNTIME_UID="${cur_uid}"; DB_RUNTIME_GID="${cur_gid}"
+        export DB_RUNTIME_UID DB_RUNTIME_GID
+        return 0
+    fi
     if [ "${uid}" != "988" ] || [ "${gid}" != "988" ]; then
         # Custom UID/GID requested: refuse to mutate /etc/passwd for
         # system-reserved identities.
@@ -53,7 +63,10 @@ ensure_db_runtime_user() {
             echo "dbuser:x:${uid}:${gid}:Database runtime user:${SERVER_DIR}:/bin/bash" >> /etc/passwd 2>/dev/null || true
         fi
     fi
-    getent passwd "${uid}" >/dev/null 2>&1 || return 1
+    getent passwd "${uid}" >/dev/null 2>&1 && return 0
+    # Read-only /etc/passwd: gosu/setpriv accept numeric IDs, so the daemon can
+    # still drop to the requested non-root identity without a passwd entry.
+    command -v gosu >/dev/null 2>&1 || command -v setpriv >/dev/null 2>&1
 }
 
 run_db_as_runtime_user() {
