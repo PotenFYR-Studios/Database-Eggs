@@ -244,7 +244,7 @@ if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
     mkdir -p "${RUNTIME_DIR}"
     if [ ! -f "${RUNTIME_DIR}/run.sh" ]; then
         log "Bootstrapping runtime components into isolated runtime space..."
-        REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main"
+        REPO_BASE="https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master"
         if command -v curl >/dev/null 2>&1; then
             curl -fsSL --retry 3 "${REPO_BASE}/run.sh" -o "${RUNTIME_DIR}/run.sh" 2>/dev/null || true
             for h in lib-diagnostics.sh companion-loader.sh password-gen.sh performance-tuning.sh install-db-version.sh db-init-mariadb.sh db-init-postgres.sh db-init-redis.sh db-init-mongo.sh db-init-surreal.sh db-init-search.sh db-init-storage.sh db-init-extra.sh db-init-git.sh db-console.sh; do
@@ -360,7 +360,7 @@ unset _key
 # container-local, or ${SERVER_DIR:-$(pwd)}/.runtime) so egg internals are never exposed
 # under the workspace the panel file manager can see.
 phase "Egg Self-Update"
-EGG_UPDATE_URL="${EGG_UPDATE_URL:-https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/main/egg-database-multi.json}"
+EGG_UPDATE_URL="${EGG_UPDATE_URL:-https://raw.githubusercontent.com/PotenFYR-Studios/Database-Eggs/master/egg-database-multi.json}"
 AUTO_UPDATE_EGG="${AUTO_UPDATE_EGG:-1}"
 
 if [ "${AUTO_UPDATE_EGG}" = "1" ] && [ -n "${EGG_UPDATE_URL}" ]; then
