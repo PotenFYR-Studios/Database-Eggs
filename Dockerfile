@@ -153,12 +153,14 @@ RUN set -eu; \
                 mkdir -p "${bd}/${name}"; \
                 curl -fsSL --retry 3 -o "${bd}/${name}.tar.gz" "${url}"; \
                 tar -xzf "${bd}/${name}.tar.gz" -C "${bd}/${name}" --strip-components=1; \
+                opt="-O3"; \
+                if grep -q "flto=auto" "${bd}/${name}/src/Makefile"; then opt="-O3 -flto=1"; fi; \
                 if grep -q '^\.make-prerequisites:' "${bd}/${name}/src/Makefile"; then \
-                    make -C "${bd}/${name}/src" -j1 MALLOC=libc .make-prerequisites; \
+                    make -C "${bd}/${name}/src" -j1 MALLOC=libc OPTIMIZATION="${opt}" .make-prerequisites; \
                 elif [ -f "${bd}/${name}/deps/Makefile" ]; then \
-                    make -C "${bd}/${name}/deps" -j1 MALLOC=libc; \
+                    make -C "${bd}/${name}/deps" -j1 MALLOC=libc OPTIMIZATION="${opt}"; \
                 fi; \
-                make -C "${bd}/${name}" MALLOC=libc -j"${jobs}" "$@"; \
+                make -C "${bd}/${name}" MALLOC=libc OPTIMIZATION="${opt}" -j"${jobs}" "$@"; \
             }; \
             build_engine valkey "https://github.com/valkey-io/valkey/archive/refs/tags/8.1.3.tar.gz" valkey-server valkey-cli; \
             cp -f "${bd}/valkey/src/valkey-server" "${bd}/valkey/src/valkey-cli" /usr/local/bin/; \
