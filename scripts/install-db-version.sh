@@ -1036,6 +1036,26 @@ fi
 # -----------------------------------------------------------------------------
 # PostgreSQL 13-18+: standalone gnu builds (theseus-rs) + PGDG apt fallback
 # -----------------------------------------------------------------------------
+# theseus-rs bintars ship their own libstdc++/libgcc_s built against newer glibc
+# (e.g. GLIBC_2.36 for PG 18.6) than some hosts provide (Ubuntu 22.04 = 2.35).
+# Those bundled copies make initdb/postgres fail to load. Drop any bundled libc++
+# runtime whose glibc requirement exceeds the host's so the host copy is used.
+prune_incompatible_bundled_libs() { # prune_incompatible_bundled_libs <lib_dir>
+    local dir="$1" host need lib
+    host=$(getconf GNU_LIBC_VERSION 2>/dev/null | awk '{print $2}')
+    [ -n "${host}" ] || return 0
+    for lib in "${dir}/libstdc++.so.6" "${dir}/libgcc_s.so.1"; do
+        [ -e "${lib}" ] || continue
+        need=$(grep -aoE 'GLIBC_2\.[0-9]+' "${lib}" | sed 's/GLIBC_//' | sort -uV | tail -n1)
+        [ -n "${need}" ] || continue
+        if [ "$(printf '%s\n%s\n' "${need}" "${host}" | sort -V | tail -n1)" != "${host}" ]; then
+            warn "Bundled $(basename "${lib}") needs glibc ${need} (host has ${host}) - using host copy."
+            rm -f "${lib}"
+        fi
+    done
+    return 0
+}
+
 install_postgresql() {
     local want_major=""
     [ "${RESOLVED}" != "latest" ] && want_major="${RESOLVED%%.*}"
@@ -1081,6 +1101,7 @@ install_postgresql() {
         # Idempotent: ensure extension/runtime libs exist even for installs
         # provisioned before bundling was introduced (uuid-ossp needs
         # libossp-uuid.so.16 at CREATE EXTENSION time).
+        prune_incompatible_bundled_libs "${dest}/lib"
         bundle_pg_runtime_libs "${dest}/lib-extra"
         ensure_pgvector "${dest}" "${tag%%.*}"
         local b
@@ -1138,6 +1159,7 @@ install_postgresql() {
     tar -xzf "${tmp_tar}" -C "${dest}" --strip-components=1 2>/dev/null || tar -xzf "${tmp_tar}" -C "${dest}"
     rm -f "${tmp_tar}"
     chmod +x "${dest}/bin/"* 2>/dev/null || true
+    prune_incompatible_bundled_libs "${dest}/lib"
     bundle_pg_runtime_libs "${dest}/lib-extra"
     if [ -e "${dest}/lib-extra/libxml2.so.2" ]; then
         export LD_LIBRARY_PATH="${dest}/lib-extra:${LD_LIBRARY_PATH:-}"
